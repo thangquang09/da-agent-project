@@ -1,0 +1,43 @@
+In this role, you'll focus on one thing above all else: building. You'll rapidly prototype AI-powered applications, experiment with the latest LLM tooling, and help the team move fast from idea to working demo. 
+This role is perfect for someone early in their career who has already tinkered with AI APIs, built small apps or pipelines, and wants to grow into a full-time applied AI practitioner. You don't need to have all the answers - you need to be resourceful, learn quickly, and ship things that work. You'll sit at the intersection of data infrastructure and AI application development, helping connect our game metrics data to intelligent, agent-driven workflows.
+1. Build AI Application Prototypes
+Rapidly develop working prototypes of AI-powered tools and internal apps using LLM APIs (OpenAI, Anthropic, etc.)
+Implement RAG (Retrieval-Augmented Generation) pipelines to allow AI tools to query internal knowledge bases and game data
+Build and experiment with multi-turn chat interfaces, structured output flows, and tool-calling agents
+Use Hugging Face models and libraries to test open-source alternatives and fine-tune lightweight models when relevant
+2. Prompt Engineering & LLM Optimization
+Write, test, and refine system prompts and few-shot examples to improve agent behavior and output quality
+Apply prompt engineering techniques including chain-of-thought, structured output formatting, and persona-based instructions
+Document prompt templates and maintain a shared prompt library for the team
+Evaluate prompt performance systematically - not just 'does it look good,' but does it hold up under varied inputs
+3. MCP & Agentic Tool Integration
+Implement and test MCP (Model Context Protocol) tool surfaces that allow AI agents to query game KPI dashboards and warehouse tables
+Help design the inputs, outputs, and error handling for each tool so agents can use them reliably
+Debug agent tool-use failures by tracing outputs, reviewing logs, and iterating on tool definitions
+Support integration of AI agents with notification channels (e.g. Microsoft Teams) for automated reporting
+4. Data Infrastructure Support
+Understand the basics of how data flows from game events → warehouse tables → KPI metrics
+Run lightweight data quality checks on core game metric tables (DAU, revenue, retention, economy indicators)
+Flag pipeline freshness issues and inconsistencies; escalate to the Data Platform team when needed
+Write basic SQL queries to inspect, validate, and explore game data in support of AI agent development
+You'll work with a variety of tools. Deep expertise in all of these isn't required on day one, but you should be comfortable learning and building with them quickly:APIs: LLM APIs, OpenAI, Anthropic Claude, and/or open-source models via Hugging Face, RAG: RAG & Vector Search, Agents: Agent Orchestration, SQL, BigQuery or Snowflake, Python (pandas), Dev: Dev Workflow: Python, Git, Jupyter notebooks, VS Code + AI coding assistants
+5. Evaluation & Iteration
+Test AI agent outputs against real scenarios and document failure modes
+Build simple eval scripts or test suites to catch regressions in agent behavior
+Collaborate with senior engineers to triage issues and propose improvements
+
+
+
+Yêu cầu
+Bachelor’s degree in Computer Science, Statistics, Mathematics, Data Science, or a related quantitative field
+1+ year of hands-on experience in a related field - this can include internships, freelance projects, personal AI/data projects, or contributions to open-source
+Experience working with data in any capacity (analytics, data engineering, ML pipelines) is a strong plus
+Demonstrated ability to build and ship working software; a portfolio, GitHub profile, or project demos are highly valued over credentials alone
+Hands-on experience calling LLM APIs (OpenAI, Anthropic, or similar) to build apps or tools
+Awareness of RAG concepts - has experimented with chunking, embeddings, or vector search (e.g. FAISS, Chroma) at least in a personal project or tutorial
+Understands prompt engineering fundamentals: system prompts, few-shot examples, output formatting, context window management
+Exposure to agentic patterns: tool calling and function use with LLM APIs; memory/state management is a plus but not required
+Moves fast, ships early drafts, and iterates - doesn't wait for perfect specs
+Comfortable in ambiguity; can take a vague brief and turn it into a working prototype with some guidance
+Curious about how new AI tools and models work; keeps up with the field independently
+Communicates clearly about progress, blockers, and what needs review

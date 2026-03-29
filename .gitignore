@@ -1,0 +1,54 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Virtual environments
+.venv/
+venv/
+
+# Python cache/artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.python-version
+
+# Test and coverage outputs
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Type checker / linter caches
+.mypy_cache/
+.ruff_cache/
+
+# Runtime logs
+*.log
+logs/
+
+# Local databases and generated warehouse files
+data/warehouse/*.db
+data/warehouse/*.sqlite
+data/warehouse/*.sqlite3
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# IDE/editor files
+.idea/
+.vscode/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Streamlit local secrets
+.streamlit/secrets.toml
+
+# Local Codex metadata
+.codex/

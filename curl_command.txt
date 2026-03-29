@@ -1,0 +1,14 @@
+curl https://thangquangly0909--9router-web.modal.run/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{
+    "model": "gh/gpt-4o",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Viết một câu thả thính ngắn gọn."
+      }
+    ],
+    "stream": false,
+    "temperature": 0.5
+  }'
