@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from typing import Any
 
 from app.config import load_settings
@@ -9,21 +10,55 @@ from app.graph.state import AgentState
 from app.llm import LLMClient
 from app.logger import logger
 from app.prompts import ROUTER_PROMPT_V1, SQL_GENERATION_PROMPT_V1
-from app.tools import get_schema_overview, query_sql, validate_sql
+from app.tools import (
+    get_schema_overview,
+    query_sql,
+    retrieve_business_context,
+    retrieve_metric_definition,
+    validate_sql,
+)
 
 
 def _fallback_route_intent(query: str) -> str:
     q = query.lower()
-    rag_keywords = {"definition", "what is", "meaning", "caveat", "explain", "là gì", "định nghĩa"}
-    sql_keywords = {"top", "trend", "compare", "bao nhiêu", "tăng", "giảm", "7 ngày", "week"}
+    q_ascii = _strip_diacritics(q)
+    rag_keywords = {
+        "definition",
+        "what is",
+        "meaning",
+        "caveat",
+        "explain",
+        "la gi",
+        "dinh nghia",
+        "quy tac",
+        "business rule",
+    }
+    sql_keywords = {
+        "top",
+        "trend",
+        "compare",
+        "bao nhieu",
+        "tang",
+        "giam",
+        "7 ngay",
+        "week",
+        "doanh thu",
+        "dau",
+    }
 
-    has_rag = any(word in q for word in rag_keywords)
-    has_sql = any(word in q for word in sql_keywords)
+    has_rag = any(word in q_ascii for word in rag_keywords)
+    has_sql = any(word in q_ascii for word in sql_keywords)
     if has_rag and has_sql:
         return "mixed"
     if has_rag:
         return "rag"
     return "sql"
+
+
+def _strip_diacritics(text: str) -> str:
+    normalized = unicodedata.normalize("NFD", text)
+    return "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn").replace("Ä‘", "d")
+
 
 
 def _extract_first_json_object(text: str) -> dict[str, Any] | None:
@@ -43,6 +78,7 @@ def route_intent(state: AgentState) -> AgentState:
     query = state["user_query"]
     settings = load_settings()
     intent = _fallback_route_intent(query)
+    intent_reason = "fallback_keyword_router"
 
     try:
         client = LLMClient.from_env()
@@ -55,12 +91,7 @@ def route_intent(state: AgentState) -> AgentState:
             temperature=0.0,
             stream=False,
         )
-        content = (
-            response.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-            .strip()
-        )
+        content = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
         parsed = _extract_first_json_object(content)
         candidate = str((parsed or {}).get("intent", "")).strip().lower()
         reason = str((parsed or {}).get("reason", "")).strip()
@@ -74,7 +105,7 @@ def route_intent(state: AgentState) -> AgentState:
         logger.warning("Router LLM failed, using fallback intent: {error}", error=str(exc))
         intent_reason = f"fallback_due_to_error:{type(exc).__name__}"
 
-    logger.info("Routed intent={intent} for query={query}", intent=intent, query=state["user_query"])
+    logger.info("Routed intent={intent} for query={query}", intent=intent, query=query)
     return {
         "intent": intent,
         "intent_reason": intent_reason,
@@ -96,30 +127,73 @@ def get_schema(state: AgentState) -> AgentState:
     schema_context = json.dumps(overview, ensure_ascii=False)
     return {
         "schema_context": schema_context,
-        "tool_history": [
-            {"tool": "get_schema", "status": "ok", "table_count": len(overview.get("tables", []))}
-        ],
+        "tool_history": [{"tool": "get_schema", "status": "ok", "table_count": len(overview.get("tables", []))}],
         "step_count": state.get("step_count", 0) + 1,
     }
+
+
+def retrieve_context_node(state: AgentState) -> AgentState:
+    query = state["user_query"]
+    intent = state.get("intent", "unknown")
+
+    try:
+        query_ascii = _strip_diacritics(query.lower())
+        is_definition_like = any(
+            keyword in query_ascii
+            for keyword in {
+                "la gi",
+                "dinh nghia",
+                "definition",
+                "what is",
+                "meaning",
+            }
+        )
+
+        if intent == "rag" and is_definition_like:
+            result = retrieve_metric_definition(query=query, top_k=4)
+            tool_name = "retrieve_metric_definition"
+        else:
+            result = retrieve_business_context(query=query, top_k=4)
+            tool_name = "retrieve_business_context"
+
+        return {
+            "retrieved_context": result["results"],
+            "tool_history": [
+                {
+                    "tool": tool_name,
+                    "status": "ok",
+                    "result_count": result["result_count"],
+                }
+            ],
+            "step_count": state.get("step_count", 0) + 1,
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "errors": [
+                {
+                    "category": "RAG_RETRIEVAL_ERROR",
+                    "message": str(exc),
+                }
+            ],
+            "tool_history": [
+                {
+                    "tool": "retrieve_context",
+                    "status": "failed",
+                    "error": str(exc),
+                }
+            ],
+            "step_count": state.get("step_count", 0) + 1,
+        }
 
 
 def _rule_based_sql(query: str) -> str:
     q = query.lower()
     if "top" in q and "retention" in q:
-        return (
-            "SELECT title, retention_rate FROM videos "
-            "ORDER BY retention_rate DESC LIMIT 5"
-        )
-    if "revenue" in q and ("7 ngày" in q or "7 day" in q or "7 ngày gần đây" in q):
-        return (
-            "SELECT date, revenue FROM daily_metrics "
-            "ORDER BY date DESC LIMIT 7"
-        )
+        return "SELECT title, retention_rate FROM videos ORDER BY retention_rate DESC LIMIT 5"
+    if "revenue" in q and ("7 ngay" in q or "7 day" in q):
+        return "SELECT date, revenue FROM daily_metrics ORDER BY date DESC LIMIT 7"
     if "dau" in q:
-        return (
-            "SELECT date, dau FROM daily_metrics "
-            "ORDER BY date DESC LIMIT 7"
-        )
+        return "SELECT date, dau FROM daily_metrics ORDER BY date DESC LIMIT 7"
     return "SELECT date, dau, revenue FROM daily_metrics ORDER BY date DESC LIMIT 7"
 
 
@@ -128,16 +202,12 @@ def generate_sql(state: AgentState) -> AgentState:
     settings = load_settings()
     sql = _rule_based_sql(query)
 
-    # Best-effort LLM generation; deterministic fallback remains default.
     if settings.enable_llm_sql_generation:
         try:
             client = LLMClient.from_env()
             response = client.chat_completion(
                 messages=[
-                    {
-                        "role": "system",
-                        "content": SQL_GENERATION_PROMPT_V1.system,
-                    },
+                    {"role": "system", "content": SQL_GENERATION_PROMPT_V1.system},
                     {
                         "role": "user",
                         "content": SQL_GENERATION_PROMPT_V1.user_template.format(
@@ -150,12 +220,7 @@ def generate_sql(state: AgentState) -> AgentState:
                 temperature=0.0,
                 stream=False,
             )
-            content = (
-                response.get("choices", [{}])[0]
-                .get("message", {})
-                .get("content", "")
-                .strip()
-            )
+            content = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             if content:
                 sql = content.split("```")[-1].strip() if "```" in content else content
         except Exception as exc:  # noqa: BLE001
@@ -163,9 +228,7 @@ def generate_sql(state: AgentState) -> AgentState:
 
     return {
         "generated_sql": sql,
-        "tool_history": [
-            {"tool": "generate_sql", "status": "ok", "prompt_version": SQL_GENERATION_PROMPT_V1.version}
-        ],
+        "tool_history": [{"tool": "generate_sql", "status": "ok", "prompt_version": SQL_GENERATION_PROMPT_V1.version}],
         "step_count": state.get("step_count", 0) + 1,
     }
 
@@ -240,28 +303,80 @@ def analyze_result(state: AgentState) -> AgentState:
     }
 
 
+def _context_evidence(retrieved_context: list[dict[str, Any]]) -> list[str]:
+    if not retrieved_context:
+        return []
+    evidence: list[str] = []
+    for item in retrieved_context[:2]:
+        source = item.get("source", "unknown")
+        score = item.get("score", 0)
+        snippet = str(item.get("text", "")).strip()
+        compact = snippet[:180] + ("..." if len(snippet) > 180 else "")
+        evidence.append(f"{source} (score={score}): {compact}")
+    return evidence
+
+
 def synthesize_answer(state: AgentState) -> AgentState:
-    if state.get("errors"):
-        error_msg = state["errors"][-1]["message"]
-        answer = f"Cannot answer safely because SQL validation failed: {error_msg}"
-        confidence = "low"
-    elif state.get("intent") in {"rag", "mixed"} and not state.get("sql_result"):
-        answer = (
-            "Routing decided non-SQL path, but RAG/mixed execution nodes are not implemented yet. "
-            "Next step is to add retriever nodes and mixed merge logic."
-        )
-        confidence = "low"
-    else:
-        analysis = state.get("analysis_result", {})
-        sql_rows = state.get("sql_result", {}).get("rows", [])
-        answer = analysis.get("summary", "Completed query execution.")
-        confidence = "high" if sql_rows else "medium"
+    intent = state.get("intent", "unknown")
+    errors = state.get("errors", [])
+    sql_rows = state.get("sql_result", {}).get("rows", [])
+    analysis = state.get("analysis_result", {})
+    retrieved_context = state.get("retrieved_context", [])
+    context_evidence = _context_evidence(retrieved_context)
+
+    confidence = "low"
+    if intent == "sql":
+        if errors:
+            error_msg = errors[-1]["message"]
+            answer = f"Cannot answer safely because SQL validation failed: {error_msg}"
+            confidence = "low"
+        else:
+            answer = analysis.get("summary", "Completed query execution.")
+            confidence = "high" if sql_rows else "medium"
+    elif intent == "rag":
+        if retrieved_context:
+            answer = (
+                "From business docs, here is the most relevant context:\n"
+                + "\n".join(f"- {item}" for item in context_evidence)
+            )
+            confidence = "medium"
+        else:
+            answer = "I could not retrieve relevant business documentation for this question."
+            confidence = "low"
+    else:  # mixed
+        has_sql_validation_error = any(err.get("category") == "SQL_VALIDATION_ERROR" for err in errors)
+        sql_executed = "sql_result" in state and isinstance(state.get("sql_result"), dict)
+        has_sql = sql_executed and not has_sql_validation_error
+        has_context = bool(retrieved_context)
+        if has_sql and has_context:
+            answer = (
+                f"Data signal: {analysis.get('summary', 'SQL executed.')}\n"
+                "Business context:\n"
+                + "\n".join(f"- {item}" for item in context_evidence)
+            )
+            confidence = "high"
+        elif has_sql:
+            answer = (
+                "Partial answer (SQL branch succeeded, retrieval branch missing): "
+                f"{analysis.get('summary', 'SQL executed.')}"
+            )
+            confidence = "medium"
+        elif has_context:
+            answer = (
+                "Partial answer (retrieval branch succeeded, SQL branch failed):\n"
+                + "\n".join(f"- {item}" for item in context_evidence)
+            )
+            confidence = "medium"
+        else:
+            answer = "I could not complete either SQL or retrieval branch for this mixed question."
+            confidence = "low"
 
     payload = {
         "answer": answer,
         "evidence": [
-            f"intent={state.get('intent', 'unknown')}",
+            f"intent={intent}",
             f"rows={state.get('sql_result', {}).get('row_count', 0)}",
+            f"context_chunks={len(retrieved_context)}",
         ],
         "confidence": confidence,
         "used_tools": [item["tool"] for item in state.get("tool_history", [])],
@@ -273,3 +388,4 @@ def synthesize_answer(state: AgentState) -> AgentState:
         "confidence": confidence,
         "step_count": state.get("step_count", 0) + 1,
     }
+

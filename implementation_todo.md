@@ -47,19 +47,20 @@ Build a portfolio-ready DA Agent with:
 - [x] Build simple chat UI + run button
 - [x] Display final answer and generated SQL
 - [x] Add debug panel: routed intent, tool history, node latency summary
-- [ ] Manual test 10 SQL queries
+- [x] Manual test 10 SQL queries
 
 ## Week 2 - RAG + Mixed + Tracing
 ### Day 1 - RAG corpus and indexing
-- [ ] Create docs: `metric_definitions.md`, `retention_rules.md`, `revenue_caveats.md`, `data_quality_notes.md`
-- [ ] Implement chunking + embedding + local vector index
-- [ ] Add retriever nodes/tools: `retrieve_metric_definition`, `retrieve_business_context`
+- [x] Create docs: `metric_definitions.md`, `retention_rules.md`, `revenue_caveats.md`, `data_quality_notes.md`
+- [x] Implement chunking + embedding + local vector index
+- [x] Add retriever nodes/tools: `retrieve_metric_definition`, `retrieve_business_context`
 
 ### Day 2 - Routing quality and mixed path
 - [x] Upgrade `route_intent` prompt to strict enum output (`sql/rag/mixed`)
-- [ ] Add conditional edges for `rag` and `mixed`
-- [ ] For `mixed`, execute SQL + retrieval then merge at synth node
-- [ ] Add fallback when one branch fails but partial answer is possible
+- [x] Add conditional edges for `rag` and `mixed`
+- [x] For `mixed`, execute SQL + retrieval then merge at synth node
+- [x] Add fallback when one branch fails but partial answer is possible
+- [x] Fix regression: fallback Vietnamese diacritics + RAG retriever selection + mixed empty-SQL success classification
 
 ### Day 3 - Observability layer
 - [ ] Implement trace schema (run-level + node-level)
@@ -142,3 +143,4 @@ Build a portfolio-ready DA Agent with:
 - 3-5h: implementation
 - 1h: tests/eval checks
 - 30m: update `research.md` or changelog with lessons/failures
+

@@ -1,8 +1,8 @@
-﻿# Ghi chú riêng cho Thắng - DA Agent
-Cập nhật: 2026-03-29
+# Ghi chú riêng cho Thắng - DA Agent
+Cập nhật: 2026-03-30
 
 ## 1) Trạng thái hiện tại
-- **Week 1 coi như hoàn thành về mặt kỹ thuật cốt lõi** (core flow đã chạy được).
+- **Week 1 hoàn thành** + đã xong **Week 2 Day 1-2** (RAG + mixed routing).
 - Đã có:
   - LangGraph orchestration (không phải code thuần)
   - SQL tools + safety validation
@@ -10,6 +10,9 @@ Cập nhật: 2026-03-29
   - Streamlit UI cơ bản
   - Router đã chuyển sang **LLM-first** + fallback an toàn
   - Prompt tách riêng để quản lý
+  - Local RAG index (chunk + cosine lexical embedding)
+  - Retriever tools: `retrieve_metric_definition`, `retrieve_business_context`
+  - Mixed path có fallback partial answer khi 1 nhánh fail
 
 ## 2) Bạn hỏi đúng 2 điểm quan trọng
 ### A. "LLM code thuần, không có LangGraph?"
@@ -32,7 +35,8 @@ Mục tiêu: tránh việc phải chạy đi chạy lại nhiều lệnh thủ c
 - `pytest` + `pytest-cov`
 - `tests/conftest.py` tự seed DB trước test
 - Test SQL tools
-- Test graph flow (SQL path, RAG placeholder, fail-fast validation)
+- Test graph flow (SQL path, RAG retrieval, mixed fallback)
+- Test RAG tools
 - Config pytest trong `pyproject.toml`
 
 ### Chạy test 1 lệnh
@@ -71,8 +75,27 @@ uv run streamlit run streamlit_app.py
 - `tests/`
 
 ## 7) Bước kế tiếp mình đang làm
-- Hoàn thiện Week 2:
-  - nhánh `rag`
-  - nhánh `mixed`
-  - retriever + merge logic
-  - observability và eval sâu hơn
+- Bắt đầu Week 2 Day 3:
+  - observability layer (trace schema + JSONL persist)
+  - chuẩn hóa failure taxonomy
+  - thêm log node-level latency/input-output
+
+## 8) Kết quả smoke test Day 5
+- Đã chạy 10 query SQL manual bằng script:
+```powershell
+uv run python -m evals.manual_sql_smoke
+```
+- Output:
+  - `evals/manual_sql_smoke_report.md`
+  - `evals/manual_sql_smoke_report.json`
+
+## 9) Cập nhật fix regression (2026-03-29)
+Đã fix 3 lỗi quan trọng ở nhánh RAG/mixed:
+- Fallback router hỗ trợ query tiếng Việt có dấu qua chuẩn hóa dấu (`là gì`, `bao nhiêu`, `giảm`, `7 ngày`) để tránh lệch route khi LLM router unavailable.
+- RAG intent không còn luôn ép dùng `retrieve_metric_definition`; query dạng định nghĩa mới dùng metric retriever, còn query caveat/rule dùng `retrieve_business_context`.
+- Mixed synthesis coi SQL chạy thành công nhưng `0 rows` là **SQL success** (không gán nhầm là SQL branch failed).
+
+Test regression đã thêm:
+- `test_route_intent_fallback_supports_vietnamese_diacritics`
+- `test_retrieve_context_rag_non_definition_uses_business_context`
+- `test_mixed_synthesis_treats_empty_sql_result_as_success`
