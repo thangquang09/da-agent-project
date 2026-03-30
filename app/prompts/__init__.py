@@ -1,10 +1,10 @@
-from app.prompts.router import ROUTER_PROMPT_V1, RouterPrompt
-from app.prompts.sql import SQL_GENERATION_PROMPT_V1, SQLPrompt
+from app.prompts.manager import PromptManager, prompt_manager
+from app.prompts.router import ROUTER_PROMPT_DEFINITION
+from app.prompts.sql import SQL_PROMPT_DEFINITION
 
 __all__ = [
-    "RouterPrompt",
-    "ROUTER_PROMPT_V1",
-    "SQLPrompt",
-    "SQL_GENERATION_PROMPT_V1",
+    "PromptManager",
+    "prompt_manager",
+    "ROUTER_PROMPT_DEFINITION",
+    "SQL_PROMPT_DEFINITION",
 ]
-

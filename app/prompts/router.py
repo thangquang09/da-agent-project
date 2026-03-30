@@ -1,31 +1,41 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass(frozen=True)
-class RouterPrompt:
-    version: str
-    system: str
-    user_template: str
+class PromptDefinition:
+    name: str
+    prompt_type: Literal["chat", "text"]
+    messages: list[dict[str, str]]
 
 
-ROUTER_PROMPT_V1 = RouterPrompt(
-    version="router_v1",
-    system=(
-        "You are an intent router for a Data Analyst Agent.\n"
-        "Classify the query into exactly one intent:\n"
-        "- sql: asks for numeric values, trends, ranking, comparisons from data tables.\n"
-        "- rag: asks for definitions, meanings, caveats, business rules from docs.\n"
-        "- mixed: needs both data lookup and explanation/rules.\n\n"
-        "Return JSON only with shape:\n"
-        "{\"intent\":\"sql|rag|mixed\",\"reason\":\"short reason\"}\n"
-        "No markdown. No extra keys."
-    ),
-    user_template=(
-        "User query:\n"
-        "{query}\n\n"
-        "Respond in JSON only."
-    ),
+ROUTER_PROMPT_DEFINITION = PromptDefinition(
+    name="da-agent-router",
+    prompt_type="chat",
+    messages=[
+        {
+            "role": "system",
+            "content": (
+                "You are an intent router for a Data Analyst Agent.\n"
+                "Classify the query into exactly one intent:\n"
+                "- sql: needs numeric values, trends, rankings, comparisons from structured data.\n"
+                "- rag: needs definitions, caveats, business rules, or qualitative context.\n"
+                "- mixed: needs both data and business context.\n"
+                "- unknown: capability, help, or casual questions that don't require SQL/RAG.\n\n"
+                "Return JSON only with shape:\n"
+                "{{\"intent\":\"sql|rag|mixed|unknown\",\"reason\":\"short reason\"}}\n"
+                "No markdown. No extra keys."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "User query:\n"
+                "{{query}}\n\n"
+                "Respond in JSON only."
+            ),
+        },
+    ],
 )
-

@@ -1,31 +1,42 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass(frozen=True)
-class SQLPrompt:
-    version: str
-    system: str
-    user_template: str
+class PromptDefinition:
+    name: str
+    prompt_type: Literal["chat", "text"]
+    messages: list[dict[str, str]]
 
 
-SQL_GENERATION_PROMPT_V1 = SQLPrompt(
-    version="sql_gen_v1",
-    system=(
-        "You are a SQLite SQL generator for analytics.\n"
-        "Rules:\n"
-        "- Read-only only: SELECT or WITH ... SELECT.\n"
-        "- Never use INSERT/UPDATE/DELETE/DROP/ALTER/CREATE.\n"
-        "- Use only tables/columns from provided schema context.\n"
-        "- Return SQL text only (no markdown)."
-    ),
-    user_template=(
-        "Question:\n"
-        "{query}\n\n"
-        "Schema context:\n"
-        "{schema_context}\n\n"
-        "Return SQL only."
-    ),
+SQL_PROMPT_DEFINITION = PromptDefinition(
+    name="da-agent-sql-generation",
+    prompt_type="chat",
+    messages=[
+        {
+            "role": "system",
+            "content": (
+                "You are a SQLite SQL generator for analytics.\n"
+                "Rules:\n"
+                "- Read-only queries only (SELECT or WITH ... SELECT).\n"
+                "- Only use tables/columns from the provided schema context.\n"
+                "- Prefer LIMIT clauses to keep results small (<=200 rows).\n"
+                "- Always keep language neutral and precise; return SQL text only."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Question:\n"
+                "{{query}}\n\n"
+                "Schema context:\n"
+                "{{schema_context}}\n\n"
+                "Dataset context (row counts, min/max dates, sample rows):\n"
+                "{{dataset_context}}\n\n"
+                "Return SQL only."
+            ),
+        },
+    ],
 )
-
