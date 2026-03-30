@@ -64,10 +64,10 @@ Build a portfolio-ready DA Agent with:
 - [x] WSL migration check: verified UTF-8 with `uv` and normalized Vietnamese text (docs/tests/evals) to accented form
 
 ### Day 3 - Observability layer
-- [ ] Implement trace schema (run-level + node-level)
-- [ ] Log: intent, tools used, generated SQL, retries, errors, latency
-- [ ] Add failure taxonomy: `ROUTING_ERROR`, `SQL_VALIDATION_ERROR`, etc.
-- [ ] Persist traces as JSONL for replay
+- [x] Implement trace schema (run-level + node-level)
+- [x] Log: intent, tools used, generated SQL, retries, errors, latency
+- [x] Add failure taxonomy: `ROUTING_ERROR`, `SQL_VALIDATION_ERROR`, etc.
+- [x] Persist traces as JSONL for replay
 
 ### Day 4 - Prompt hardening
 - [ ] Split prompts by purpose: router, SQL gen, synthesis

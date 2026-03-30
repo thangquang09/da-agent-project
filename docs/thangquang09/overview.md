@@ -75,10 +75,12 @@ uv run streamlit run streamlit_app.py
 - `tests/`
 
 ## 7) Bước kế tiếp mình đang làm
-- Bắt đầu Week 2 Day 3:
-  - observability layer (trace schema + JSONL persist)
-  - chuẩn hóa failure taxonomy
-  - thêm log node-level latency/input-output
+- Chuyển qua Week 2 Day 4 (Prompt hardening), vì Day 3 đã xong:
+  - trace schema run-level + node-level
+  - log intent/tools/sql/retry/errors/latency
+  - failure taxonomy chuẩn hóa
+  - persist `evals/reports/traces.jsonl`
+  - optional Langfuse adapter (bật qua env)
 
 ## 8) Kết quả smoke test Day 5
 - Đã chạy 10 query SQL manual bằng script:
@@ -114,3 +116,19 @@ Test regression đã thêm:
   - `evals/reports/latest_summary.md`
   - `evals/reports/per_case.jsonl`
 - Graph now supports per-run DB override via `target_db_path` for eval cases.
+
+## 11) Observability layer (Week2 Day3 - hoàn thành)
+- Đã thêm module:
+  - `app/observability/schemas.py`
+  - `app/observability/tracer.py`
+- Graph nodes được instrument bằng wrapper ở `app/graph/graph.py`:
+  - record node start/end, attempt, latency, input/output summary
+  - map observation type theo Langfuse concept (`agent`, `generation`, `tool`, `retriever`, `guardrail`, `chain`)
+- `run_query` tích hợp tracer lifecycle:
+  - set/reset tracer context
+  - ghi run record success/failure
+- Đã thêm test observability:
+  - `tests/test_observability.py`
+- Cấu hình mới:
+  - `TRACE_JSONL_PATH` (default: `evals/reports/traces.jsonl`)
+  - `ENABLE_LANGFUSE` (default: `true`)

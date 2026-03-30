@@ -45,6 +45,8 @@ class Settings:
     available_models: tuple[str, ...]
     sqlite_db_path: str
     enable_llm_sql_generation: bool
+    trace_jsonl_path: str
+    enable_langfuse: bool
 
 
 def _env_bool(value: str | None, default: bool) -> bool:
@@ -75,6 +77,11 @@ def load_settings() -> Settings:
             str(PROJECT_ROOT / "data" / "warehouse" / "analytics.db"),
         ),
         enable_llm_sql_generation=_env_bool(os.getenv("ENABLE_LLM_SQL_GENERATION"), False),
+        trace_jsonl_path=os.getenv(
+            "TRACE_JSONL_PATH",
+            str(PROJECT_ROOT / "evals" / "reports" / "traces.jsonl"),
+        ),
+        enable_langfuse=_env_bool(os.getenv("ENABLE_LANGFUSE"), True),
     )
 
     if not settings.llm_api_key:

@@ -4,7 +4,7 @@ import json
 
 import streamlit as st
 
-from app.graph import build_sql_v1_graph, new_run_config, to_langgraph_config
+from app.main import run_query
 
 
 st.set_page_config(page_title="DA Agent Lab", page_icon="📊", layout="wide")
@@ -12,20 +12,8 @@ st.title("DA Agent Lab")
 st.caption("SQL-first LangGraph demo with debug traces")
 
 
-@st.cache_resource
-def get_graph():
-    return build_sql_v1_graph()
-
-
 def run_agent(user_query: str) -> dict:
-    graph = get_graph()
-    run_cfg = new_run_config(recursion_limit=25)
-    out = graph.invoke({"user_query": user_query}, config=to_langgraph_config(run_cfg))
-    payload = out.get("final_payload", {})
-    payload["run_id"] = out.get("run_id", run_cfg.run_id)
-    payload["tool_history"] = out.get("tool_history", [])
-    payload["errors"] = out.get("errors", [])
-    payload["intent"] = out.get("intent", "unknown")
+    payload = run_query(user_query=user_query, recursion_limit=25)
     return payload
 
 
@@ -80,4 +68,3 @@ for idx, item in enumerate(reversed(st.session_state["history"]), start=1):
             }
         )
         st.text(json.dumps(item["result"], ensure_ascii=False))
-

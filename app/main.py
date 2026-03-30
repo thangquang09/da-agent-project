@@ -6,25 +6,70 @@ from pathlib import Path
 
 from app.graph import build_sql_v1_graph, new_run_config, to_langgraph_config
 from app.logger import logger
+from app.observability import RunTracer, reset_current_tracer, set_current_tracer
+
+
+def _extract_numeric_evidence(payload: dict, key: str) -> int | None:
+    for item in payload.get("evidence", []):
+        text = str(item)
+        if text.startswith(f"{key}="):
+            try:
+                return int(text.split("=", 1)[1])
+            except ValueError:
+                return None
+    return None
 
 
 def run_query(user_query: str, recursion_limit: int = 25, db_path: str | None = None) -> dict:
     graph = build_sql_v1_graph()
     run_cfg = new_run_config(recursion_limit=recursion_limit)
+    tracer = RunTracer(
+        run_id=run_cfg.run_id,
+        thread_id=run_cfg.thread_id,
+        query=user_query,
+    )
+    tracer_token = set_current_tracer(tracer)
     graph_input: dict[str, str] = {"user_query": user_query}
     if db_path:
         graph_input["target_db_path"] = str(Path(db_path))
-    output = graph.invoke(
-        graph_input,
-        config=to_langgraph_config(run_cfg),
-    )
-    payload = output.get("final_payload", {})
-    payload["run_id"] = output.get("run_id", run_cfg.run_id)
-    payload["intent"] = output.get("intent", payload.get("intent", "unknown"))
-    payload["intent_reason"] = output.get("intent_reason", "")
-    payload["errors"] = output.get("errors", [])
-    payload["step_count"] = output.get("step_count", payload.get("step_count"))
-    return payload
+    try:
+        output = graph.invoke(
+            graph_input,
+            config=to_langgraph_config(run_cfg),
+        )
+        payload = output.get("final_payload", {})
+        payload["run_id"] = output.get("run_id", run_cfg.run_id)
+        payload["intent"] = output.get("intent", payload.get("intent", "unknown"))
+        payload["intent_reason"] = output.get("intent_reason", "")
+        payload["errors"] = output.get("errors", [])
+        payload["step_count"] = output.get("step_count", payload.get("step_count"))
+        payload["tool_history"] = output.get("tool_history", [])
+        payload["rows"] = _extract_numeric_evidence(payload, "rows")
+        payload["context_chunks"] = _extract_numeric_evidence(payload, "context_chunks")
+        payload["error_categories"] = [str(item.get("category", "UNKNOWN")) for item in payload.get("errors", [])]
+        tracer.finish(payload=payload, status="success")
+        return payload
+    except Exception as exc:  # noqa: BLE001
+        payload = {
+            "run_id": run_cfg.run_id,
+            "answer": f"Run failed: {exc}",
+            "evidence": ["intent=unknown", "rows=0", "context_chunks=0"],
+            "confidence": "low",
+            "used_tools": [],
+            "generated_sql": "",
+            "intent": "unknown",
+            "intent_reason": "",
+            "errors": [{"category": "SYNTHESIS_ERROR", "message": str(exc)}],
+            "step_count": 0,
+            "tool_history": [],
+            "rows": 0,
+            "context_chunks": 0,
+            "error_categories": ["SYNTHESIS_ERROR"],
+        }
+        tracer.finish(payload=payload, status="failed", error_message=str(exc))
+        return payload
+    finally:
+        reset_current_tracer(tracer_token)
 
 
 def parse_args() -> argparse.Namespace:

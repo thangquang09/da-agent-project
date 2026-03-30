@@ -18,6 +18,24 @@ from app.graph.nodes import (
     validate_sql_node,
 )
 from app.graph.state import AgentState, GraphInputState, GraphOutputState
+from app.observability import get_current_tracer
+
+
+def _instrument_node(node_name: str, fn, observation_type: str = "span"):  # noqa: ANN001
+    def _wrapped(state: AgentState) -> AgentState:
+        tracer = get_current_tracer()
+        if tracer is None:
+            return fn(state)
+        scope = tracer.start_node(node_name=node_name, state=state, observation_type=observation_type)
+        try:
+            update = fn(state)
+        except Exception as exc:  # noqa: BLE001
+            tracer.end_node(scope, error=exc)
+            raise
+        tracer.end_node(scope, update=update)
+        return update
+
+    return _wrapped
 
 
 def build_sql_v1_graph(checkpointer=None):
@@ -27,18 +45,22 @@ def build_sql_v1_graph(checkpointer=None):
         output_schema=GraphOutputState,
     )
 
-    builder.add_node("route_intent", route_intent)
-    builder.add_node("get_schema", get_schema)
-    builder.add_node("generate_sql", generate_sql, retry_policy=RetryPolicy(max_attempts=2))
-    builder.add_node("validate_sql_node", validate_sql_node)
+    builder.add_node("route_intent", _instrument_node("route_intent", route_intent, "agent"))
+    builder.add_node("get_schema", _instrument_node("get_schema", get_schema, "retriever"))
+    builder.add_node(
+        "generate_sql",
+        _instrument_node("generate_sql", generate_sql, "generation"),
+        retry_policy=RetryPolicy(max_attempts=2),
+    )
+    builder.add_node("validate_sql_node", _instrument_node("validate_sql_node", validate_sql_node, "guardrail"))
     builder.add_node(
         "execute_sql_node",
-        execute_sql_node,
+        _instrument_node("execute_sql_node", execute_sql_node, "tool"),
         retry_policy=RetryPolicy(max_attempts=2, retry_on=sqlite3.OperationalError),
     )
-    builder.add_node("analyze_result", analyze_result)
-    builder.add_node("retrieve_context_node", retrieve_context_node)
-    builder.add_node("synthesize_answer", synthesize_answer)
+    builder.add_node("analyze_result", _instrument_node("analyze_result", analyze_result, "chain"))
+    builder.add_node("retrieve_context_node", _instrument_node("retrieve_context_node", retrieve_context_node, "retriever"))
+    builder.add_node("synthesize_answer", _instrument_node("synthesize_answer", synthesize_answer, "generation"))
 
     builder.add_edge(START, "route_intent")
     builder.add_conditional_edges(
@@ -74,4 +96,3 @@ def build_sql_v1_graph(checkpointer=None):
     builder.add_edge("synthesize_answer", END)
 
     return builder.compile(checkpointer=checkpointer or InMemorySaver())
-
