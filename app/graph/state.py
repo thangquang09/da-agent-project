@@ -18,6 +18,7 @@ class AnswerPayload(TypedDict, total=False):
     step_count: int
     total_token_usage: int
     total_cost_usd: float
+    unsupported_claims: list[str]
 
 
 class AgentState(TypedDict, total=False):
@@ -27,6 +28,7 @@ class AgentState(TypedDict, total=False):
     intent_reason: str
     messages: Annotated[list[dict[str, Any]], operator.add]
     schema_context: str
+    dataset_context: str
     retrieved_context: list[dict[str, Any]]
     generated_sql: str
     validated_sql: str

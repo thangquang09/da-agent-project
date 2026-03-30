@@ -374,7 +374,7 @@ def generate_domain_cases(domain_db_path: Path) -> list[EvalCase]:
                 expected_tools=expected_tools,
                 should_have_sql=should_have_sql,
                 expected_keywords=keywords,
-                target_db_path=str(domain_db_path),
+                target_db_path=domain_db_path.as_posix(),
             )
         )
         cases.append(
@@ -387,7 +387,7 @@ def generate_domain_cases(domain_db_path: Path) -> list[EvalCase]:
                 expected_tools=expected_tools,
                 should_have_sql=should_have_sql,
                 expected_keywords=keywords,
-                target_db_path=str(domain_db_path),
+                target_db_path=domain_db_path.as_posix(),
             )
         )
     return cases
@@ -440,7 +440,7 @@ def generate_spider_cases(
             "expected_intent": "sql",
             "expected_tools": list(DEFAULT_SQL_TOOL_PATH),
             "should_have_sql": True,
-            "target_db_path": str(target_db_path),
+            "target_db_path": target_db_path.as_posix(),
             "gold_sql": gold_sql,
             "metadata": {"db_id": db_id},
         }

@@ -59,12 +59,27 @@ class Settings:
     langfuse_org_name: str
     langfuse_org_id: str
     langfuse_cloud_region: str
+    prompt_cache_ttl_seconds: int
+    enable_mcp_tool_client: bool
+    mcp_transport: str
+    mcp_http_url: str
+    mcp_stdio_command: str
+    mcp_stdio_args: tuple[str, ...]
 
 
 def _env_bool(value: str | None, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(value: str | None, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        return int(value.strip())
+    except ValueError:
+        return default
 
 
 @lru_cache(maxsize=1)
@@ -88,12 +103,25 @@ def load_settings() -> Settings:
             "SQLITE_DB_PATH",
             str(PROJECT_ROOT / "data" / "warehouse" / "analytics.db"),
         ),
-        enable_llm_sql_generation=_env_bool(os.getenv("ENABLE_LLM_SQL_GENERATION"), False),
+        enable_llm_sql_generation=_env_bool(os.getenv("ENABLE_LLM_SQL_GENERATION"), True),
         trace_jsonl_path=os.getenv(
             "TRACE_JSONL_PATH",
             str(PROJECT_ROOT / "evals" / "reports" / "traces.jsonl"),
         ),
         enable_langfuse=_env_bool(os.getenv("ENABLE_LANGFUSE"), True),
+        prompt_cache_ttl_seconds=_env_int(os.getenv("PROMPT_CACHE_TTL_SECONDS"), 300),
+        enable_mcp_tool_client=_env_bool(os.getenv("ENABLE_MCP_TOOL_CLIENT"), False),
+        mcp_transport=os.getenv("MCP_TRANSPORT", "streamable-http"),
+        mcp_http_url=os.getenv("MCP_HTTP_URL", "http://127.0.0.1:8000/mcp"),
+        mcp_stdio_command=os.getenv("MCP_STDIO_COMMAND", "uv"),
+        mcp_stdio_args=tuple(
+            item.strip()
+            for item in os.getenv(
+                "MCP_STDIO_ARGS",
+                "run,python,-m,mcp_server.server,--transport,stdio",
+            ).split(",")
+            if item.strip()
+        ),
         langfuse_project_name=os.getenv("LANGFUSE_PROJECT_NAME", "da-agent-project"),
         langfuse_project_id=os.getenv("LANGFUSE_PROJECT_ID", "cmncpq4xj0010ad07yughrjzi"),
         langfuse_org_name=os.getenv("LANGFUSE_ORG_NAME", "Kyanon_AppliedTrainee"),

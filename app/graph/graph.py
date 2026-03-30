@@ -69,6 +69,7 @@ def build_sql_v1_graph(checkpointer=None):
         {
             "get_schema": "get_schema",
             "retrieve_context_node": "retrieve_context_node",
+            "synthesize_answer": "synthesize_answer",
         },
     )
 

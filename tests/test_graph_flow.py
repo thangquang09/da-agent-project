@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
+from app.config import load_settings
 from app.graph import build_sql_v1_graph, new_run_config, to_langgraph_config
-from app.graph.nodes import retrieve_context_node, route_intent, synthesize_answer
+from app.graph.nodes import generate_sql, retrieve_context_node, route_intent, synthesize_answer
 
 
 class _DummyRouterClient:
@@ -30,6 +33,12 @@ def _patch_router(monkeypatch, intent: str):
         "app.graph.nodes.LLMClient.from_env",
         lambda: _DummyRouterClient(intent=intent),
     )
+
+
+@pytest.fixture(autouse=True)
+def disable_llm(monkeypatch):
+    monkeypatch.setenv("ENABLE_LLM_SQL_GENERATION", "0")
+    load_settings.cache_clear()
 
 
 def test_graph_sql_path_runs_end_to_end(monkeypatch):
@@ -114,4 +123,47 @@ def test_mixed_synthesis_treats_empty_sql_result_as_success():
 
     assert "SQL branch failed" not in out["final_answer"]
     assert "Data signal:" in out["final_answer"]
+
+
+def test_route_intent_fallback_handles_natural_question_as_unknown(monkeypatch):
+    monkeypatch.setattr("app.graph.nodes.LLMClient.from_env", lambda: _FailingRouterClient())
+
+    out = route_intent({"user_query": "bạn có thể làm gì?"})
+
+    assert out["intent"] == "unknown"
+    assert out["intent_reason"].startswith("fallback_due_to_error")
+
+
+def test_graph_unknown_intent_goes_direct_to_synthesize(monkeypatch):
+    _patch_router(monkeypatch, intent="unknown")
+    graph = build_sql_v1_graph()
+    config = to_langgraph_config(new_run_config(thread_id="test-unknown", recursion_limit=20))
+
+    out = graph.invoke({"user_query": "bạn có thể làm gì?"}, config=config)
+    payload = out["final_payload"]
+
+    assert out["intent"] == "unknown"
+    assert payload["used_tools"] == ["route_intent"]
+    assert "Mình hỗ trợ tốt các câu hỏi phân tích dữ liệu/KPI" in payload["answer"]
+
+
+def test_generate_sql_extracts_from_markdown_fence(monkeypatch):
+    class _DummySqlClient:
+        def chat_completion(self, **kwargs):  # noqa: ANN003
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "```sql\nSELECT date, dau FROM daily_metrics ORDER BY date DESC LIMIT 7\n```"
+                        }
+                    }
+                ]
+            }
+
+    monkeypatch.setenv("ENABLE_LLM_SQL_GENERATION", "1")
+    load_settings.cache_clear()
+    monkeypatch.setattr("app.graph.nodes.LLMClient.from_env", lambda: _DummySqlClient())
+
+    out = generate_sql({"user_query": "DAU 7 ngày gần đây như thế nào?", "schema_context": "{}"})
+    assert out["generated_sql"].upper().startswith("SELECT")
 

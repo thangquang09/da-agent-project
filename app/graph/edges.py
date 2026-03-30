@@ -5,10 +5,12 @@ from typing import Literal
 from app.graph.state import AgentState
 
 
-def route_after_intent(state: AgentState) -> Literal["get_schema", "retrieve_context_node"]:
+def route_after_intent(state: AgentState) -> Literal["get_schema", "retrieve_context_node", "synthesize_answer"]:
     intent = state.get("intent", "unknown")
     if intent in {"sql", "mixed"}:
         return "get_schema"
+    if intent == "unknown":
+        return "synthesize_answer"
     return "retrieve_context_node"
 
 
@@ -24,4 +26,3 @@ def route_after_analysis(state: AgentState) -> Literal["retrieve_context_node", 
     if state.get("intent") == "mixed":
         return "retrieve_context_node"
     return "synthesize_answer"
-

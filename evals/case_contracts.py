@@ -11,6 +11,13 @@ IntentName = Literal["sql", "rag", "mixed"]
 Language = Literal["vi", "en"]
 
 
+def _normalize_path(raw_path: str | None) -> str | None:
+    if not raw_path:
+        return None
+    # Keep eval paths portable across Windows/WSL by normalizing separators.
+    return str(Path(str(raw_path).strip().replace("\\", "/")))
+
+
 @dataclass(frozen=True)
 class EvalCase:
     id: str
@@ -39,7 +46,7 @@ class EvalCase:
             expected_tools=[str(item) for item in payload.get("expected_tools", [])],
             should_have_sql=bool(payload.get("should_have_sql", False)),
             expected_keywords=[str(item) for item in payload.get("expected_keywords", [])],
-            target_db_path=payload.get("target_db_path"),
+            target_db_path=_normalize_path(payload.get("target_db_path")),
             gold_sql=payload.get("gold_sql"),
             metadata=dict(payload.get("metadata", {})),
         )
