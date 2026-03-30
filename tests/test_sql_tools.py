@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.tools import get_schema_overview, query_sql, validate_sql
+from app.tools import dataset_context, get_schema_overview, query_sql, validate_sql
 
 
 def test_validate_sql_accepts_read_only_query():
@@ -21,6 +21,25 @@ def test_validate_sql_rejects_unknown_table():
     result = validate_sql("SELECT * FROM unknown_table")
     assert result.is_valid is False
     assert any("Unknown table(s): unknown_table" in r for r in result.reasons)
+
+
+def test_validate_sql_allows_cte_name_as_table_reference():
+    result = validate_sql(
+        """
+        WITH tmp AS (SELECT date, dau FROM daily_metrics)
+        SELECT * FROM tmp
+        """
+    )
+    assert result.is_valid is True
+
+
+def test_validate_sql_injects_limit_when_missing():
+    result = validate_sql(
+        "SELECT date, dau FROM daily_metrics ORDER BY date DESC",
+        max_limit=7,
+    )
+    assert result.is_valid is True
+    assert "LIMIT 7" in result.sanitized_sql.upper()
 
 
 def test_query_sql_returns_rows_columns_and_latency():
