@@ -18,6 +18,13 @@ class ChatMessage(TypedDict):
 class LLMClient:
     settings: Settings
 
+    DEFAULT_MODEL_PRICING_USD_PER_1M = {
+        "gh/gpt-4o-mini": {"input": 0.15, "output": 0.60},
+        "gh/gpt-4o": {"input": 2.50, "output": 10.00},
+        "gpt-4o-mini": {"input": 0.15, "output": 0.60},
+        "gpt-4o": {"input": 2.50, "output": 10.00},
+    }
+
     @classmethod
     def from_env(cls) -> "LLMClient":
         logger.info("Initializing LLMClient from environment")
@@ -85,8 +92,57 @@ class LLMClient:
 
         try:
             parsed = json.loads(body)
+            usage = self._normalize_usage(parsed)
+            if usage is not None:
+                parsed["_usage_normalized"] = usage
+                parsed["_cost_usd_estimate"] = self._estimate_cost_usd(model=model, usage=usage)
             logger.info("LLM API response parsed successfully")
             return parsed
         except json.JSONDecodeError as exc:
             logger.exception("LLM API returned non-JSON body")
             raise RuntimeError(f"LLM API returned non-JSON body: {body[:500]}") from exc
+
+    @staticmethod
+    def _as_int(value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _normalize_usage(self, parsed: dict[str, Any]) -> dict[str, int] | None:
+        usage = parsed.get("usage")
+        if not isinstance(usage, dict):
+            return None
+
+        prompt_tokens = self._as_int(usage.get("prompt_tokens"))
+        completion_tokens = self._as_int(usage.get("completion_tokens"))
+        total_tokens = self._as_int(usage.get("total_tokens"))
+        reasoning_tokens = self._as_int(usage.get("reasoning_tokens")) or 0
+
+        # Compatibility fallback for non-standard usage schemas.
+        if prompt_tokens is None:
+            prompt_tokens = self._as_int(usage.get("input_tokens"))
+        if completion_tokens is None:
+            completion_tokens = self._as_int(usage.get("output_tokens"))
+        if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
+            total_tokens = prompt_tokens + completion_tokens
+
+        if prompt_tokens is None and completion_tokens is None and total_tokens is None:
+            return None
+
+        return {
+            "prompt_tokens": prompt_tokens or 0,
+            "completion_tokens": completion_tokens or 0,
+            "total_tokens": total_tokens or 0,
+            "reasoning_tokens": reasoning_tokens,
+        }
+
+    def _estimate_cost_usd(self, model: str, usage: dict[str, int]) -> float | None:
+        pricing = self.DEFAULT_MODEL_PRICING_USD_PER_1M.get(model)
+        if pricing is None:
+            return None
+        input_cost = (usage.get("prompt_tokens", 0) / 1_000_000) * float(pricing["input"])
+        output_cost = (usage.get("completion_tokens", 0) / 1_000_000) * float(pricing["output"])
+        return round(input_cost + output_cost, 8)

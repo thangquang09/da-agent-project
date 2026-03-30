@@ -16,6 +16,8 @@ class AnswerPayload(TypedDict, total=False):
     generated_sql: str
     error_categories: list[str]
     step_count: int
+    total_token_usage: int
+    total_cost_usd: float
 
 
 class AgentState(TypedDict, total=False):

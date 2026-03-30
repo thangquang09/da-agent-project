@@ -65,6 +65,8 @@ def run_query(user_query: str, recursion_limit: int = 25, db_path: str | None = 
             "rows": 0,
             "context_chunks": 0,
             "error_categories": ["SYNTHESIS_ERROR"],
+            "total_token_usage": None,
+            "total_cost_usd": None,
         }
         tracer.finish(payload=payload, status="failed", error_message=str(exc))
         return payload

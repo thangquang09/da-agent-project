@@ -80,6 +80,8 @@ def route_intent(state: AgentState) -> AgentState:
     settings = load_settings()
     intent = _fallback_route_intent(query)
     intent_reason = "fallback_keyword_router"
+    llm_usage: dict[str, int] | None = None
+    llm_cost_usd: float | None = None
 
     try:
         client = LLMClient.from_env()
@@ -93,6 +95,8 @@ def route_intent(state: AgentState) -> AgentState:
             stream=False,
         )
         content = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        llm_usage = response.get("_usage_normalized")
+        llm_cost_usd = response.get("_cost_usd_estimate")
         parsed = _extract_first_json_object(content)
         candidate = str((parsed or {}).get("intent", "")).strip().lower()
         reason = str((parsed or {}).get("reason", "")).strip()
@@ -117,6 +121,8 @@ def route_intent(state: AgentState) -> AgentState:
                 "intent": intent,
                 "reason": intent_reason,
                 "prompt_version": ROUTER_PROMPT_V1.version,
+                "token_usage": llm_usage,
+                "cost_usd": llm_cost_usd,
             }
         ],
         "step_count": state.get("step_count", 0) + 1,
@@ -210,6 +216,8 @@ def generate_sql(state: AgentState) -> AgentState:
     query = state["user_query"]
     settings = load_settings()
     sql = _rule_based_sql(query)
+    llm_usage: dict[str, int] | None = None
+    llm_cost_usd: float | None = None
 
     if settings.enable_llm_sql_generation:
         try:
@@ -230,6 +238,8 @@ def generate_sql(state: AgentState) -> AgentState:
                 stream=False,
             )
             content = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            llm_usage = response.get("_usage_normalized")
+            llm_cost_usd = response.get("_cost_usd_estimate")
             if content:
                 sql = content.split("```")[-1].strip() if "```" in content else content
         except Exception as exc:  # noqa: BLE001
@@ -237,7 +247,15 @@ def generate_sql(state: AgentState) -> AgentState:
 
     return {
         "generated_sql": sql,
-        "tool_history": [{"tool": "generate_sql", "status": "ok", "prompt_version": SQL_GENERATION_PROMPT_V1.version}],
+        "tool_history": [
+            {
+                "tool": "generate_sql",
+                "status": "ok",
+                "prompt_version": SQL_GENERATION_PROMPT_V1.version,
+                "token_usage": llm_usage,
+                "cost_usd": llm_cost_usd,
+            }
+        ],
         "step_count": state.get("step_count", 0) + 1,
     }
 
@@ -342,6 +360,16 @@ def synthesize_answer(state: AgentState) -> AgentState:
     analysis = state.get("analysis_result", {})
     retrieved_context = state.get("retrieved_context", [])
     context_evidence = _context_evidence(retrieved_context)
+    tool_history = state.get("tool_history", [])
+
+    total_token_usage = 0
+    total_cost_usd = 0.0
+    for item in tool_history:
+        usage = item.get("token_usage", {}) if isinstance(item, dict) else {}
+        if isinstance(usage, dict):
+            total_token_usage += int(usage.get("total_tokens", 0) or 0)
+        if isinstance(item, dict):
+            total_cost_usd += float(item.get("cost_usd", 0) or 0)
 
     confidence = "low"
     if intent == "sql":
@@ -398,10 +426,12 @@ def synthesize_answer(state: AgentState) -> AgentState:
             f"context_chunks={len(retrieved_context)}",
         ],
         "confidence": confidence,
-        "used_tools": [item["tool"] for item in state.get("tool_history", [])],
+        "used_tools": [item["tool"] for item in tool_history],
         "generated_sql": state.get("validated_sql", state.get("generated_sql", "")),
         "error_categories": [str(err.get("category", "UNKNOWN")) for err in errors],
         "step_count": state.get("step_count", 0) + 1,
+        "total_token_usage": total_token_usage,
+        "total_cost_usd": round(total_cost_usd, 8),
     }
     return {
         "final_answer": answer,

@@ -35,10 +35,12 @@ if st.session_state["history"]:
     result = latest["result"]
 
     st.subheader("Latest Result")
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Confidence", str(result.get("confidence", "unknown")).upper())
     col2.metric("Intent", str(result.get("intent", "unknown")).upper())
     col3.metric("Tools Used", len(result.get("used_tools", [])))
+    col4.metric("Tokens", int(result.get("total_token_usage", 0) or 0))
+    col5.metric("Cost (USD)", f"{float(result.get('total_cost_usd', 0) or 0):.6f}")
 
     tabs = st.tabs(["Answer", "SQL", "Trace", "Errors"])
 

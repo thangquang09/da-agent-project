@@ -60,8 +60,8 @@ class RunTraceRecord:
     fallback_used: bool
     error_categories: list[str]
     total_token_usage: int | None = None
+    total_cost_usd: float | None = None
     final_confidence: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
-

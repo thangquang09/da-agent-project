@@ -89,6 +89,10 @@ class LangfuseAdapter:
         settings = load_settings()
         if not settings.enable_langfuse:
             return
+        host = os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL")
+        if host and not os.getenv("LANGFUSE_HOST"):
+            os.environ["LANGFUSE_HOST"] = host
+
         required = ["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"]
         if not all(os.getenv(key) for key in required):
             return
@@ -151,6 +155,8 @@ class LangfuseAdapter:
                     "confidence": payload.get("confidence"),
                     "generated_sql": payload.get("generated_sql", ""),
                     "error_categories": payload.get("error_categories", []),
+                    "total_token_usage": payload.get("total_token_usage"),
+                    "total_cost_usd": payload.get("total_cost_usd"),
                 }
             )
             if error_message:
@@ -253,6 +259,28 @@ class RunTracer:
             if isinstance(item, dict)
         )
         retries = sum(max(0, count - 1) for count in self.node_attempts.values())
+        total_token_usage = payload.get("total_token_usage")
+        if not isinstance(total_token_usage, int):
+            total_token_usage = 0
+            for item in payload.get("tool_history", []):
+                if not isinstance(item, dict):
+                    continue
+                usage = item.get("token_usage")
+                if isinstance(usage, dict):
+                    total_token_usage += int(usage.get("total_tokens", 0) or 0)
+            if total_token_usage == 0:
+                total_token_usage = None
+
+        total_cost_usd = payload.get("total_cost_usd")
+        if not isinstance(total_cost_usd, (int, float)):
+            total_cost_usd = 0.0
+            for item in payload.get("tool_history", []):
+                if isinstance(item, dict):
+                    total_cost_usd += float(item.get("cost_usd", 0) or 0)
+            if total_cost_usd == 0:
+                total_cost_usd = None
+            else:
+                total_cost_usd = round(total_cost_usd, 8)
 
         run_record = RunTraceRecord(
             record_type="run",
@@ -270,7 +298,8 @@ class RunTracer:
             retry_count=retries,
             fallback_used=fallback_used,
             error_categories=sorted(set(error_categories)),
-            total_token_usage=None,
+            total_token_usage=total_token_usage,
+            total_cost_usd=total_cost_usd,
             final_confidence=str(payload.get("confidence", "unknown")),
         )
         self._append_jsonl(run_record.to_dict())
