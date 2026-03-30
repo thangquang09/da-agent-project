@@ -49,6 +49,8 @@ def test_run_query_persists_node_and_run_traces(monkeypatch, tmp_path: Path):
 def test_run_query_captures_failure_taxonomy(monkeypatch, tmp_path: Path):
     trace_path = tmp_path / "traces.jsonl"
     monkeypatch.setenv("TRACE_JSONL_PATH", str(trace_path))
+    # Ensure deterministic local retrieval path for this unit test.
+    monkeypatch.setenv("ENABLE_MCP_TOOL_CLIENT", "0")
     load_settings.cache_clear()
     monkeypatch.setattr("app.graph.nodes.LLMClient.from_env", lambda: _DummyRouterClient(intent="rag"))
 

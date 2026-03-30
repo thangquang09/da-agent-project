@@ -13,6 +13,7 @@ from app.config import load_settings
 from app.main import run_query
 from app.tools import query_sql, validate_sql
 from evals.case_contracts import EvalCase, load_cases_jsonl
+from evals.groundedness import evaluate_groundedness
 
 
 GATE_THRESHOLDS = {
@@ -20,6 +21,7 @@ GATE_THRESHOLDS = {
     "sql_validity_rate": 0.90,
     "tool_path_accuracy": 0.95,
     "answer_format_validity": 1.00,
+    "groundedness_pass_rate": 0.70,
 }
 
 
@@ -43,6 +45,11 @@ class CaseResult:
     confidence: str
     latency_ms: float
     execution_match: bool | None
+    groundedness_score: float
+    groundedness_pass: bool
+    unsupported_claims: list[str]
+    groundedness_fail_reasons: list[str]
+    marked_answer: str
     error_categories: list[str]
     failure_bucket: str | None
     run_id: str
@@ -121,6 +128,8 @@ def _failure_bucket(case_result: CaseResult) -> str | None:
         return "SQL_VALIDATION_ERROR"
     if case_result.execution_match is False:
         return "SQL_EXECUTION_ERROR"
+    if not case_result.groundedness_pass:
+        return "HALLUCINATION_RISK"
     if not case_result.tool_path_correct:
         return "TOOL_PATH_MISMATCH"
     return None
@@ -141,6 +150,16 @@ def run_case(case: EvalCase, recursion_limit: int) -> CaseResult:
     has_sql = bool(generated_sql.strip())
     sql_valid = _sql_validity(generated_sql, case.target_db_path) if case.should_have_sql else True
     execution_match = _execution_match(case.gold_sql, generated_sql, case.target_db_path)
+    groundedness = evaluate_groundedness(
+        answer=str(payload.get("answer", "")),
+        evidence=[str(item) for item in payload.get("evidence", [])],
+        expected_keywords=case.expected_keywords,
+    )
+    payload_unsupported_claims = [str(item) for item in payload.get("unsupported_claims", [])]
+    merged_unsupported_claims = sorted(set(payload_unsupported_claims + groundedness.unsupported_claims))
+    merged_fail_reasons = list(groundedness.fail_reasons)
+    if payload_unsupported_claims:
+        merged_fail_reasons.append("payload_unsupported_claims_present")
 
     result = CaseResult(
         case_id=case.id,
@@ -161,6 +180,11 @@ def run_case(case: EvalCase, recursion_limit: int) -> CaseResult:
         confidence=str(payload.get("confidence", "unknown")),
         latency_ms=latency_ms,
         execution_match=execution_match,
+        groundedness_score=groundedness.score,
+        groundedness_pass=groundedness.passed and not merged_unsupported_claims,
+        unsupported_claims=merged_unsupported_claims,
+        groundedness_fail_reasons=merged_fail_reasons,
+        marked_answer=groundedness.marked_answer,
         error_categories=[str(item) for item in payload.get("error_categories", [])],
         failure_bucket=None,
         run_id=str(payload.get("run_id", "")),
@@ -192,6 +216,8 @@ def summarize(results: list[CaseResult]) -> dict[str, Any]:
             "tool_path_accuracy": _metric_ratio(group, "tool_path_correct"),
             "sql_validity_rate": _metric_ratio(group, "sql_valid"),
             "answer_format_validity": _metric_ratio(group, "answer_format_valid"),
+            "groundedness_pass_rate": _metric_ratio(group, "groundedness_pass"),
+            "avg_groundedness_score": round(sum(item.groundedness_score for item in group) / max(len(group), 1), 4),
             "avg_latency_ms": round(sum(item.latency_ms for item in group) / max(len(group), 1), 2),
         }
 
@@ -230,6 +256,8 @@ def _render_markdown(summary: dict[str, Any], per_case_path: Path) -> str:
         f"- Tool-path accuracy: {summary['overall']['tool_path_accuracy']}",
         f"- SQL validity rate: {summary['overall']['sql_validity_rate']}",
         f"- Answer format validity: {summary['overall']['answer_format_validity']}",
+        f"- Groundedness pass rate: {summary['overall']['groundedness_pass_rate']}",
+        f"- Average groundedness score: {summary['overall']['avg_groundedness_score']}",
         f"- Average latency (ms): {summary['overall']['avg_latency_ms']}",
         f"- Spider execution match: {summary.get('spider_execution_match_rate')}",
         "",
@@ -244,6 +272,8 @@ def _render_markdown(summary: dict[str, Any], per_case_path: Path) -> str:
                 f"- tool_path_accuracy: {stats['tool_path_accuracy']}",
                 f"- sql_validity_rate: {stats['sql_validity_rate']}",
                 f"- answer_format_validity: {stats['answer_format_validity']}",
+                f"- groundedness_pass_rate: {stats['groundedness_pass_rate']}",
+                f"- avg_groundedness_score: {stats['avg_groundedness_score']}",
                 f"- avg_latency_ms: {stats['avg_latency_ms']}",
                 "",
             ]

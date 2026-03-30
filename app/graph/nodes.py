@@ -10,19 +10,30 @@ from app.config import load_settings
 from app.graph.state import AgentState
 from app.llm import LLMClient
 from app.logger import logger
-from app.prompts import ROUTER_PROMPT_V1, SQL_GENERATION_PROMPT_V1
+from app.prompts import prompt_manager, ROUTER_PROMPT_DEFINITION, SQL_PROMPT_DEFINITION
 from app.tools import (
+    dataset_context,
     get_schema_overview,
     query_sql,
     retrieve_business_context,
     retrieve_metric_definition,
     validate_sql,
 )
+from app.tools.mcp_client import call_mcp_tool
 
 
 def _fallback_route_intent(query: str) -> str:
     q = query.lower()
     q_ascii = _strip_diacritics(q)
+    unknown_keywords = {
+        "ban co the lam gi",
+        "ban lam duoc gi",
+        "help",
+        "xin chao",
+        "hello",
+        "hi",
+        "alo",
+    }
     rag_keywords = {
         "definition",
         "what is",
@@ -47,13 +58,18 @@ def _fallback_route_intent(query: str) -> str:
         "dau",
     }
 
+    if any(keyword in q_ascii for keyword in unknown_keywords):
+        return "unknown"
+
     has_rag = any(_strip_diacritics(word) in q_ascii for word in rag_keywords)
     has_sql = any(_strip_diacritics(word) in q_ascii for word in sql_keywords)
     if has_rag and has_sql:
         return "mixed"
     if has_rag:
         return "rag"
-    return "sql"
+    if has_sql:
+        return "sql"
+    return "unknown"
 
 
 def _strip_diacritics(text: str) -> str:
@@ -86,10 +102,7 @@ def route_intent(state: AgentState) -> AgentState:
     try:
         client = LLMClient.from_env()
         response = client.chat_completion(
-            messages=[
-                {"role": "system", "content": ROUTER_PROMPT_V1.system},
-                {"role": "user", "content": ROUTER_PROMPT_V1.user_template.format(query=query)},
-            ],
+            messages=prompt_manager.router_messages(query),
             model=settings.default_router_model,
             temperature=0.0,
             stream=False,
@@ -100,7 +113,7 @@ def route_intent(state: AgentState) -> AgentState:
         parsed = _extract_first_json_object(content)
         candidate = str((parsed or {}).get("intent", "")).strip().lower()
         reason = str((parsed or {}).get("reason", "")).strip()
-        if candidate in {"sql", "rag", "mixed"}:
+        if candidate in {"sql", "rag", "mixed", "unknown"}:
             intent = candidate
             intent_reason = reason or "llm_router"
         else:
@@ -116,31 +129,42 @@ def route_intent(state: AgentState) -> AgentState:
         "intent_reason": intent_reason,
         "tool_history": [
             {
-                "tool": "route_intent",
-                "status": "ok",
-                "intent": intent,
-                "reason": intent_reason,
-                "prompt_version": ROUTER_PROMPT_V1.version,
-                "token_usage": llm_usage,
-                "cost_usd": llm_cost_usd,
-            }
+            "tool": "route_intent",
+            "status": "ok",
+            "intent": intent,
+            "reason": intent_reason,
+            "prompt_name": ROUTER_PROMPT_DEFINITION.name,
+            "token_usage": llm_usage,
+            "cost_usd": llm_cost_usd,
+        }
         ],
         "step_count": state.get("step_count", 0) + 1,
     }
 
 
 def get_schema(state: AgentState) -> AgentState:
+    settings = load_settings()
     db_path = Path(state["target_db_path"]) if state.get("target_db_path") else None
-    overview = get_schema_overview(db_path=db_path)
+    if settings.enable_mcp_tool_client:
+        mcp_args = {"db_path": str(db_path)} if db_path else {}
+        overview = call_mcp_tool("get_schema", mcp_args)
+        dataset_ctx = call_mcp_tool("dataset_context", mcp_args)
+        source = "mcp"
+    else:
+        overview = get_schema_overview(db_path=db_path)
+        dataset_ctx = dataset_context(db_path=db_path)
+        source = "local"
     schema_context = json.dumps(overview, ensure_ascii=False)
     return {
         "schema_context": schema_context,
+        "dataset_context": json.dumps(dataset_ctx, ensure_ascii=False),
         "tool_history": [
             {
                 "tool": "get_schema",
                 "status": "ok",
                 "table_count": len(overview.get("tables", [])),
                 "db_path": str(db_path) if db_path else "default",
+                "source": source,
             }
         ],
         "step_count": state.get("step_count", 0) + 1,
@@ -150,6 +174,7 @@ def get_schema(state: AgentState) -> AgentState:
 def retrieve_context_node(state: AgentState) -> AgentState:
     query = state["user_query"]
     intent = state.get("intent", "unknown")
+    settings = load_settings()
 
     try:
         query_ascii = _strip_diacritics(query.lower())
@@ -165,7 +190,10 @@ def retrieve_context_node(state: AgentState) -> AgentState:
         )
 
         if intent == "rag" and is_definition_like:
-            result = retrieve_metric_definition(query=query, top_k=4)
+            if settings.enable_mcp_tool_client:
+                result = call_mcp_tool("retrieve_metric_definition", {"query": query, "top_k": 4})
+            else:
+                result = retrieve_metric_definition(query=query, top_k=4)
             tool_name = "retrieve_metric_definition"
         else:
             result = retrieve_business_context(query=query, top_k=4)
@@ -212,6 +240,26 @@ def _rule_based_sql(query: str) -> str:
     return "SELECT date, dau, revenue FROM daily_metrics ORDER BY date DESC LIMIT 7"
 
 
+def _extract_sql_from_content(content: str) -> str:
+    text = content.strip()
+    if not text:
+        return ""
+
+    # Prefer fenced SQL blocks when the model returns markdown.
+    fenced_matches = re.findall(r"```(?:sql)?\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL)
+    for candidate in fenced_matches:
+        cleaned = candidate.strip()
+        if cleaned:
+            return cleaned
+
+    # Fallback: keep only from first SELECT/WITH statement onward.
+    statement_match = re.search(r"\b(SELECT|WITH)\b[\s\S]*", text, flags=re.IGNORECASE)
+    if statement_match:
+        return statement_match.group(0).strip()
+
+    return text
+
+
 def generate_sql(state: AgentState) -> AgentState:
     query = state["user_query"]
     settings = load_settings()
@@ -223,16 +271,11 @@ def generate_sql(state: AgentState) -> AgentState:
         try:
             client = LLMClient.from_env()
             response = client.chat_completion(
-                messages=[
-                    {"role": "system", "content": SQL_GENERATION_PROMPT_V1.system},
-                    {
-                        "role": "user",
-                        "content": SQL_GENERATION_PROMPT_V1.user_template.format(
-                            query=query,
-                            schema_context=state.get("schema_context", ""),
-                        ),
-                    },
-                ],
+                messages=prompt_manager.sql_messages(
+                    query,
+                    state.get("schema_context", ""),
+                    state.get("dataset_context", ""),
+                ),
                 model=settings.default_router_model,
                 temperature=0.0,
                 stream=False,
@@ -241,7 +284,9 @@ def generate_sql(state: AgentState) -> AgentState:
             llm_usage = response.get("_usage_normalized")
             llm_cost_usd = response.get("_cost_usd_estimate")
             if content:
-                sql = content.split("```")[-1].strip() if "```" in content else content
+                extracted_sql = _extract_sql_from_content(content)
+                if extracted_sql:
+                    sql = extracted_sql
         except Exception as exc:  # noqa: BLE001
             logger.warning("Falling back to rule-based SQL generation: {error}", error=str(exc))
 
@@ -251,7 +296,7 @@ def generate_sql(state: AgentState) -> AgentState:
             {
                 "tool": "generate_sql",
                 "status": "ok",
-                "prompt_version": SQL_GENERATION_PROMPT_V1.version,
+                "prompt_name": SQL_PROMPT_DEFINITION.name,
                 "token_usage": llm_usage,
                 "cost_usd": llm_cost_usd,
             }
@@ -262,7 +307,7 @@ def generate_sql(state: AgentState) -> AgentState:
 
 def validate_sql_node(state: AgentState) -> AgentState:
     db_path = Path(state["target_db_path"]) if state.get("target_db_path") else None
-    result = validate_sql(state.get("generated_sql", ""), db_path=db_path)
+    result = validate_sql(state.get("generated_sql", ""), db_path=db_path, max_limit=200)
     update: AgentState = {
         "validated_sql": result.sanitized_sql,
         "tool_history": [
@@ -288,19 +333,46 @@ def validate_sql_node(state: AgentState) -> AgentState:
 def execute_sql_node(state: AgentState) -> AgentState:
     validated_sql = state.get("validated_sql", "")
     db_path = Path(state["target_db_path"]) if state.get("target_db_path") else None
-    result = query_sql(validated_sql, db_path=db_path)
-    return {
+    settings = load_settings()
+
+    if settings.enable_mcp_tool_client:
+        mcp_args: dict[str, Any] = {"sql": validated_sql, "row_limit": 200}
+        if db_path:
+            mcp_args["db_path"] = str(db_path)
+        result = call_mcp_tool("query_sql", mcp_args)
+        source = "mcp"
+    else:
+        result = query_sql(validated_sql, db_path=db_path)
+        source = "local"
+
+    row_count = int(result.get("row_count", 0)) if isinstance(result, dict) else 0
+    validation_reasons = result.get("validation_reasons") if isinstance(result, dict) else None
+    rejected_by_validator = bool(validation_reasons)
+
+    update: AgentState = {
         "sql_result": result,
         "tool_history": [
             {
                 "tool": "query_sql",
-                "status": "ok",
-                "row_count": result["row_count"],
+                "status": "failed" if rejected_by_validator else "ok",
+                "row_count": row_count,
                 "db_path": str(db_path) if db_path else "default",
+                "source": source,
+                **({"validation_reasons": validation_reasons} if rejected_by_validator else {}),
             }
         ],
         "step_count": state.get("step_count", 0) + 1,
     }
+
+    if rejected_by_validator:
+        update["errors"] = [
+            {
+                "category": "SQL_VALIDATION_ERROR",
+                "message": "; ".join(validation_reasons),
+            }
+        ]
+
+    return update
 
 
 def analyze_result(state: AgentState) -> AgentState:
@@ -353,6 +425,13 @@ def _context_evidence(retrieved_context: list[dict[str, Any]]) -> list[str]:
     return evidence
 
 
+def _unsupported_numeric_claims(answer: str, evidence: list[str]) -> list[str]:
+    answer_numbers = set(re.findall(r"\b\d+(?:[.,]\d+)?%?\b", answer))
+    evidence_text = " ".join(evidence)
+    evidence_numbers = set(re.findall(r"\b\d+(?:[.,]\d+)?%?\b", evidence_text))
+    return [f"numeric_claim:{number}" for number in sorted(answer_numbers) if number not in evidence_numbers]
+
+
 def synthesize_answer(state: AgentState) -> AgentState:
     intent = state.get("intent", "unknown")
     errors = state.get("errors", [])
@@ -390,7 +469,7 @@ def synthesize_answer(state: AgentState) -> AgentState:
         else:
             answer = "I could not retrieve relevant business documentation for this question."
             confidence = "low"
-    else:  # mixed
+    elif intent == "mixed":
         has_sql_validation_error = any(err.get("category") == "SQL_VALIDATION_ERROR" for err in errors)
         sql_executed = "sql_result" in state and isinstance(state.get("sql_result"), dict)
         has_sql = sql_executed and not has_sql_validation_error
@@ -417,14 +496,28 @@ def synthesize_answer(state: AgentState) -> AgentState:
         else:
             answer = "I could not complete either SQL or retrieval branch for this mixed question."
             confidence = "low"
+    else:
+        answer = (
+            "Mình hỗ trợ tốt các câu hỏi phân tích dữ liệu/KPI như: xu hướng DAU, doanh thu, top video, "
+            "hoặc định nghĩa metric. Bạn có thể hỏi theo mẫu: 'DAU 3 ngày gần đây thế nào?'"
+        )
+        confidence = "medium"
+
+    evidence = [
+        f"intent={intent}",
+        f"rows={state.get('sql_result', {}).get('row_count', 0)}",
+        f"context_chunks={len(retrieved_context)}",
+    ]
+    if analysis.get("summary"):
+        evidence.append(f"analysis_summary={analysis['summary']}")
+
+    unsupported_claims = _unsupported_numeric_claims(answer, evidence)
+    if unsupported_claims:
+        answer = answer + "\n\n[UNSUPPORTED_CLAIMS] " + ", ".join(unsupported_claims)
 
     payload = {
         "answer": answer,
-        "evidence": [
-            f"intent={intent}",
-            f"rows={state.get('sql_result', {}).get('row_count', 0)}",
-            f"context_chunks={len(retrieved_context)}",
-        ],
+        "evidence": evidence,
         "confidence": confidence,
         "used_tools": [item["tool"] for item in tool_history],
         "generated_sql": state.get("validated_sql", state.get("generated_sql", "")),
@@ -432,6 +525,7 @@ def synthesize_answer(state: AgentState) -> AgentState:
         "step_count": state.get("step_count", 0) + 1,
         "total_token_usage": total_token_usage,
         "total_cost_usd": round(total_cost_usd, 8),
+        "unsupported_claims": unsupported_claims,
     }
     return {
         "final_answer": answer,

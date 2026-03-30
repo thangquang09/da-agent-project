@@ -8,6 +8,8 @@ dependencies = [
     "loguru>=0.7.3",
     "pydotenv>=0.0.7",
     "streamlit>=1.55.0",
+    "mcp>=1.12.4",
+    "uvicorn>=0.29.0",
 ]
 
 [dependency-groups]
