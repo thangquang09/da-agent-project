@@ -53,4 +53,9 @@ $env:PYTHONIOENCODING='utf-8'; nlm skill install agents --level project
 
 ## Artifacts tạo thêm
 - `.agents/skills/nlm-skill/` (skill project-level)
-- Tài liệu này: `docs/notebooklm_mcp_codex_setup_2026-03-29.md`
+- Tài liệu này: `docs/research/notebooklm/notebooklm_mcp_codex_setup_2026-03-29.md`
+
+## Cập nhật 2026-03-30 (cleanup)
+- Đã xóa MCP cũ: `notebooklm` (command cũ: `npx notebooklm-mcp@latest`) bằng lệnh:
+  - `codex mcp remove notebooklm`
+- Đã xác nhận lại bằng `codex mcp list`: chỉ còn `notebooklm-mcp` là NotebookLM MCP active.

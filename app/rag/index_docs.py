@@ -49,6 +49,8 @@ def _chunk_text(text: str, chunk_size: int = 140, overlap: int = 30) -> list[str
 def _load_markdown_docs(docs_dir: Path) -> list[tuple[str, str]]:
     docs: list[tuple[str, str]] = []
     for path in sorted(docs_dir.glob("*.md")):
+        if path.name.lower() == "agents.md":
+            continue
         content = path.read_text(encoding="utf-8")
         docs.append((path.name, content))
     return docs
@@ -56,7 +58,7 @@ def _load_markdown_docs(docs_dir: Path) -> list[tuple[str, str]]:
 
 @lru_cache(maxsize=1)
 def build_local_index(docs_dir: str | None = None) -> tuple[ChunkRecord, ...]:
-    base_dir = Path(docs_dir) if docs_dir else (PROJECT_ROOT / "docs")
+    base_dir = Path(docs_dir) if docs_dir else (PROJECT_ROOT / "docs" / "research" / "rag")
     if not base_dir.exists():
         logger.warning("RAG docs directory does not exist: {path}", path=base_dir)
         return tuple()
@@ -115,4 +117,3 @@ def query_index(query: str, top_k: int = 4, source_filter: set[str] | None = Non
         }
         for score, record in top_records
     ]
-

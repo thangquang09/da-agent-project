@@ -1,7 +1,7 @@
 [
   {
     "id": 1,
-    "query": "DAU 7 ngay gan day nhu the nao?",
+    "query": "DAU 7 ngày gần đây như thế nào?",
     "confidence": "high",
     "intent": "sql",
     "has_sql": true,
@@ -17,7 +17,7 @@
   },
   {
     "id": 2,
-    "query": "Revenue 7 ngay gan day co giam khong?",
+    "query": "Revenue 7 ngày gần đây có giảm không?",
     "confidence": "high",
     "intent": "sql",
     "has_sql": true,
@@ -33,7 +33,7 @@
   },
   {
     "id": 3,
-    "query": "Top 5 video co retention cao nhat",
+    "query": "Top 5 video có retention cao nhất",
     "confidence": "high",
     "intent": "sql",
     "has_sql": true,
@@ -49,7 +49,7 @@
   },
   {
     "id": 4,
-    "query": "Cho toi so dau moi ngay trong 7 ngay qua",
+    "query": "Cho tôi số DAU mỗi ngày trong 7 ngày qua",
     "confidence": "high",
     "intent": "sql",
     "has_sql": true,
@@ -65,7 +65,7 @@
   },
   {
     "id": 5,
-    "query": "Trung binh revenue 7 ngay gan day",
+    "query": "Trung bình revenue 7 ngày gần đây",
     "confidence": "high",
     "intent": "sql",
     "has_sql": true,
@@ -81,7 +81,7 @@
   },
   {
     "id": 6,
-    "query": "Video nao retention cao nhat hien tai?",
+    "query": "Video nào retention cao nhất hiện tại?",
     "confidence": "high",
     "intent": "sql",
     "has_sql": true,
@@ -97,7 +97,7 @@
   },
   {
     "id": 7,
-    "query": "So sanh dau 2 ngay gan nhat",
+    "query": "So sánh DAU 2 ngày gần nhất",
     "confidence": "high",
     "intent": "sql",
     "has_sql": true,
@@ -113,7 +113,7 @@
   },
   {
     "id": 8,
-    "query": "Cho biet trend revenue gan day",
+    "query": "Cho biết trend revenue gần đây",
     "confidence": "high",
     "intent": "sql",
     "has_sql": true,
@@ -129,7 +129,7 @@
   },
   {
     "id": 9,
-    "query": "Lay bang daily_metrics 7 ngay gan nhat",
+    "query": "Lấy bảng daily_metrics 7 ngày gần nhất",
     "confidence": "high",
     "intent": "sql",
     "has_sql": true,
@@ -145,7 +145,7 @@
   },
   {
     "id": 10,
-    "query": "Top retention videos tu du lieu hien co",
+    "query": "Top retention videos từ dữ liệu hiện có",
     "confidence": "high",
     "intent": "sql",
     "has_sql": true,

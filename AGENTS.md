@@ -447,10 +447,10 @@ This can be stored in SQLite for simplicity.
 ### Docs for RAG
 Also maintain a small business documentation layer in markdown files:
 
-- `metric_definitions.md`
-- `retention_rules.md`
-- `revenue_caveats.md`
-- `data_quality_notes.md`
+- `docs/research/rag/metric_definitions.md`
+- `docs/research/rag/retention_rules.md`
+- `docs/research/rag/revenue_caveats.md`
+- `docs/research/rag/data_quality_notes.md`
 
 These docs are used to support grounded business answers.
 
@@ -614,10 +614,31 @@ data/
   seeds/
 
 docs/
-  metric_definitions.md
-  retention_rules.md
-  revenue_caveats.md
-  data_quality_notes.md
+  AGENTS.md
+  thangquang09/
+    AGENTS.md
+    overview.md
+    implementation_todo.md
+  research/
+    AGENTS.md
+    rag/
+      AGENTS.md
+      metric_definitions.md
+      retention_rules.md
+      revenue_caveats.md
+      data_quality_notes.md
+    datasets/
+      AGENTS.md
+      dataset_research_2026-03-29.md
+    evaluation/
+      AGENTS.md
+      eval_pipeline.md
+    notebooklm/
+      AGENTS.md
+      notebooklm_mcp_codex_setup_2026-03-29.md
+    notes/
+      AGENTS.md
+      research_notes_2026-03-29.md
 
 evals/
   cases.json

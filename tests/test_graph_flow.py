@@ -37,7 +37,7 @@ def test_graph_sql_path_runs_end_to_end(monkeypatch):
     graph = build_sql_v1_graph()
     config = to_langgraph_config(new_run_config(thread_id="test-sql", recursion_limit=20))
 
-    out = graph.invoke({"user_query": "DAU 7 ngay gan day nhu the nao?"}, config=config)
+    out = graph.invoke({"user_query": "DAU 7 ngày gần đây như thế nào?"}, config=config)
     payload = out["final_payload"]
 
     assert payload["confidence"] in {"high", "medium"}
@@ -51,7 +51,7 @@ def test_graph_rag_path_uses_retrieval(monkeypatch):
     graph = build_sql_v1_graph()
     config = to_langgraph_config(new_run_config(thread_id="test-rag", recursion_limit=20))
 
-    out = graph.invoke({"user_query": "Retention D1 la gi?"}, config=config)
+    out = graph.invoke({"user_query": "Retention D1 là gì?"}, config=config)
     payload = out["final_payload"]
 
     assert payload["confidence"] in {"low", "medium"}
@@ -68,7 +68,7 @@ def test_graph_mixed_sql_failure_returns_partial_answer(monkeypatch):
     graph = build_sql_v1_graph()
     config = to_langgraph_config(new_run_config(thread_id="test-mixed-fallback", recursion_limit=20))
 
-    out = graph.invoke({"user_query": "Revenue giam va metric nay tinh the nao?"}, config=config)
+    out = graph.invoke({"user_query": "Revenue giảm và metric này tính thế nào?"}, config=config)
     payload = out["final_payload"]
 
     assert payload["confidence"] in {"low", "medium"}
@@ -79,7 +79,7 @@ def test_graph_mixed_sql_failure_returns_partial_answer(monkeypatch):
 def test_route_intent_fallback_supports_vietnamese_diacritics(monkeypatch):
     monkeypatch.setattr("app.graph.nodes.LLMClient.from_env", lambda: _FailingRouterClient())
 
-    out = route_intent({"user_query": "DAU 7 ngÃ y gáº§n Ä‘Ã¢y cÃ³ giáº£m khÃ´ng?"})
+    out = route_intent({"user_query": "DAU 7 ngày gần đây có giảm không?"})
 
     assert out["intent"] == "sql"
     assert out["intent_reason"].startswith("fallback_due_to_error")
@@ -95,7 +95,7 @@ def test_retrieve_context_rag_non_definition_uses_business_context(monkeypatch):
     monkeypatch.setattr("app.graph.nodes.retrieve_metric_definition", _metric_retriever)
     monkeypatch.setattr("app.graph.nodes.retrieve_business_context", _business_retriever)
 
-    out = retrieve_context_node({"user_query": "Revenue cÃ³ caveat gÃ¬?", "intent": "rag"})
+    out = retrieve_context_node({"user_query": "Revenue có caveat gì?", "intent": "rag"})
 
     assert out["tool_history"][0]["tool"] == "retrieve_business_context"
 

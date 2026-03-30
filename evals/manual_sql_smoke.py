@@ -8,16 +8,16 @@ from app.main import run_query
 
 
 QUERIES = [
-    "DAU 7 ngay gan day nhu the nao?",
-    "Revenue 7 ngay gan day co giam khong?",
-    "Top 5 video co retention cao nhat",
-    "Cho toi so dau moi ngay trong 7 ngay qua",
-    "Trung binh revenue 7 ngay gan day",
-    "Video nao retention cao nhat hien tai?",
-    "So sanh dau 2 ngay gan nhat",
-    "Cho biet trend revenue gan day",
-    "Lay bang daily_metrics 7 ngay gan nhat",
-    "Top retention videos tu du lieu hien co",
+    "DAU 7 ngày gần đây như thế nào?",
+    "Revenue 7 ngày gần đây có giảm không?",
+    "Top 5 video có retention cao nhất",
+    "Cho tôi số DAU mỗi ngày trong 7 ngày qua",
+    "Trung bình revenue 7 ngày gần đây",
+    "Video nào retention cao nhất hiện tại?",
+    "So sánh DAU 2 ngày gần nhất",
+    "Cho biết trend revenue gần đây",
+    "Lấy bảng daily_metrics 7 ngày gần nhất",
+    "Top retention videos từ dữ liệu hiện có",
 ]
 
 
@@ -75,4 +75,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

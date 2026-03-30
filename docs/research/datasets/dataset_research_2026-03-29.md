@@ -55,7 +55,7 @@ Cập nhật: 2026-03-29
 
 ### C. Dữ liệu cho phần RAG/eval behavior
 1. Dùng docs nội bộ project (đã có/đang có)
-- `metric_definitions.md`, `retention_rules.md`, `revenue_caveats.md`, `data_quality_notes.md`.
+- `docs/research/rag/metric_definitions.md`, `docs/research/rag/retention_rules.md`, `docs/research/rag/revenue_caveats.md`, `docs/research/rag/data_quality_notes.md`.
 - Sinh bộ Q&A vàng để đo groundedness + citation.
 
 2. Bổ sung semantic examples từ dbt ecosystem

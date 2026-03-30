@@ -51,7 +51,7 @@ Build a portfolio-ready DA Agent with:
 
 ## Week 2 - RAG + Mixed + Tracing
 ### Day 1 - RAG corpus and indexing
-- [x] Create docs: `metric_definitions.md`, `retention_rules.md`, `revenue_caveats.md`, `data_quality_notes.md`
+- [x] Create docs: `docs/research/rag/metric_definitions.md`, `docs/research/rag/retention_rules.md`, `docs/research/rag/revenue_caveats.md`, `docs/research/rag/data_quality_notes.md`
 - [x] Implement chunking + embedding + local vector index
 - [x] Add retriever nodes/tools: `retrieve_metric_definition`, `retrieve_business_context`
 
@@ -61,6 +61,7 @@ Build a portfolio-ready DA Agent with:
 - [x] For `mixed`, execute SQL + retrieval then merge at synth node
 - [x] Add fallback when one branch fails but partial answer is possible
 - [x] Fix regression: fallback Vietnamese diacritics + RAG retriever selection + mixed empty-SQL success classification
+- [x] WSL migration check: verified UTF-8 with `uv` and normalized Vietnamese text (docs/tests/evals) to accented form
 
 ### Day 3 - Observability layer
 - [ ] Implement trace schema (run-level + node-level)
@@ -82,14 +83,14 @@ Build a portfolio-ready DA Agent with:
 
 ## Week 3 - Evaluation + MCP minimal server
 ### Day 1 - Eval dataset
-- [ ] Create `evals/cases.json` with 40-60 cases
-- [ ] Label fields: expected intent, expected tools, should_have_sql, keywords
-- [ ] Split by type: 40% SQL, 30% RAG, 30% Mixed
+- [x] Build dataset-driven eval generator `evals/build_cases.py`
+- [x] Create case contracts + files: `evals/cases/domain_cases.jsonl`, `evals/cases/spider_cases.jsonl`
+- [x] Domain split generated as 40% SQL, 30% RAG, 30% Mixed (bilingual 50/50)
 
 ### Day 2 - Eval runner
-- [ ] Build `evals/runner.py` to run batch queries
-- [ ] Track metrics: routing accuracy, SQL validity, tool-call correctness, answer format validity, latency
-- [ ] Save run artifacts and per-case errors
+- [x] Build `evals/runner.py` to run batch queries
+- [x] Track metrics: routing accuracy, SQL validity, tool-call correctness, answer format validity, latency
+- [x] Save run artifacts and per-case errors (`evals/reports/latest_summary.{json,md}`, `evals/reports/per_case.jsonl`)
 
 ### Day 3 - Groundedness checks
 - [ ] Add groundedness evaluator (keyword/support-based baseline)
@@ -134,7 +135,7 @@ Build a portfolio-ready DA Agent with:
 - [ ] End-to-end works for `sql`, `rag`, `mixed`
 - [ ] SQL safety validation enforced before execution
 - [ ] Trace logs available per run and per node
-- [ ] Eval runner produces metric summary + per-case report
+- [x] Eval runner produces metric summary + per-case report
 - [ ] MCP minimal server responds with valid tool contracts
 - [ ] Streamlit demo is stable for interview flow
 
@@ -142,5 +143,5 @@ Build a portfolio-ready DA Agent with:
 - 30m: plan + define acceptance criteria for the day
 - 3-5h: implementation
 - 1h: tests/eval checks
-- 30m: update `research.md` or changelog with lessons/failures
+- 30m: update `docs/research/notes/research_notes_2026-03-29.md` or changelog with lessons/failures
 

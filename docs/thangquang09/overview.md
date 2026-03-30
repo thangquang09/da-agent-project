@@ -66,7 +66,7 @@ uv run streamlit run streamlit_app.py
 ```
 
 ## 6) Các file chính nên đọc
-- `implementation_todo.md`
+- `docs/thangquang09/implementation_todo.md`
 - `app/graph/graph.py`
 - `app/graph/nodes.py`
 - `app/prompts/router.py`
@@ -99,3 +99,18 @@ Test regression đã thêm:
 - `test_route_intent_fallback_supports_vietnamese_diacritics`
 - `test_retrieve_context_rag_non_definition_uses_business_context`
 - `test_mixed_synthesis_treats_empty_sql_result_as_success`
+
+## 10) Eval overhaul (2026-03-30)
+- Replaced hardcoded manual eval questions with dataset-driven eval logic.
+- Added case contract and generators:
+  - `evals/case_contracts.py`
+  - `evals/build_cases.py`
+- Added two suites:
+  - `domain` suite (UCI + MovieLens derived SQLite)
+  - `spider` suite (Spider dev subset with per-case DB path)
+- Added batch runner and reports:
+  - `evals/runner.py`
+  - `evals/reports/latest_summary.json`
+  - `evals/reports/latest_summary.md`
+  - `evals/reports/per_case.jsonl`
+- Graph now supports per-run DB override via `target_db_path` for eval cases.

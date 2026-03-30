@@ -1,0 +1,53 @@
+{
+  "total_cases": 44,
+  "overall": {
+    "count": 44,
+    "routing_accuracy": 0.9773,
+    "tool_path_accuracy": 0.7955,
+    "sql_validity_rate": 0.8182,
+    "answer_format_validity": 1.0,
+    "avg_latency_ms": 2225.26
+  },
+  "by_suite": {
+    "domain": {
+      "count": 36,
+      "routing_accuracy": 1.0,
+      "tool_path_accuracy": 0.9722,
+      "sql_validity_rate": 1.0,
+      "answer_format_validity": 1.0,
+      "avg_latency_ms": 2226.56
+    },
+    "spider": {
+      "count": 8,
+      "routing_accuracy": 0.875,
+      "tool_path_accuracy": 0.0,
+      "sql_validity_rate": 0.0,
+      "answer_format_validity": 1.0,
+      "avg_latency_ms": 2219.46
+    }
+  },
+  "by_language": {
+    "vi": {
+      "count": 22,
+      "routing_accuracy": 1.0,
+      "tool_path_accuracy": 0.8182,
+      "sql_validity_rate": 0.8182,
+      "answer_format_validity": 1.0,
+      "avg_latency_ms": 2194.4
+    },
+    "en": {
+      "count": 22,
+      "routing_accuracy": 0.9545,
+      "tool_path_accuracy": 0.7727,
+      "sql_validity_rate": 0.8182,
+      "answer_format_validity": 1.0,
+      "avg_latency_ms": 2256.13
+    }
+  },
+  "spider_execution_match_rate": 0.0,
+  "failure_buckets": {
+    "TOOL_PATH_MISMATCH": 1,
+    "SQL_VALIDATION_ERROR": 7,
+    "ROUTING_ERROR": 1
+  }
+}
