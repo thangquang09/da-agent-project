@@ -21,7 +21,14 @@ def _load_dotenv(path: Path) -> None:
 
     for key, value in env_file.items():
         if key and key not in os.environ:
-            os.environ[key] = value
+            clean_value = value.strip()
+            if (
+                len(clean_value) >= 2
+                and clean_value[0] == clean_value[-1]
+                and clean_value[0] in {"'", '"'}
+            ):
+                clean_value = clean_value[1:-1]
+            os.environ[key] = clean_value
             loaded_keys += 1
 
     logger.info("Loaded {count} env keys from {path}", count=loaded_keys, path=path)
@@ -47,6 +54,11 @@ class Settings:
     enable_llm_sql_generation: bool
     trace_jsonl_path: str
     enable_langfuse: bool
+    langfuse_project_name: str
+    langfuse_project_id: str
+    langfuse_org_name: str
+    langfuse_org_id: str
+    langfuse_cloud_region: str
 
 
 def _env_bool(value: str | None, default: bool) -> bool:
@@ -82,6 +94,11 @@ def load_settings() -> Settings:
             str(PROJECT_ROOT / "evals" / "reports" / "traces.jsonl"),
         ),
         enable_langfuse=_env_bool(os.getenv("ENABLE_LANGFUSE"), True),
+        langfuse_project_name=os.getenv("LANGFUSE_PROJECT_NAME", "da-agent-project"),
+        langfuse_project_id=os.getenv("LANGFUSE_PROJECT_ID", "cmncpq4xj0010ad07yughrjzi"),
+        langfuse_org_name=os.getenv("LANGFUSE_ORG_NAME", "Kyanon_AppliedTrainee"),
+        langfuse_org_id=os.getenv("LANGFUSE_ORG_ID", "cmcfrrpid00gcad07cln6jg0f"),
+        langfuse_cloud_region=os.getenv("LANGFUSE_CLOUD_REGION", "EU"),
     )
 
     if not settings.llm_api_key:

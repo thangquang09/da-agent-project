@@ -85,11 +85,11 @@ class LangfuseAdapter:
         self.enabled = False
         self.client = None
         self.root_observation = None
+        self.settings = load_settings()
 
-        settings = load_settings()
-        if not settings.enable_langfuse:
+        if not self.settings.enable_langfuse:
             return
-        host = os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL")
+        host = (os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") or "").strip().strip('"').strip("'")
         if host and not os.getenv("LANGFUSE_HOST"):
             os.environ["LANGFUSE_HOST"] = host
 
@@ -115,6 +115,17 @@ class LangfuseAdapter:
                 name="da-agent-run",
                 as_type="agent",
                 input={"query": query, "run_id": run_id, "thread_id": thread_id},
+                metadata={
+                    "project": {
+                        "name": self.settings.langfuse_project_name,
+                        "id": self.settings.langfuse_project_id,
+                    },
+                    "org": {
+                        "name": self.settings.langfuse_org_name,
+                        "id": self.settings.langfuse_org_id,
+                    },
+                    "cloudRegion": self.settings.langfuse_cloud_region,
+                },
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Langfuse start_run failed: {error}", error=str(exc))
