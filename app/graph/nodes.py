@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from pathlib import Path
 from typing import Any
 
 from app.config import load_settings
@@ -28,26 +29,26 @@ def _fallback_route_intent(query: str) -> str:
         "meaning",
         "caveat",
         "explain",
-        "la gi",
-        "dinh nghia",
-        "quy tac",
+        "là gì",
+        "định nghĩa",
+        "quy tắc",
         "business rule",
     }
     sql_keywords = {
         "top",
         "trend",
         "compare",
-        "bao nhieu",
-        "tang",
-        "giam",
-        "7 ngay",
+        "bao nhiêu",
+        "tăng",
+        "giảm",
+        "7 ngày",
         "week",
         "doanh thu",
         "dau",
     }
 
-    has_rag = any(word in q_ascii for word in rag_keywords)
-    has_sql = any(word in q_ascii for word in sql_keywords)
+    has_rag = any(_strip_diacritics(word) in q_ascii for word in rag_keywords)
+    has_sql = any(_strip_diacritics(word) in q_ascii for word in sql_keywords)
     if has_rag and has_sql:
         return "mixed"
     if has_rag:
@@ -57,7 +58,7 @@ def _fallback_route_intent(query: str) -> str:
 
 def _strip_diacritics(text: str) -> str:
     normalized = unicodedata.normalize("NFD", text)
-    return "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn").replace("Ä‘", "d")
+    return "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn").replace("đ", "d")
 
 
 
@@ -123,11 +124,19 @@ def route_intent(state: AgentState) -> AgentState:
 
 
 def get_schema(state: AgentState) -> AgentState:
-    overview = get_schema_overview()
+    db_path = Path(state["target_db_path"]) if state.get("target_db_path") else None
+    overview = get_schema_overview(db_path=db_path)
     schema_context = json.dumps(overview, ensure_ascii=False)
     return {
         "schema_context": schema_context,
-        "tool_history": [{"tool": "get_schema", "status": "ok", "table_count": len(overview.get("tables", []))}],
+        "tool_history": [
+            {
+                "tool": "get_schema",
+                "status": "ok",
+                "table_count": len(overview.get("tables", [])),
+                "db_path": str(db_path) if db_path else "default",
+            }
+        ],
         "step_count": state.get("step_count", 0) + 1,
     }
 
@@ -139,10 +148,10 @@ def retrieve_context_node(state: AgentState) -> AgentState:
     try:
         query_ascii = _strip_diacritics(query.lower())
         is_definition_like = any(
-            keyword in query_ascii
+            _strip_diacritics(keyword) in query_ascii
             for keyword in {
-                "la gi",
-                "dinh nghia",
+                "là gì",
+                "định nghĩa",
                 "definition",
                 "what is",
                 "meaning",
@@ -187,10 +196,10 @@ def retrieve_context_node(state: AgentState) -> AgentState:
 
 
 def _rule_based_sql(query: str) -> str:
-    q = query.lower()
+    q = _strip_diacritics(query.lower())
     if "top" in q and "retention" in q:
         return "SELECT title, retention_rate FROM videos ORDER BY retention_rate DESC LIMIT 5"
-    if "revenue" in q and ("7 ngay" in q or "7 day" in q):
+    if "revenue" in q and (_strip_diacritics("7 ngày") in q or "7 day" in q):
         return "SELECT date, revenue FROM daily_metrics ORDER BY date DESC LIMIT 7"
     if "dau" in q:
         return "SELECT date, dau FROM daily_metrics ORDER BY date DESC LIMIT 7"
@@ -234,7 +243,8 @@ def generate_sql(state: AgentState) -> AgentState:
 
 
 def validate_sql_node(state: AgentState) -> AgentState:
-    result = validate_sql(state.get("generated_sql", ""))
+    db_path = Path(state["target_db_path"]) if state.get("target_db_path") else None
+    result = validate_sql(state.get("generated_sql", ""), db_path=db_path)
     update: AgentState = {
         "validated_sql": result.sanitized_sql,
         "tool_history": [
@@ -242,6 +252,7 @@ def validate_sql_node(state: AgentState) -> AgentState:
                 "tool": "validate_sql",
                 "status": "ok" if result.is_valid else "failed",
                 "reasons": result.reasons,
+                "db_path": str(db_path) if db_path else "default",
             }
         ],
         "step_count": state.get("step_count", 0) + 1,
@@ -258,10 +269,18 @@ def validate_sql_node(state: AgentState) -> AgentState:
 
 def execute_sql_node(state: AgentState) -> AgentState:
     validated_sql = state.get("validated_sql", "")
-    result = query_sql(validated_sql)
+    db_path = Path(state["target_db_path"]) if state.get("target_db_path") else None
+    result = query_sql(validated_sql, db_path=db_path)
     return {
         "sql_result": result,
-        "tool_history": [{"tool": "query_sql", "status": "ok", "row_count": result["row_count"]}],
+        "tool_history": [
+            {
+                "tool": "query_sql",
+                "status": "ok",
+                "row_count": result["row_count"],
+                "db_path": str(db_path) if db_path else "default",
+            }
+        ],
         "step_count": state.get("step_count", 0) + 1,
     }
 
@@ -381,10 +400,15 @@ def synthesize_answer(state: AgentState) -> AgentState:
         "confidence": confidence,
         "used_tools": [item["tool"] for item in state.get("tool_history", [])],
         "generated_sql": state.get("validated_sql", state.get("generated_sql", "")),
+        "error_categories": [str(err.get("category", "UNKNOWN")) for err in errors],
+        "step_count": state.get("step_count", 0) + 1,
     }
     return {
         "final_answer": answer,
         "final_payload": payload,
+        "intent": intent,
+        "intent_reason": state.get("intent_reason", ""),
+        "errors": errors,
         "confidence": confidence,
         "step_count": state.get("step_count", 0) + 1,
     }

@@ -14,10 +14,13 @@ class AnswerPayload(TypedDict, total=False):
     confidence: Confidence
     used_tools: list[str]
     generated_sql: str
+    error_categories: list[str]
+    step_count: int
 
 
 class AgentState(TypedDict, total=False):
     user_query: str
+    target_db_path: str
     intent: Intent
     intent_reason: str
     messages: Annotated[list[dict[str, Any]], operator.add]
@@ -36,11 +39,16 @@ class AgentState(TypedDict, total=False):
     run_id: str
 
 
-class GraphInputState(TypedDict):
+class GraphInputState(TypedDict, total=False):
     user_query: str
+    target_db_path: str
 
 
 class GraphOutputState(TypedDict, total=False):
     final_answer: str
     final_payload: AnswerPayload
+    intent: Intent
+    intent_reason: str
+    errors: list[dict[str, Any]]
+    step_count: int
     run_id: str
