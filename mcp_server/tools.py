@@ -14,10 +14,14 @@ from app.tools import (
 )
 from mcp_server.config import load_mcp_config
 from mcp_server.schemas import DatasetContextResponse, QuerySQLResponse, SchemaTable
+from mcp_server.tools.csv_context import (
+    tool_auto_register_csv,
+    tool_profile_csv,
+    tool_validate_csv,
+)
 
 
-def _resolve_db_path(db_path: str | None) -> Path:
-    cfg = load_mcp_config()
+def _resolve_db_path(db_path: str | None) -> Path:cfg = load_mcp_config()
     return Path(db_path) if db_path else cfg.db_path
 
 
@@ -52,9 +56,7 @@ def tool_query_sql(sql: str, row_limit: int | None = None, db_path: str | None =
             "latency_ms": 0.0,
             "sanitized_sql": validation.sanitized_sql,
             "validation_reasons": validation.reasons,
-        }
-
-    result = query_sql(validation.sanitized_sql, db_path=resolved_db_path)
+        }result = query_sql(validation.sanitized_sql, db_path=resolved_db_path)
     return {
         **result,
         "sanitized_sql": validation.sanitized_sql,

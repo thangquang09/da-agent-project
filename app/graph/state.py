@@ -38,6 +38,8 @@ class AgentState(TypedDict, total=False):
     detected_intent: list[str]
     uploaded_files: list[str]
     retrieved_context: list[dict[str, Any]]
+    resolved_context: str
+    conflict_notes: list[str]
     generated_sql: str
     validated_sql: str
     sql_result: dict[str, Any]

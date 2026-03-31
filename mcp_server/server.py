@@ -6,10 +6,13 @@ from typing import Any
 
 from app.logger import logger
 from mcp_server.tools import (
+    tool_auto_register_csv,
     tool_dataset_context,
     tool_get_schema,
+    tool_profile_csv,
     tool_query_sql,
     tool_retrieve_metric_definition,
+    tool_validate_csv,
 )
 
 try:
@@ -34,7 +37,9 @@ def create_app():
             "mcp is not installed. Install with `pip install mcp`"
         ) from _import_error
 
-    server = FastMCP("da-agent-mcp", json_response=True, stateless_http=True, log_level="ERROR")
+    server = FastMCP(
+        "da-agent-mcp", json_response=True, stateless_http=True, log_level="ERROR"
+    )
 
     @server.tool()
     def get_schema(db_path: str | None = None) -> Any:  # noqa: D401
@@ -49,8 +54,40 @@ def create_app():
         return tool_retrieve_metric_definition(query=query, top_k=top_k)
 
     @server.tool()
-    def query_sql(sql: str, row_limit: int | None = None, db_path: str | None = None) -> Any:  # noqa: D401
+    def query_sql(
+        sql: str, row_limit: int | None = None, db_path: str | None = None
+    ) -> Any:  # noqa: D401
         return tool_query_sql(sql=sql, row_limit=row_limit, db_path=db_path)
+
+    @server.tool()
+    def validate_csv(file_path: str) -> Any:  # noqa: D401
+        return tool_validate_csv(file_path=file_path)
+
+    @server.tool()
+    def profile_csv(
+        file_path: str,
+        table_name: str | None = None,
+        encoding: str | None = None,
+        delimiter: str | None = None,
+    ) -> Any:  # noqa: D401
+        return tool_profile_csv(
+            file_path=file_path,
+            table_name=table_name,
+            encoding=encoding,
+            delimiter=delimiter,
+        )
+
+    @server.tool()
+    def auto_register_csv(
+        file_path: str,
+        table_name: str | None = None,
+        db_path: str | None = None,
+    ) -> Any:  # noqa: D401
+        return tool_auto_register_csv(
+            file_path=file_path,
+            table_name=table_name,
+            db_path=db_path,
+        )
 
     return server.streamable_http_app()
 
@@ -60,7 +97,9 @@ def _build_server() -> Any:
         logger.error("modelcontextprotocol is missing; cannot start MCP server.")
         raise RuntimeError("mcp is missing")
 
-    server = FastMCP("da-agent-mcp", json_response=True, stateless_http=True, log_level="ERROR")
+    server = FastMCP(
+        "da-agent-mcp", json_response=True, stateless_http=True, log_level="ERROR"
+    )
 
     @server.tool()
     def get_schema(db_path: str | None = None) -> Any:
@@ -75,8 +114,40 @@ def _build_server() -> Any:
         return tool_retrieve_metric_definition(query=query, top_k=top_k)
 
     @server.tool()
-    def query_sql(sql: str, row_limit: int | None = None, db_path: str | None = None) -> Any:
+    def query_sql(
+        sql: str, row_limit: int | None = None, db_path: str | None = None
+    ) -> Any:
         return tool_query_sql(sql=sql, row_limit=row_limit, db_path=db_path)
+
+    @server.tool()
+    def validate_csv(file_path: str) -> Any:
+        return tool_validate_csv(file_path=file_path)
+
+    @server.tool()
+    def profile_csv(
+        file_path: str,
+        table_name: str | None = None,
+        encoding: str | None = None,
+        delimiter: str | None = None,
+    ) -> Any:
+        return tool_profile_csv(
+            file_path=file_path,
+            table_name=table_name,
+            encoding=encoding,
+            delimiter=delimiter,
+        )
+
+    @server.tool()
+    def auto_register_csv(
+        file_path: str,
+        table_name: str | None = None,
+        db_path: str | None = None,
+    ) -> Any:
+        return tool_auto_register_csv(
+            file_path=file_path,
+            table_name=table_name,
+            db_path=db_path,
+        )
 
     return server
 
@@ -106,7 +177,9 @@ def main() -> None:
     import uvicorn
 
     app = server.streamable_http_app()
-    logger.info("Starting MCP server on http://{host}:{port}", host=args.host, port=args.port)
+    logger.info(
+        "Starting MCP server on http://{host}:{port}", host=args.host, port=args.port
+    )
     uvicorn.run(app, host=args.host, port=args.port)
 
 
