@@ -63,4 +63,5 @@ Thumbs.db
 skills-lock.json
 
 # Runtime observability output
+evals/reports/
 evals/reports/traces.jsonl
