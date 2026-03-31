@@ -5,6 +5,7 @@ from typing import Literal
 from langgraph.types import Send
 
 from app.graph.state import AgentState, TaskState
+from app.logger import logger
 
 
 def route_after_context_detection(
@@ -132,14 +133,23 @@ def route_to_execution_mode(
 
 def route_after_planning(
     state: AgentState,
-) -> list[Send] | Literal["aggregate_results", "sql_worker", "synthesize_answer"]:
+) -> (
+    list[Send]
+    | Literal[
+        "aggregate_results", "sql_worker", "visualization_worker", "synthesize_answer"
+    ]
+):
     """
     Fan-out router using Send API for task execution.
 
     If task_plan has tasks, create Send objects for workers.
+    Supports both sql_query and visualize task types.
     Tasks are always executed regardless of execution_mode.
-    execution_mode may influence future optimizations but does not block execution.
     """
+    import logging
+
+    logger = logging.getLogger(__name__)
+
     task_plan = state.get("task_plan", [])
     execution_mode = state.get("execution_mode", "linear")
 
@@ -148,13 +158,13 @@ def route_after_planning(
         return "synthesize_answer"
 
     # Always execute tasks if present
-    # execution_mode is informational; tasks must be processed
     if len(task_plan) >= 1:
         sends = []
         for task in task_plan:
+            task_type = str(task.get("type", "sql_query"))
             send_state = {
                 "task_id": str(task.get("task_id", "unknown")),
-                "task_type": str(task.get("type", "sql_query")),
+                "task_type": task_type,
                 "query": str(task.get("query", "")),
                 "target_db_path": str(task.get("target_db_path"))
                 if task.get("target_db_path")
@@ -162,13 +172,15 @@ def route_after_planning(
                 "schema_context": str(task.get("task_context", "")),
                 "status": "pending",
             }
-            sends.append(Send("sql_worker", send_state))
 
-        logger.info(
-            "Routing {count} task(s) to sql_worker (mode={mode})",
-            count=len(task_plan),
-            mode=execution_mode,
-        )
+            # Route to appropriate worker based on task type
+            if task_type == "visualize":
+                sends.append(Send("visualization_worker", send_state))
+                logger.info(f"Routing visualization task {send_state['task_id']}")
+            else:
+                sends.append(Send("sql_worker", send_state))
+
+        logger.info(f"Routing {len(task_plan)} task(s) (mode={execution_mode})")
         return sends
 
     # No tasks - should not reach here, but fallback

@@ -56,6 +56,35 @@ def _render_result(result: dict) -> None:
     st.write(result.get("answer", "No answer"))
     st.caption(f"Run ID: {result.get('run_id', '-')}")
 
+    # Render visualization if present
+    viz = result.get("visualization")
+    if viz and viz.get("success") and viz.get("image_data"):
+        st.subheader("📊 Visualization")
+        try:
+            import base64
+            from PIL import Image
+            import io
+
+            image_data = viz["image_data"]
+            # Handle both bytes and base64 string
+            if isinstance(image_data, str):
+                image_bytes = base64.b64decode(image_data)
+            else:
+                image_bytes = image_data
+
+            image = Image.open(io.BytesIO(image_bytes))
+            st.image(image, use_container_width=True)
+
+            # Show visualization metadata
+            with st.expander("Visualization Details", expanded=False):
+                st.write(f"Format: {viz.get('image_format', 'png')}")
+                st.write(f"Size: {len(image_bytes)} bytes")
+                st.write(f"Execution time: {viz.get('execution_time_ms', 0):.0f}ms")
+                if viz.get("error"):
+                    st.error(f"Error: {viz['error']}")
+        except Exception as e:
+            st.error(f"Failed to render visualization: {e}")
+
     with st.expander("Agent Logs", expanded=False):
         tabs = st.tabs(["SQL", "Trace", "Errors", "Raw"])
         with tabs[0]:
