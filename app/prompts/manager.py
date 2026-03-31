@@ -200,5 +200,26 @@ class PromptManager:
             },
         )
 
+    def synthesis_messages(
+        self,
+        query: str,
+        results: list[dict[str, Any]],
+        row_count: int,
+    ) -> list[dict[str, str]]:
+        """Generate messages for natural language synthesis from SQL results."""
+        import json
+
+        from app.prompts.synthesis import SYNTHESIS_PROMPT_DEFINITION
+
+        results_json = json.dumps(results, ensure_ascii=False, indent=2)
+        return self._compile_prompt(
+            SYNTHESIS_PROMPT_DEFINITION,
+            {
+                "query": query,
+                "results": results_json,
+                "row_count": row_count,
+            },
+        )
+
 
 prompt_manager = PromptManager()

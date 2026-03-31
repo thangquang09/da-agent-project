@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from evals.runner import CaseResult, _failure_bucket, _pass_gate, _required_payload_keys_present, summarize
+from evals.runner import (
+    CaseResult,
+    _failure_bucket,
+    _pass_gate,
+    _required_payload_keys_present,
+    summarize,
+)
 
 
 def test_required_payload_keys_present():
@@ -35,6 +41,10 @@ def test_failure_bucket_prefers_routing_error():
         confidence="high",
         latency_ms=10.0,
         execution_match=None,
+        spider_exact_match=None,
+        spider_exact_match_f1=None,
+        answer_quality_score=None,
+        answer_quality_reasoning=None,
         groundedness_score=1.0,
         groundedness_pass=True,
         unsupported_claims=[],
@@ -68,6 +78,10 @@ def test_summary_and_gate():
             confidence="high",
             latency_ms=100.0,
             execution_match=None,
+            spider_exact_match=None,
+            spider_exact_match_f1=None,
+            answer_quality_score=None,
+            answer_quality_reasoning=None,
             groundedness_score=1.0,
             groundedness_pass=True,
             unsupported_claims=[],
@@ -96,6 +110,10 @@ def test_summary_and_gate():
             confidence="low",
             latency_ms=200.0,
             execution_match=False,
+            spider_exact_match=False,
+            spider_exact_match_f1=0.5,
+            answer_quality_score=0.6,
+            answer_quality_reasoning="Missing details",
             groundedness_score=0.2,
             groundedness_pass=False,
             unsupported_claims=["numeric_claim:999"],

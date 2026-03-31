@@ -21,9 +21,23 @@ Date: 2026-03-31
   - Add `context_resolver`: Conflict resolution between user and dataset context
   - Expose `validate_csv`, `profile_csv`, `auto_register_csv` as MCP tools
 
+- **Phase 4** (COMPLETED 2026-03-31): Eval metrics and Streamlit UI
+  - Add `expected_context_type` field to EvalCase dataclass
+  - Add `predicted_context_type`, `context_type_correct` fields to CaseResult
+  - Add `context_type_accuracy` metric to eval summary
+  - Add Streamlit UI for semantic context input and CSV file upload
+  - Display context_type in result metrics
+
+- **Phase 5** (COMPLETED 2026-03-31): CSV upload and processing pipeline
+  - Add `uploaded_file_data` field to GraphInputState and AgentState
+  - Create `process_uploaded_files` node to validate, profile, and auto-register CSVs
+  - Update graph flow: detect_context_type → process_uploaded_files (if files) → route_intent
+  - Update Streamlit to pass file bytes to the graph
+  - CSVs are now auto-registered into SQLite for querying
+
 ### Remaining Work
-- **Eval metrics for context detection**: Add context_type accuracy metrics
-- **Streamlit UI**: File upload handling for CSV auto-context
+- **Integration tests for CSV tools**: Test full CSV auto-register pipeline end-to-end
+- **Eval cases with context_type**: Update existing eval cases to include expected_context_type
 
 ## Research links
 - Text-to-SQL deep research (NotebookLM, 2026-03-30):

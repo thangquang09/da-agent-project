@@ -27,6 +27,7 @@ def run_query(
     db_path: str | None = None,
     user_semantic_context: str | None = None,
     uploaded_files: list[str] | None = None,
+    uploaded_file_data: list[dict[str, Any]] | None = None,
     expected_keywords: list[str] | None = None,
 ) -> dict:
     graph = build_sql_v1_graph()
@@ -44,6 +45,8 @@ def run_query(
         graph_input["user_semantic_context"] = user_semantic_context
     if uploaded_files:
         graph_input["uploaded_files"] = uploaded_files
+    if uploaded_file_data:
+        graph_input["uploaded_file_data"] = uploaded_file_data
     if expected_keywords:
         graph_input["expected_keywords"] = expected_keywords
     try:

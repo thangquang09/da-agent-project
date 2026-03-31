@@ -10,6 +10,7 @@ from app.graph.edges import (
     route_after_analysis,
     route_after_context_detection,
     route_after_intent,
+    route_after_process_files,
     route_after_sql_validation,
 )
 from app.graph.nodes import (
@@ -18,6 +19,7 @@ from app.graph.nodes import (
     execute_sql_node,
     generate_sql,
     get_schema,
+    process_uploaded_files,
     retrieve_context_node,
     route_intent,
     synthesize_answer,
@@ -58,6 +60,10 @@ def build_sql_v1_graph(checkpointer=None):
         _instrument_node("detect_context_type", detect_context_type, "classifier"),
     )
     builder.add_node(
+        "process_uploaded_files",
+        _instrument_node("process_uploaded_files", process_uploaded_files, "tool"),
+    )
+    builder.add_node(
         "route_intent", _instrument_node("route_intent", route_intent, "agent")
     )
     builder.add_node(
@@ -94,9 +100,11 @@ def build_sql_v1_graph(checkpointer=None):
         "detect_context_type",
         route_after_context_detection,
         {
+            "process_uploaded_files": "process_uploaded_files",
             "route_intent": "route_intent",
         },
     )
+    builder.add_edge("process_uploaded_files", "route_intent")
     builder.add_conditional_edges(
         "route_intent",
         route_after_intent,

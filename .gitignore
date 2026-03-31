@@ -65,3 +65,8 @@ skills-lock.json
 # Runtime observability output
 evals/reports/
 evals/reports/traces.jsonl
+
+# Graph export images (re-generated via export_graph.py)
+docs/thangquang09/langgraph_graph.png
+docs/thangquang09/langgraph_graph.svg
+docs/thangquang09/_render.html

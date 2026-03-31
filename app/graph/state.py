@@ -21,6 +21,8 @@ class AnswerPayload(TypedDict, total=False):
     total_cost_usd: float
     unsupported_claims: list[str]
     context_type: ContextType
+    sql_rows: list[dict[str, Any]]
+    sql_row_count: int
 
 
 class AgentState(TypedDict, total=False):
@@ -37,6 +39,8 @@ class AgentState(TypedDict, total=False):
     needs_semantic_context: bool
     detected_intent: list[str]
     uploaded_files: list[str]
+    uploaded_file_data: list[dict[str, Any]]
+    registered_tables: list[str]
     retrieved_context: list[dict[str, Any]]
     resolved_context: str
     conflict_notes: list[str]
@@ -59,6 +63,7 @@ class GraphInputState(TypedDict, total=False):
     target_db_path: str
     user_semantic_context: str
     uploaded_files: list[str]
+    uploaded_file_data: list[dict[str, Any]]
 
 
 class GraphOutputState(TypedDict, total=False):

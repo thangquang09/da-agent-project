@@ -17,6 +17,7 @@ from app.prompts import (
     prompt_manager,
     ROUTER_PROMPT_DEFINITION,
     SQL_PROMPT_DEFINITION,
+    SYNTHESIS_PROMPT_DEFINITION,
 )
 from app.tools import (
     dataset_context,
@@ -253,7 +254,7 @@ def retrieve_dataset_context(query: str, top_k: int = 3) -> list[dict[str, Any]]
     """
     from app.rag.retriever import query_index as _query_index
 
-    results = _query_index(query=query, top_k=top_k, source_filter=None)
+    results = _query_index(query=query, top_k=top_k, source_filter="dataset_contexts")
     return results
 
 
@@ -578,6 +579,43 @@ def execute_sql_node(state: AgentState) -> AgentState:
     return update
 
 
+def _generate_data_summary(rows: list[dict[str, Any]], query: str) -> str:
+    """Generate a meaningful summary from query results when LLM analysis fails."""
+    if not rows:
+        return "No data returned from query."
+
+    if len(rows) == 1:
+        # Single row result - format the key values
+        row = rows[0]
+        parts = []
+        for key, value in row.items():
+            if value is not None:
+                # Format numbers nicely
+                if isinstance(value, (int, float)):
+                    formatted = (
+                        f"{value:,}" if isinstance(value, int) else f"{value:,.2f}"
+                    )
+                    parts.append(f"{key}: {formatted}")
+                else:
+                    parts.append(f"{key}: {value}")
+        return "Result: " + ", ".join(parts) if parts else "Query returned one row."
+    else:
+        # Multiple rows - show count and sample
+        total = len(rows)
+        sample_keys = list(rows[0].keys())[:3]  # First 3 columns
+        samples = []
+        for i, row in enumerate(rows[:3]):
+            sample_vals = [f"{k}={row.get(k)}" for k in sample_keys]
+            samples.append(" | ".join(sample_vals))
+
+        summary = f"Query returned {total:,} rows."
+        if samples:
+            summary += f" Sample data: {'; '.join(samples)}"
+            if total > 3:
+                summary += f" (and {total - 3} more)"
+        return summary
+
+
 def analyze_result(state: AgentState) -> AgentState:
     sql_result = state.get("sql_result", {})
     rows = sql_result.get("rows", [])
@@ -591,7 +629,9 @@ def analyze_result(state: AgentState) -> AgentState:
     if not rows:
         analysis: dict[str, Any] = {"summary": "No rows returned.", "trend": "unknown"}
     else:
-        analysis = {"summary": "Query executed successfully.", "trend": "unknown"}
+        # Generate meaningful summary from actual data as fallback
+        data_summary = _generate_data_summary(rows, query)
+        analysis = {"summary": data_summary, "trend": "analyzed"}
 
         try:
             client = LLMClient.from_env()
@@ -618,14 +658,21 @@ def analyze_result(state: AgentState) -> AgentState:
             if content:
                 parsed = _extract_first_json_object(content)
                 if parsed and isinstance(parsed, dict):
-                    analysis = {
-                        "summary": parsed.get("summary", analysis["summary"]),
-                        "trend": parsed.get("trend", "analyzed"),
-                        "insights": parsed.get("insights", []),
-                    }
+                    llm_summary = parsed.get("summary", "")
+                    # Only use LLM summary if it's meaningful (not generic)
+                    if llm_summary and llm_summary.lower() not in [
+                        "query executed successfully.",
+                        "success",
+                        "completed",
+                    ]:
+                        analysis = {
+                            "summary": llm_summary,
+                            "trend": parsed.get("trend", "analyzed"),
+                            "insights": parsed.get("insights", []),
+                        }
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "LLM analysis failed, using basic summary: {error}", error=str(exc)
+                "LLM analysis failed, using data summary: {error}", error=str(exc)
             )
 
     return {
@@ -667,6 +714,47 @@ def _unsupported_numeric_claims(answer: str, evidence: list[str]) -> list[str]:
     ]
 
 
+def _generate_natural_response(
+    query: str, sql_rows: list[dict[str, Any]], row_count: int
+) -> tuple[str, dict[str, int] | None, float | None]:
+    """Use LLM to generate a natural language response from SQL results."""
+    if not sql_rows:
+        return "Không có dữ liệu nào được tìm thấy.", None, None
+
+    settings = load_settings()
+    llm_usage: dict[str, int] | None = None
+    llm_cost_usd: float | None = None
+
+    try:
+        client = LLMClient.from_env()
+        response = client.chat_completion(
+            messages=prompt_manager.synthesis_messages(
+                query=query,
+                results=sql_rows,
+                row_count=row_count,
+            ),
+            model=settings.default_router_model,
+            temperature=0.3,
+            stream=False,
+        )
+        content = (
+            response.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+        llm_usage = response.get("_usage_normalized")
+        llm_cost_usd = response.get("_cost_usd_estimate")
+
+        if content:
+            return content, llm_usage, llm_cost_usd
+    except Exception as exc:
+        logger.warning("Natural language synthesis failed: {error}", error=str(exc))
+
+    # Fallback to data summary if LLM fails
+    return _generate_data_summary(sql_rows, query), None, None
+
+
 def synthesize_answer(state: AgentState) -> AgentState:
     intent = state.get("intent", "unknown")
     errors = state.get("errors", [])
@@ -678,6 +766,9 @@ def synthesize_answer(state: AgentState) -> AgentState:
 
     total_token_usage = 0
     total_cost_usd = 0.0
+    synthesis_usage: dict[str, int] | None = None
+    synthesis_cost: float | None = None
+
     for item in tool_history:
         usage = item.get("token_usage", {}) if isinstance(item, dict) else {}
         if isinstance(usage, dict):
@@ -692,7 +783,20 @@ def synthesize_answer(state: AgentState) -> AgentState:
             answer = f"Cannot answer safely because SQL validation failed: {error_msg}"
             confidence = "low"
         else:
-            answer = analysis.get("summary", "Completed query execution.")
+            # Generate natural language response using LLM
+            row_count = state.get("sql_result", {}).get("row_count", 0)
+            natural_answer, syn_usage, syn_cost = _generate_natural_response(
+                state.get("user_query", ""),
+                sql_rows,
+                row_count,
+            )
+            answer = natural_answer
+            synthesis_usage = syn_usage
+            synthesis_cost = syn_cost
+            if syn_usage:
+                total_token_usage += int(syn_usage.get("total_tokens", 0) or 0)
+            if syn_cost:
+                total_cost_usd += syn_cost
             confidence = "high" if sql_rows else "medium"
     elif intent == "rag":
         if retrieved_context:
@@ -713,23 +817,34 @@ def synthesize_answer(state: AgentState) -> AgentState:
         )
         has_sql = sql_executed and not has_sql_validation_error
         has_context = bool(retrieved_context)
+
+        # Generate natural language for SQL part if available
+        sql_natural = None
+        if has_sql:
+            row_count = state.get("sql_result", {}).get("row_count", 0)
+            sql_natural, syn_usage, syn_cost = _generate_natural_response(
+                state.get("user_query", ""),
+                sql_rows,
+                row_count,
+            )
+            if syn_usage:
+                total_token_usage += int(syn_usage.get("total_tokens", 0) or 0)
+            if syn_cost:
+                total_cost_usd += syn_cost
+
         if has_sql and has_context:
-            answer = (
-                f"Data signal: {analysis.get('summary', 'SQL executed.')}\n"
-                "Business context:\n"
-                + "\n".join(f"- {item}" for item in context_evidence)
+            answer = f"{sql_natural}\n\n**Context bổ sung:**\n" + "\n".join(
+                f"- {item}" for item in context_evidence
             )
             confidence = "high"
         elif has_sql:
-            answer = (
-                "Partial answer (SQL branch succeeded, retrieval branch missing): "
-                f"{analysis.get('summary', 'SQL executed.')}"
+            answer = sql_natural or analysis.get(
+                "summary", "SQL executed successfully."
             )
             confidence = "medium"
         elif has_context:
-            answer = (
-                "Partial answer (retrieval branch succeeded, SQL branch failed):\n"
-                + "\n".join(f"- {item}" for item in context_evidence)
+            answer = "Dựa trên tài liệu nghiệp vụ:\n" + "\n".join(
+                f"- {item}" for item in context_evidence
             )
             confidence = "medium"
         else:
@@ -755,6 +870,10 @@ def synthesize_answer(state: AgentState) -> AgentState:
     if unsupported_claims:
         answer = answer + "\n\n[UNSUPPORTED_CLAIMS] " + ", ".join(unsupported_claims)
 
+    # Include SQL result rows in payload for raw display
+    sql_rows = state.get("sql_result", {}).get("rows", [])
+    sql_row_count = state.get("sql_result", {}).get("row_count", 0)
+
     payload = {
         "answer": answer,
         "evidence": evidence,
@@ -767,6 +886,8 @@ def synthesize_answer(state: AgentState) -> AgentState:
         "total_cost_usd": round(total_cost_usd, 8),
         "unsupported_claims": unsupported_claims,
         "context_type": state.get("context_type", "default"),
+        "sql_rows": sql_rows,
+        "sql_row_count": sql_row_count,
     }
     return {
         "final_answer": answer,
@@ -818,3 +939,126 @@ Always be helpful and concise. Respond in the same language as the user's query.
         logger.warning("LLM fallback synthesis failed: {error}", error=str(exc))
 
     return "I can help with data analysis questions about metrics, trends, and business definitions. Please ask about DAU, revenue, retention, or other KPIs."
+
+
+def process_uploaded_files(state: AgentState) -> AgentState:
+    """
+    Process uploaded CSV files: validate, profile, and auto-register into database.
+
+    This node runs after context detection and before routing when files are present.
+    For each uploaded CSV:
+    1. Validate file (size, encoding, delimiter)
+    2. Profile data (schema, stats)
+    3. Auto-register as table in SQLite database
+    """
+    from pathlib import Path
+    from tempfile import NamedTemporaryFile
+
+    from app.tools.auto_register import auto_register_csv
+
+    uploaded_file_data = state.get("uploaded_file_data", [])
+    if not uploaded_file_data:
+        logger.info("No uploaded files to process")
+        return {
+            "registered_tables": [],
+            "step_count": state.get("step_count", 0) + 1,
+            "tool_history": [
+                {
+                    "tool": "process_uploaded_files",
+                    "status": "skipped",
+                    "reason": "no_files",
+                }
+            ],
+        }
+
+    db_path = state.get("target_db_path") or str(
+        Path(__file__).parent.parent.parent / "data" / "warehouse" / "analytics.db"
+    )
+    registered_tables: list[str] = []
+    tool_history_entries: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+
+    for file_info in uploaded_file_data:
+        filename = file_info.get("name", "unknown.csv")
+        file_bytes = file_info.get("data")
+        if not file_bytes:
+            errors.append(
+                {
+                    "category": "CSV_PROCESSING_ERROR",
+                    "message": f"No data for file: {filename}",
+                    "file": filename,
+                }
+            )
+            continue
+
+        try:
+            with NamedTemporaryFile(mode="wb", suffix=".csv", delete=False) as tmp:
+                tmp.write(file_bytes)
+                tmp_path = tmp.name
+
+            result, error = auto_register_csv(
+                file_path=tmp_path,
+                db_path=db_path,
+                table_name=Path(filename).stem,
+            )
+
+            Path(tmp_path).unlink(missing_ok=True)
+
+            if error:
+                errors.append(
+                    {
+                        "category": "CSV_PROCESSING_ERROR",
+                        "message": error,
+                        "file": filename,
+                    }
+                )
+                tool_history_entries.append(
+                    {
+                        "tool": "auto_register_csv",
+                        "status": "error",
+                        "file": filename,
+                        "error": error,
+                    }
+                )
+            else:
+                registered_tables.append(result.table_name)
+                tool_history_entries.append(
+                    {
+                        "tool": "auto_register_csv",
+                        "status": "ok",
+                        "file": filename,
+                        "table": result.table_name,
+                        "row_count": result.row_count,
+                        "columns": len(result.columns),
+                    }
+                )
+                logger.info(
+                    "Auto-registered CSV: {file} -> {table} ({rows} rows)",
+                    file=filename,
+                    table=result.table_name,
+                    rows=result.row_count,
+                )
+        except Exception as exc:
+            errors.append(
+                {
+                    "category": "CSV_PROCESSING_ERROR",
+                    "message": str(exc),
+                    "file": filename,
+                }
+            )
+            tool_history_entries.append(
+                {
+                    "tool": "auto_register_csv",
+                    "status": "error",
+                    "file": filename,
+                    "error": str(exc),
+                }
+            )
+            logger.exception("Failed to process CSV file: {file}", file=filename)
+
+    return {
+        "registered_tables": registered_tables,
+        "errors": errors,
+        "step_count": state.get("step_count", 0) + 1,
+        "tool_history": tool_history_entries,
+    }

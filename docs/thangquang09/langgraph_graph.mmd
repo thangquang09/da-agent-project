@@ -1,0 +1,38 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	detect_context_type(detect_context_type)
+	process_uploaded_files(process_uploaded_files)
+	route_intent(route_intent)
+	get_schema(get_schema)
+	generate_sql(generate_sql)
+	validate_sql_node(validate_sql_node)
+	execute_sql_node(execute_sql_node)
+	analyze_result(analyze_result)
+	retrieve_context_node(retrieve_context_node)
+	synthesize_answer(synthesize_answer)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> detect_context_type;
+	analyze_result -.-> retrieve_context_node;
+	analyze_result -.-> synthesize_answer;
+	detect_context_type -.-> process_uploaded_files;
+	detect_context_type -.-> route_intent;
+	execute_sql_node --> analyze_result;
+	generate_sql --> validate_sql_node;
+	get_schema --> generate_sql;
+	process_uploaded_files --> route_intent;
+	retrieve_context_node --> synthesize_answer;
+	route_intent -.-> get_schema;
+	route_intent -.-> retrieve_context_node;
+	route_intent -.-> synthesize_answer;
+	validate_sql_node -.-> execute_sql_node;
+	validate_sql_node -.-> retrieve_context_node;
+	validate_sql_node -.-> synthesize_answer;
+	synthesize_answer --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

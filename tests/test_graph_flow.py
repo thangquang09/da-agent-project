@@ -218,7 +218,14 @@ def test_graph_mixed_sql_failure_returns_partial_answer(monkeypatch):
     payload = out["final_payload"]
 
     assert payload["confidence"] in {"low", "medium"}
-    assert "Partial answer" in payload["answer"]
+    # When SQL fails, should show context-only response
+    assert (
+        any(
+            keyword in payload["answer"]
+            for keyword in ["tài liệu nghiệp vụ", "business docs", "metric", "Revenue"]
+        )
+        or "Partial answer" in payload["answer"]
+    )
     assert "retrieve_business_context" in payload["used_tools"]
 
 
@@ -280,8 +287,10 @@ def test_mixed_synthesis_treats_empty_sql_result_as_success():
         }
     )
 
+    # Should not show failure message, should show context + no data message
     assert "SQL branch failed" not in out["final_answer"]
-    assert "Data signal:" in out["final_answer"]
+    # Response should contain context evidence and indicate no SQL data
+    assert "Context bổ sung" in out["final_answer"] or "Revenue" in out["final_answer"]
 
 
 def test_route_intent_llm_handles_natural_question_as_unknown(monkeypatch):

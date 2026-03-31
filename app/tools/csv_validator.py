@@ -22,6 +22,7 @@ class CSVValidationResult:
     sanitized_columns: list[str]
     estimated_rows: int
     file_size_bytes: int
+    file_path: str
 
 
 def _detect_encoding(file_path: Path, sample_bytes: int = 10000) -> str:
@@ -122,6 +123,7 @@ def validate_csv(file_path: str | Path) -> CSVValidationResult:
             sanitized_columns=[],
             estimated_rows=0,
             file_size_bytes=0,
+            file_path=str(file_path),
         )
 
     file_size_bytes = file_path.stat().st_size
@@ -172,4 +174,5 @@ def validate_csv(file_path: str | Path) -> CSVValidationResult:
         sanitized_columns=sanitized_columns,
         estimated_rows=estimated_rows,
         file_size_bytes=file_size_bytes,
+        file_path=str(file_path),
     )

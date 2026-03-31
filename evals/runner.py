@@ -64,6 +64,9 @@ class CaseResult:
     error_categories: list[str]
     failure_bucket: str | None
     run_id: str
+    expected_context_type: str = "default"
+    predicted_context_type: str | None = None
+    context_type_correct: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return self.__dict__
@@ -254,6 +257,13 @@ def run_case(case: EvalCase, recursion_limit: int) -> CaseResult:
         error_categories=[str(item) for item in payload.get("error_categories", [])],
         failure_bucket=None,
         run_id=str(payload.get("run_id", "")),
+        expected_context_type=case.expected_context_type,
+        predicted_context_type=str(payload.get("context_type")),
+        context_type_correct=(
+            str(payload.get("context_type")) == case.expected_context_type
+        )
+        if payload.get("context_type")
+        else None,
     )
     result.failure_bucket = _failure_bucket(result)
     return result
@@ -265,6 +275,13 @@ def _metric_ratio(results: list[CaseResult], attr: str) -> float:
     return round(
         sum(1 for item in results if bool(getattr(item, attr))) / len(results), 4
     )
+
+
+def _context_type_accuracy(results: list[CaseResult]) -> float | None:
+    valid = [item for item in results if item.context_type_correct is not None]
+    if not valid:
+        return None
+    return round(sum(1 for item in valid if item.context_type_correct) / len(valid), 4)
 
 
 def summarize(results: list[CaseResult]) -> dict[str, Any]:
@@ -304,6 +321,11 @@ def summarize(results: list[CaseResult]) -> dict[str, Any]:
             for item in group
             if item.answer_quality_score is not None
         ]
+        context_type_vals = [
+            item.context_type_correct
+            for item in group
+            if item.context_type_correct is not None
+        ]
         return {
             "count": len(group),
             "routing_accuracy": _metric_ratio(group, "routing_correct"),
@@ -311,6 +333,12 @@ def summarize(results: list[CaseResult]) -> dict[str, Any]:
             "sql_validity_rate": _metric_ratio(group, "sql_valid"),
             "answer_format_validity": _metric_ratio(group, "answer_format_valid"),
             "groundedness_pass_rate": _metric_ratio(group, "groundedness_pass"),
+            "context_type_accuracy": round(
+                sum(1 for v in context_type_vals if v) / max(len(context_type_vals), 1),
+                4,
+            )
+            if context_type_vals
+            else None,
             "avg_groundedness_score": round(
                 sum(item.groundedness_score for item in group) / max(len(group), 1), 4
             ),
@@ -378,6 +406,7 @@ def _render_markdown(summary: dict[str, Any], per_case_path: Path) -> str:
         f"- SQL validity rate: {summary['overall']['sql_validity_rate']}",
         f"- Answer format validity: {summary['overall']['answer_format_validity']}",
         f"- Groundedness pass rate: {summary['overall']['groundedness_pass_rate']}",
+        f"- Context type accuracy: {summary['overall'].get('context_type_accuracy')}",
         f"- Average groundedness score: {summary['overall']['avg_groundedness_score']}",
         f"- Average latency (ms): {summary['overall']['avg_latency_ms']}",
         f"- Spider execution match: {summary.get('spider_execution_match_rate')}",
@@ -395,6 +424,7 @@ def _render_markdown(summary: dict[str, Any], per_case_path: Path) -> str:
                 f"- sql_validity_rate: {stats['sql_validity_rate']}",
                 f"- answer_format_validity: {stats['answer_format_validity']}",
                 f"- groundedness_pass_rate: {stats['groundedness_pass_rate']}",
+                f"- context_type_accuracy: {stats.get('context_type_accuracy')}",
                 f"- avg_groundedness_score: {stats['avg_groundedness_score']}",
                 f"- avg_latency_ms: {stats['avg_latency_ms']}",
                 f"- spider_exact_match_rate: {stats.get('spider_exact_match_rate')}",

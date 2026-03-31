@@ -1,0 +1,15 @@
+## Spidertest
+
+Completed 4294 cases in 7577.8s (1.8s per case)
+Wrote: evals/reports/summary_spider_test_20260331_163204.json
+Wrote: evals/reports/summary_spider_test_20260331_163204.md
+Wrote: evals/reports/per_case_spider_test_20260331_163204.jsonl
+Updated: evals/reports/latest_summary.json
+Updated: evals/reports/latest_summary.md
+Gates passed: False
+Gate failures:
+- routing_accuracy=0.8624 < 0.90
+- sql_validity_rate=0.8258 < 0.90
+- tool_path_accuracy=0.8258 < 0.95
+
+

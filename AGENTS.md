@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Luôn update documents sau khi implement hoàn toàn một tính năng gì đó để cho tôi có thể theo dõi được tiến độ.
+Always update the documentation after fully implementing a feature so that I can track the progress.
 
 ## Project
 DA Agent Lab
@@ -9,6 +9,13 @@ A LangGraph-based Data Analyst Agent focused on answering business/data question
 
 This document is for coding agents working in this repository. Treat it as the source of truth for architecture, scope, constraints, and implementation priorities.
 
+=> Runtime environment: uv `.venv`
+
+Skills:
+- context7: Used to look up API documentation of libraries to assist with coding.
+- langgraph skill `.codex\skills\mastering-langgraph\SKILL.md`: Proficiency in the LangGraph library to code agents effectively.
+- nlm (notebooklm skill) `.agents\skills\nlm-skill\SKILL.md`: A massive knowledge base; use the `LLM - KD - AI AGENT` notebook to retrieve information regarding LLMs, Agents, MCP, etc.
+- langfuse skill `.agents\skills\langfuse\SKILL.md`: To master using Langfuse for agent tracing.
 ---
 
 ## Why this project exists

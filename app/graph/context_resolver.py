@@ -83,7 +83,7 @@ def _detect_conflicts(
     conflicts: list[str] = []
     user_lower = user_context.lower()
 
-for chunk in retrieved_context:
+    for chunk in retrieved_context:
         text = chunk.get("text", "").lower()
         source = chunk.get("source", "unknown")
         _check_conflicts(user_lower, text, source, conflicts)
@@ -107,9 +107,13 @@ def _check_conflicts(
 
     for term_a, term_b in conflict_patterns:
         if term_a in user_lower and term_b in text and term_b not in user_lower:
-            conflicts.append(f"User mentions '{term_a}' but {source} discusses '{term_b}'")
+            conflicts.append(
+                f"User mentions '{term_a}' but {source} discusses '{term_b}'"
+            )
         elif term_b in user_lower and term_a in text and term_a not in user_lower:
-            conflicts.append(f"User mentions '{term_b}' but {source} discusses '{term_a}'")
+            conflicts.append(
+                f"User mentions '{term_b}' but {source} discusses '{term_a}'"
+            )
 
 
 def _prioritize_schema_truth(

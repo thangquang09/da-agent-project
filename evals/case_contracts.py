@@ -9,6 +9,7 @@ from typing import Any, Literal
 SuiteName = Literal["domain", "spider", "movielens"]
 IntentName = Literal["sql", "rag", "mixed"]
 Language = Literal["vi", "en"]
+ContextType = Literal["user_provided", "csv_auto", "mixed", "default"]
 
 
 def _normalize_path(raw_path: str | None) -> str | None:
@@ -30,6 +31,7 @@ class EvalCase:
     expected_keywords: list[str] = field(default_factory=list)
     target_db_path: str | None = None
     gold_sql: str | None = None
+    expected_context_type: ContextType = "default"
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -50,6 +52,7 @@ class EvalCase:
             ],
             target_db_path=_normalize_path(payload.get("target_db_path")),
             gold_sql=payload.get("gold_sql"),
+            expected_context_type=str(payload.get("expected_context_type", "default")),  # type: ignore[arg-type]
             metadata=dict(payload.get("metadata", {})),
         )
 

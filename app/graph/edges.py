@@ -5,10 +5,22 @@ from typing import Literal
 from app.graph.state import AgentState
 
 
-def route_after_context_detection(state: AgentState) -> Literal["route_intent"]:
+def route_after_context_detection(
+    state: AgentState,
+) -> Literal["process_uploaded_files", "route_intent"]:
     """
-    After context detection, always route to route_intent.
-    The context_type has been stored in state for later use.
+    After context detection, check if there are uploaded files to process.
+    If yes, route to process_uploaded_files. Otherwise, go directly to route_intent.
+    """
+    uploaded_file_data = state.get("uploaded_file_data", [])
+    if uploaded_file_data:
+        return "process_uploaded_files"
+    return "route_intent"
+
+
+def route_after_process_files(state: AgentState) -> Literal["route_intent"]:
+    """
+    After processing uploaded files, always route to route_intent.
     """
     return "route_intent"
 
