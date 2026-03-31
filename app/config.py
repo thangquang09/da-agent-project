@@ -55,6 +55,14 @@ class Settings:
     mcp_http_url: str
     mcp_stdio_command: str
     mcp_stdio_args: tuple[str, ...]
+    # Node-specific model configuration (for future flexibility)
+    model_router: str
+    model_synthesis: str
+    model_sql_generation: str
+    model_context_detection: str
+    model_task_planner: str
+    model_aggregation: str
+    model_fallback: str
 
 
 def _env_bool(value: str | None, default: bool) -> bool:
@@ -77,8 +85,22 @@ def load_settings() -> Settings:
     _load_dotenv()
 
     models = load_model_list()
-    default_router_model = os.getenv("DEFAULT_ROUTER_MODEL", "gh/gpt-4o-mini")
-    default_synthesis_model = os.getenv("DEFAULT_SYNTHESIS_MODEL", "gh/gpt-4o")
+
+    # Default to gpt-4o for higher token limits (12288 -> 128k context)
+    default_model = os.getenv("DEFAULT_MODEL", "gh/gpt-4o")
+    default_router_model = os.getenv("DEFAULT_ROUTER_MODEL", default_model)
+    default_synthesis_model = os.getenv("DEFAULT_SYNTHESIS_MODEL", default_model)
+
+    # Node-specific models (can be overridden via env vars for flexibility)
+    model_router = os.getenv("MODEL_ROUTER", default_router_model)
+    model_synthesis = os.getenv("MODEL_SYNTHESIS", default_synthesis_model)
+    model_sql_generation = os.getenv("MODEL_SQL_GENERATION", default_model)
+    model_context_detection = os.getenv("MODEL_CONTEXT_DETECTION", default_model)
+    model_task_planner = os.getenv("MODEL_TASK_PLANNER", default_model)
+    model_aggregation = os.getenv("MODEL_AGGREGATION", default_model)
+    model_fallback = os.getenv(
+        "MODEL_FALLBACK", "gh/gpt-4o-mini"
+    )  # Keep mini for simple fallback
 
     settings = Settings(
         llm_api_url=os.getenv(
@@ -121,6 +143,14 @@ def load_settings() -> Settings:
         langfuse_org_name=os.getenv("LANGFUSE_ORG_NAME", "Kyanon_AppliedTrainee"),
         langfuse_org_id=os.getenv("LANGFUSE_ORG_ID", "cmcfrrpid00gcad07cln6jg0f"),
         langfuse_cloud_region=os.getenv("LANGFUSE_CLOUD_REGION", "EU"),
+        # Node-specific model configuration
+        model_router=model_router,
+        model_synthesis=model_synthesis,
+        model_sql_generation=model_sql_generation,
+        model_context_detection=model_context_detection,
+        model_task_planner=model_task_planner,
+        model_aggregation=model_aggregation,
+        model_fallback=model_fallback,
     )
 
     if not settings.llm_api_key:

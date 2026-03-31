@@ -32,6 +32,7 @@ from app.graph.nodes import (
     validate_sql_node,
 )
 from app.graph.sql_worker_graph import get_sql_worker_graph
+from app.graph.standalone_visualization import standalone_visualization_worker
 from app.graph.state import AgentState, GraphInputState, GraphOutputState
 from app.observability import get_current_tracer
 
@@ -224,6 +225,10 @@ def build_sql_v2_graph(checkpointer=None):
         _sql_worker_wrapper,
     )
     builder.add_node(
+        "standalone_visualization",
+        standalone_visualization_worker,
+    )
+    builder.add_node(
         "aggregate_results",
         _instrument_node("aggregate_results", aggregate_results, "aggregator"),
     )
@@ -255,7 +260,7 @@ def build_sql_v2_graph(checkpointer=None):
     builder.add_conditional_edges(
         "task_planner",
         route_after_planning,
-        ["sql_worker", "synthesize_answer"],
+        ["sql_worker", "standalone_visualization", "synthesize_answer"],
     )
 
     # Worker results fan-in
@@ -267,6 +272,9 @@ def build_sql_v2_graph(checkpointer=None):
             "synthesize_answer": "synthesize_answer",
         },
     )
+
+    # Standalone visualization goes directly to synthesis
+    builder.add_edge("standalone_visualization", "aggregate_results")
 
     # Aggregation to synthesis
     builder.add_edge("aggregate_results", "synthesize_answer")

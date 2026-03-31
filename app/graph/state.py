@@ -7,7 +7,9 @@ from typing import Annotated, Any, Literal, TypedDict
 Intent = Literal["sql", "rag", "mixed", "unknown"]
 Confidence = Literal["high", "medium", "low"]
 ContextType = Literal["user_provided", "csv_auto", "mixed", "default"]
-TaskType = Literal["sql_query", "data_analysis", "context_lookup"]
+TaskType = Literal[
+    "sql_query", "data_analysis", "context_lookup", "standalone_visualization"
+]
 ExecutionMode = Literal["single", "parallel", "linear"]
 
 
@@ -26,6 +28,11 @@ class TaskState(TypedDict, total=False):
     status: Literal["pending", "running", "success", "failed"]
     error: str | None
     execution_time_ms: float
+    requires_visualization: bool
+    visualization: dict[str, Any]
+    raw_data: list[
+        dict[str, Any]
+    ]  # For standalone visualization with user-provided data
 
 
 class AnswerPayload(TypedDict, total=False):
@@ -42,6 +49,7 @@ class AnswerPayload(TypedDict, total=False):
     context_type: ContextType
     sql_rows: list[dict[str, Any]]
     sql_row_count: int
+    visualization: dict[str, Any] | None
 
 
 class AgentState(TypedDict, total=False):
@@ -84,6 +92,7 @@ class AgentState(TypedDict, total=False):
     task_results: Annotated[list[TaskState], operator.add]  # Fan-in from workers
     aggregate_analysis: dict[str, Any]  # Combined analysis from parallel tasks
     execution_mode: ExecutionMode  # Router decision: single/parallel/linear
+    visualization: dict[str, Any]  # Visualization data from nested sequential execution
 
 
 class GraphInputState(TypedDict, total=False):
@@ -104,3 +113,6 @@ class GraphOutputState(TypedDict, total=False):
     run_id: str
     context_type: ContextType
     needs_semantic_context: bool
+    task_plan: list[TaskState]
+    execution_mode: ExecutionMode
+    aggregate_analysis: dict[str, Any]

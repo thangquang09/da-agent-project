@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.config import load_settings
-from app.graph.state import AgentState
+from app.graph.state import AgentState, TaskState
 from app.llm import LLMClient
 from app.logger import logger
 from app.tools.visualization import (
@@ -159,7 +159,7 @@ Return ONLY the Python code, no markdown or explanations."""
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            model=settings.default_router_model,
+            model=settings.model_synthesis,
             temperature=0.2,
         )
 
@@ -186,7 +186,9 @@ Return ONLY the Python code, no markdown or explanations."""
             return None
 
     except Exception as exc:
-        logger.warning(f"LLM visualization code generation failed: {exc}")
+        logger.warning(
+            "LLM visualization code generation failed: {error}", error=str(exc)
+        )
         return None
 
 
@@ -218,7 +220,7 @@ def _detect_chart_type(query: str) -> str:
         return "auto"
 
 
-def visualization_worker(task_state: dict) -> dict:
+def visualization_worker(task_state: TaskState) -> dict[str, Any]:
     """Worker node for visualization tasks in parallel execution."""
     query = task_state.get("query", "")
     sql_result = task_state.get("sql_result", {})

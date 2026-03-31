@@ -201,7 +201,7 @@ def route_intent(state: AgentState) -> AgentState:
         client = LLMClient.from_env()
         response = client.chat_completion(
             messages=prompt_manager.router_messages(query),
-            model=settings.default_router_model,
+            model=settings.model_router,
             temperature=0.0,
             stream=False,
         )
@@ -323,13 +323,14 @@ Given a user query, decide whether it asks for:
 Respond with ONLY a JSON object: {"retrieval_type": "metric_definition" or "business_context", "reason": "brief reason"}"""
 
     try:
+        settings = load_settings()
         client = LLMClient.from_env()
         response = client.chat_completion(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": query},
             ],
-            model="gh/gpt-4o-mini",
+            model=settings.model_fallback,  # Use fallback model (mini) for simple classification
             temperature=0.0,
             stream=False,
         )
@@ -479,7 +480,7 @@ def generate_sql(state: AgentState) -> AgentState:
                 previous_sql=previous_sql,
                 error_message=last_error,
             ),
-            model=settings.default_router_model,
+            model=settings.model_sql_generation,
             temperature=0.0,
             stream=False,
         )
@@ -713,7 +714,7 @@ def analyze_result(state: AgentState) -> AgentState:
                     results=rows,
                     expected_keywords=expected_keywords if expected_keywords else None,
                 ),
-                model=settings.default_router_model,
+                model=settings.model_synthesis,
                 temperature=0.0,
                 stream=False,
             )
@@ -804,7 +805,7 @@ def _generate_natural_response(
                 results=sql_rows,
                 row_count=row_count,
             ),
-            model=settings.default_router_model,
+            model=settings.model_synthesis,
             temperature=0.3,
             stream=False,
         )
@@ -945,6 +946,9 @@ def synthesize_answer(state: AgentState) -> AgentState:
     sql_rows = state.get("sql_result", {}).get("rows", [])
     sql_row_count = state.get("sql_result", {}).get("row_count", 0)
 
+    # Include visualization if present
+    visualization = state.get("visualization")
+
     payload = {
         "answer": answer,
         "evidence": evidence,
@@ -959,6 +963,7 @@ def synthesize_answer(state: AgentState) -> AgentState:
         "context_type": state.get("context_type", "default"),
         "sql_rows": sql_rows,
         "sql_row_count": sql_row_count,
+        "visualization": visualization,
     }
     return {
         "final_answer": answer,
@@ -988,13 +993,14 @@ Always be helpful and concise. Respond in the same language as the user's query.
     user_prompt = f"Query: {query}\nPredicted intent: {intent}\nErrors: {errors}\n\nProvide a helpful response."
 
     try:
+        settings = load_settings()
         client = LLMClient.from_env()
         response = client.chat_completion(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            model="gh/gpt-4o-mini",
+            model=settings.model_fallback,  # Use fallback model (mini) for simple fallback
             temperature=0.7,
             stream=False,
         )
@@ -1032,9 +1038,11 @@ def task_planner(state: AgentState) -> AgentState:
 Given a user question, break it down into independent sub-tasks that can be executed in parallel.
 
 Rules:
-- Each sub-task should be self-contained and answerable with a single SQL query
+- Each sub-task should be self-contained and answerable with a single SQL query or direct action
 - Prefer parallel execution when tasks are independent
-- Use "sql_query" type for data retrieval tasks
+- Use "sql_query" type for ALL data retrieval tasks from the database
+- IMPORTANT: Do NOT create separate "visualize" tasks. If the user asks for a chart or graph with database data, add "requires_visualization": true to the relevant SQL task instead
+- CRITICAL: If the user provides raw data values directly in their query (e.g., "vẽ biểu đồ với giá trị 10, 20, 30", "create chart with values 10, 20, 30"), use type "standalone_visualization" with "raw_data" field containing the parsed values
 - If the query is simple and requires only one query, output a single task
 - If the query asks for multiple unrelated facts, split into separate tasks
 
@@ -1042,7 +1050,8 @@ Respond with ONLY a JSON object in this format:
 {
     "tasks": [
         {"task_id": "1", "type": "sql_query", "query": "description of what to query"},
-        {"task_id": "2", "type": "sql_query", "query": "description of what to query"}
+        {"task_id": "2", "type": "sql_query", "query": "description of what to query", "requires_visualization": true},
+        {"task_id": "3", "type": "standalone_visualization", "query": "create bar chart", "raw_data": [{"label": "A", "value": 10}, {"label": "B", "value": 20}]}
     ]
 }
 
@@ -1050,12 +1059,18 @@ Examples:
 Input: "What was the revenue yesterday?"
 Output: {"tasks": [{"task_id": "1", "type": "sql_query", "query": "Get revenue for yesterday"}]}
 
-Input: "Compare DAU last week vs this week and show top 5 videos"
+Input: "Show DAU trend for the last 7 days as a line chart"
+Output: {"tasks": [{"task_id": "1", "type": "sql_query", "query": "Get DAU for last 7 days", "requires_visualization": true}]}
+
+Input: "Giúp tôi vẽ biểu đồ với các giá trị sau: 10, 20, 30"
+Output: {"tasks": [{"task_id": "1", "type": "standalone_visualization", "query": "Create bar chart with values 10, 20, 30", "raw_data": [{"label": "Item 1", "value": 10}, {"label": "Item 2", "value": 20}, {"label": "Item 3", "value": 30}]}]}
+
+Input: "Compare DAU last week vs this week and show top 5 videos as a bar chart"
 Output: {
     "tasks": [
         {"task_id": "1", "type": "sql_query", "query": "Get DAU for last week"},
         {"task_id": "2", "type": "sql_query", "query": "Get DAU for this week"},
-        {"task_id": "3", "type": "sql_query", "query": "Get top 5 videos by views"}
+        {"task_id": "3", "type": "sql_query", "query": "Get top 5 videos by views", "requires_visualization": true}
     ]
 }"""
 
@@ -1070,7 +1085,7 @@ Output: {
                     "content": f"Schema: {schema[:1000]}\n\nQuery: {query}",
                 },
             ],
-            model=settings.default_router_model,
+            model=settings.model_task_planner,
             temperature=0.0,
         )
 
@@ -1157,6 +1172,12 @@ def _fallback_task_plan(
 def aggregate_results(state: AgentState) -> AgentState:
     """
     Fan-in: Combine all parallel task results into unified analysis.
+
+    CRITICAL: Flattens task_results back to root state fields that synthesize_answer expects:
+    - sql_result (with rows, row_count, columns)
+    - generated_sql (joined from all tasks)
+    - validated_sql (from primary/first successful task)
+    - analysis_result (with summary)
     """
     results = state.get("task_results", [])
     query = state.get("user_query", "")
@@ -1175,10 +1196,13 @@ def aggregate_results(state: AgentState) -> AgentState:
         }
 
     # Collect all SQL results
+    successful_results = [r for r in results if r.get("status") == "success"]
+    failed_results = [r for r in results if r.get("status") == "failed"]
+
     combined_data = {
         "task_count": len(results),
-        "successful_tasks": sum(1 for r in results if r.get("status") == "success"),
-        "failed_tasks": sum(1 for r in results if r.get("status") == "failed"),
+        "successful_tasks": len(successful_results),
+        "failed_tasks": len(failed_results),
         "results_by_task": {
             r["task_id"]: {
                 "query": r.get("query", ""),
@@ -1191,6 +1215,79 @@ def aggregate_results(state: AgentState) -> AgentState:
             for r in results
         },
     }
+
+    # FLATTEN: Extract SQL data from task_results to root state fields
+    # This ensures synthesize_answer can access data like in V1
+    all_rows: list[dict[str, Any]] = []
+    all_sql_statements: list[str] = []
+    primary_sql_result: dict[str, Any] | None = None
+    primary_validated_sql = ""
+    total_row_count = 0
+    # Collect visualization data from tasks that have it
+    task_visualizations: list[dict[str, Any]] = []
+    # Track if this is a standalone visualization task
+    has_standalone_viz = False
+
+    for task_result in successful_results:
+        task_type = task_result.get("task_type", "sql_query")
+
+        # Handle standalone visualization tasks
+        if task_type == "standalone_visualization":
+            viz = task_result.get("visualization")
+            if viz:
+                task_visualizations.append(viz)
+                has_standalone_viz = True
+            continue
+
+        # Handle SQL tasks
+        sql_result = task_result.get("sql_result", {})
+        rows = sql_result.get("rows", [])
+        row_count = sql_result.get("row_count", 0)
+        validated_sql = task_result.get("validated_sql", "")
+        generated_sql = task_result.get("generated_sql", "")
+
+        # Collect rows from all successful tasks
+        all_rows.extend(rows)
+        total_row_count += row_count
+
+        # Collect SQL statements
+        sql_to_add = validated_sql or generated_sql
+        if sql_to_add:
+            all_sql_statements.append(
+                f"-- Task {task_result.get('task_id', '?')}\n{sql_to_add}"
+            )
+
+        # Collect visualization if present
+        viz = task_result.get("visualization")
+        if viz:
+            task_visualizations.append(viz)
+
+        # Use first successful task as primary (for single-task scenarios)
+        if primary_sql_result is None:
+            primary_sql_result = sql_result
+            primary_validated_sql = validated_sql
+
+    # Build flattened sql_result for root state
+    # For multiple tasks: concatenate rows; for single task: preserve original structure
+    if len(successful_results) == 1:
+        flattened_sql_result = primary_sql_result or {
+            "rows": [],
+            "row_count": 0,
+            "columns": [],
+        }
+    else:
+        # Merge rows from all tasks
+        flattened_sql_result = {
+            "rows": all_rows,
+            "row_count": total_row_count,
+            "columns": primary_sql_result.get("columns", [])
+            if primary_sql_result
+            else [],
+            "merged_from_tasks": len(successful_results),
+        }
+
+    # Join SQL statements
+    joined_sql = "\n\n---\n\n".join(all_sql_statements) if all_sql_statements else ""
 
     # LLM-based synthesis of combined results
     synthesis_prompt = f"""Synthesize these parallel query results into a cohesive answer.
@@ -1211,12 +1308,15 @@ Provide a unified analysis that:
 3. Notes any data quality issues or inconsistencies
 4. Is concise and data-driven"""
 
+    llm_usage = None
+    llm_cost_usd = None
+
     try:
         client = LLMClient.from_env()
         settings = load_settings()
         response = client.chat_completion(
             messages=[{"role": "user", "content": synthesis_prompt}],
-            model=settings.default_router_model,
+            model=settings.model_aggregation,
             temperature=0.3,
         )
 
@@ -1243,6 +1343,17 @@ Provide a unified analysis that:
         }
 
     return {
+        # Flattened fields for synthesize_answer compatibility
+        "sql_result": flattened_sql_result,
+        "generated_sql": joined_sql,
+        "validated_sql": primary_validated_sql,
+        "analysis_result": {
+            "summary": analysis.get("synthesis", ""),
+            "trend": "aggregated",
+        },
+        # Pass through visualization data from tasks that have it
+        "visualization": task_visualizations[0] if task_visualizations else None,
+        # Original aggregate analysis
         "aggregate_analysis": analysis,
         "tool_history": [
             {
@@ -1251,8 +1362,9 @@ Provide a unified analysis that:
                 "task_count": len(results),
                 "successful": combined_data["successful_tasks"],
                 "failed": combined_data["failed_tasks"],
-                "token_usage": llm_usage if "llm_usage" in locals() else None,
-                "cost_usd": llm_cost_usd if "llm_cost_usd" in locals() else None,
+                "has_visualization": bool(task_visualizations),
+                "token_usage": llm_usage,
+                "cost_usd": llm_cost_usd,
             }
         ],
         "step_count": state.get("step_count", 0) + 1,

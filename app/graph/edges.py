@@ -136,15 +136,18 @@ def route_after_planning(
 ) -> (
     list[Send]
     | Literal[
-        "aggregate_results", "sql_worker", "visualization_worker", "synthesize_answer"
+        "aggregate_results",
+        "sql_worker",
+        "standalone_visualization",
+        "synthesize_answer",
     ]
 ):
     """
     Fan-out router using Send API for task execution.
 
     If task_plan has tasks, create Send objects for workers.
-    Supports both sql_query and visualize task types.
-    Tasks are always executed regardless of execution_mode.
+    - sql_query tasks -> sql_worker (with nested visualization if requires_visualization=True)
+    - standalone_visualization tasks -> standalone_visualization worker (for user-provided raw data)
     """
     import logging
 
@@ -162,6 +165,25 @@ def route_after_planning(
         sends = []
         for task in task_plan:
             task_type = str(task.get("type", "sql_query"))
+            requires_viz = bool(task.get("requires_visualization", False))
+            raw_data = task.get("raw_data", [])
+
+            # Route standalone visualization tasks directly
+            if task_type == "standalone_visualization":
+                send_state = {
+                    "task_id": str(task.get("task_id", "unknown")),
+                    "task_type": task_type,
+                    "query": str(task.get("query", "")),
+                    "raw_data": raw_data,
+                    "status": "pending",
+                }
+                sends.append(Send("standalone_visualization", send_state))
+                logger.info(
+                    f"Routing standalone visualization task {send_state['task_id']} with {len(raw_data)} data points"
+                )
+                continue
+
+            # SQL tasks go to sql_worker with nested visualization
             send_state = {
                 "task_id": str(task.get("task_id", "unknown")),
                 "task_type": task_type,
@@ -169,16 +191,16 @@ def route_after_planning(
                 "target_db_path": str(task.get("target_db_path"))
                 if task.get("target_db_path")
                 else "",
-                "schema_context": str(task.get("task_context", "")),
+                "schema_context": str(task.get("schema_context", "")),
                 "status": "pending",
+                "requires_visualization": requires_viz,
             }
 
-            # Route to appropriate worker based on task type
-            if task_type == "visualize":
-                sends.append(Send("visualization_worker", send_state))
-                logger.info(f"Routing visualization task {send_state['task_id']}")
-            else:
-                sends.append(Send("sql_worker", send_state))
+            sends.append(Send("sql_worker", send_state))
+            if requires_viz:
+                logger.info(
+                    f"Routing task {send_state['task_id']} with requires_visualization=True"
+                )
 
         logger.info(f"Routing {len(task_plan)} task(s) (mode={execution_mode})")
         return sends
