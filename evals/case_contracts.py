@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 
-SuiteName = Literal["domain", "spider"]
+SuiteName = Literal["domain", "spider", "movielens"]
 IntentName = Literal["sql", "rag", "mixed"]
 Language = Literal["vi", "en"]
 
@@ -45,7 +45,9 @@ class EvalCase:
             expected_intent=str(payload["expected_intent"]),  # type: ignore[arg-type]
             expected_tools=[str(item) for item in payload.get("expected_tools", [])],
             should_have_sql=bool(payload.get("should_have_sql", False)),
-            expected_keywords=[str(item) for item in payload.get("expected_keywords", [])],
+            expected_keywords=[
+                str(item) for item in payload.get("expected_keywords", [])
+            ],
             target_db_path=_normalize_path(payload.get("target_db_path")),
             gold_sql=payload.get("gold_sql"),
             metadata=dict(payload.get("metadata", {})),
