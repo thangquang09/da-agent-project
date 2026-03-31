@@ -10,8 +10,10 @@ from app.config import load_settings
 from app.graph.state import AgentState, ContextType
 from app.llm import LLMClient
 from app.logger import logger
+from app.memory.context_store import get_context_memory_store
 from app.prompts import (
     ANALYSIS_PROMPT_DEFINITION,
+    CONTEXT_DETECTION_PROMPT_DEFINITION,
     prompt_manager,
     ROUTER_PROMPT_DEFINITION,
     SQL_PROMPT_DEFINITION,
@@ -38,66 +40,137 @@ def _strip_diacritics(text: str) -> str:
     )
 
 
-def _detect_context_type(
+def _fallback_context_type(
     user_semantic_context: str | None,
     uploaded_files: list[str] | None,
-) -> tuple[ContextType, str | None]:
+) -> tuple[ContextType, bool, str | None]:
     """
-    Detect context type from input.
+    Fallback context detection (rule-based, used when LLM fails).
 
     Returns:
-        tuple of (context_type, semantic_context if available)
+        tuple of (context_type, needs_semantic_context, semantic_context)
     """
     uploaded_files = uploaded_files or []
     has_files = bool(uploaded_files)
+    user_ctx = (user_semantic_context or "").strip()
 
-    if user_semantic_context and user_semantic_context.strip():
-        semantic = user_semantic_context.strip()
-        if has_files:
-            return ("mixed", semantic)
-        return ("user_provided", semantic)
-
+    if user_ctx and has_files:
+        return ("mixed", True, user_ctx)
+    if user_ctx:
+        return ("user_provided", True, user_ctx)
     if has_files:
-        return ("csv_auto", None)
+        return ("csv_auto", True, None)
 
-    return ("default", None)
+    return ("default", False, None)
 
 
 def detect_context_type(state: AgentState) -> AgentState:
     """
-    Detect the type of context provided by user:
-    - user_provided: User sent semantic context directly
-    - csv_auto: User uploaded CSV files, need auto-generation
-    - mixed: Both context and files provided
-    - default: No special context, use standard flow
+    LLM-driven context type detection.
+
+    Analyzes the query and any provided context to classify:
+    - context_type: default | user_provided | csv_auto | mixed
+    - needs_semantic_context: whether additional context would help
+
+    Saves detection results to context_memory for long-term retention.
     """
+    query = state.get("user_query", "")
     user_context = state.get("user_semantic_context", "") or ""
     uploaded_files = state.get("uploaded_files", []) or []
+    run_id = state.get("run_id", "default")
 
-    context_type, semantic_context = _detect_context_type(user_context, uploaded_files)
+    settings = load_settings()
+    context_type: ContextType = "default"
+    needs_semantic_context = False
+    llm_usage: dict[str, int] | None = None
+    llm_cost_usd: float | None = None
+    detected_intent: list[str] = []
+
+    try:
+        client = LLMClient.from_env()
+        response = client.chat_completion(
+            messages=prompt_manager.context_detection_messages(
+                query=query,
+                user_semantic_context=user_context or None,
+                uploaded_files=uploaded_files or None,
+            ),
+            model=settings.default_router_model,
+            temperature=0.0,
+            stream=False,
+        )
+        content = (
+            response.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+        llm_usage = response.get("_usage_normalized")
+        llm_cost_usd = response.get("_cost_usd_estimate")
+
+        parsed = _extract_first_json_object(content)
+        if parsed:
+            ctx_type_raw = str(parsed.get("context_type", "")).strip().lower()
+            if ctx_type_raw in {"default", "user_provided", "csv_auto", "mixed"}:
+                context_type = ctx_type_raw
+            needs_val = parsed.get("needs_semantic_context")
+            if isinstance(needs_val, bool):
+                needs_semantic_context = needs_val
+            elif isinstance(needs_val, str):
+                needs_semantic_context = needs_val.lower() in {"true", "1", "yes"}
+        else:
+            logger.warning(
+                "Context detection LLM returned invalid JSON: {content}",
+                content=content[:100],
+            )
+    except Exception as exc:
+        logger.warning(
+            "Context detection LLM failed, using fallback: {error}", error=str(exc)
+        )
+        context_type, needs_semantic_context, _ = _fallback_context_type(
+            user_context, uploaded_files
+        )
+
+    try:
+        context_store = get_context_memory_store()
+        context_store.save_context(
+            thread_id=run_id,
+            run_id=run_id,
+            context_type=context_type,
+            needs_semantic_context=needs_semantic_context,
+            detected_intent=detected_intent,
+            query=query,
+            user_provided_context=user_context or None,
+            source_files=uploaded_files or None,
+        )
+    except Exception as exc:
+        logger.warning("Failed to save context memory: {error}", error=str(exc))
 
     logger.info(
-        "Context detection: type={context_type}, has_files={has_files}, has_context={has_context}",
+        "Context detection: type={context_type}, needs_context={needs_ctx}, "
+        "has_files={has_files}, has_user_ctx={has_user}",
         context_type=context_type,
+        needs_ctx=needs_semantic_context,
         has_files=bool(uploaded_files),
-        has_context=bool(semantic_context),
+        has_user=bool(user_context),
     )
 
     update: AgentState = {
         "context_type": context_type,
+        "needs_semantic_context": needs_semantic_context,
+        "detected_intent": detected_intent,
         "tool_history": [
             {
                 "tool": "detect_context_type",
                 "status": "ok",
                 "context_type": context_type,
+                "needs_semantic_context": needs_semantic_context,
                 "uploaded_files": uploaded_files,
+                "token_usage": llm_usage,
+                "cost_usd": llm_cost_usd,
             }
         ],
         "step_count": state.get("step_count", 0) + 1,
     }
-
-    if semantic_context:
-        update["user_semantic_context"] = semantic_context
 
     return update
 

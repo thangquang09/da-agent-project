@@ -6,7 +6,7 @@ from app.config import load_settings
 from app.graph import build_sql_v1_graph, new_run_config, to_langgraph_config
 from app.graph.nodes import (
     _build_semantic_context,
-    _detect_context_type,
+    _fallback_context_type,
     detect_context_type,
     generate_sql,
     retrieve_context_node,
@@ -16,10 +16,40 @@ from app.graph.nodes import (
 
 
 class _DummyRouterClient:
+    """Mock LLM client that returns context detection on first call, routing on second."""
+
     def __init__(self, intent: str):
         self._intent = intent
+        self._call_count = 0
+
+    def _get_context_type_from_messages(self, messages: list) -> str:
+        """Determine context_type based on input messages."""
+        for msg in messages:
+            content = msg.get("content", "")
+            if "User provided context:" in content and "Uploaded files:" in content:
+                return "mixed"
+            if "User provided context:" in content:
+                return "user_provided"
+            if "Uploaded files:" in content and "data.csv" in content:
+                return "csv_auto"
+        return "default"
 
     def chat_completion(self, **kwargs):  # noqa: ANN003
+        self._call_count += 1
+        messages = kwargs.get("messages", [])
+
+        if self._call_count == 1:
+            context_type = self._get_context_type_from_messages(messages)
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": f'{{"context_type":"{context_type}","needs_semantic_context":{str(context_type != "default").lower()}}}'
+                        }
+                    }
+                ]
+            }
+
         return {
             "choices": [
                 {
@@ -37,9 +67,10 @@ class _FailingRouterClient:
 
 
 def _patch_router(monkeypatch, intent: str):
+    client = _DummyRouterClient(intent=intent)
     monkeypatch.setattr(
         "app.graph.nodes.LLMClient.from_env",
-        lambda: _DummyRouterClient(intent=intent),
+        lambda: client,
     )
 
 
@@ -57,6 +88,16 @@ def test_graph_sql_path_runs_end_to_end(monkeypatch):
         def chat_completion(self, **kwargs):  # noqa: ANN003
             self.call_count += 1
             if self.call_count == 1:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": '{"context_type":"default","needs_semantic_context":false}'
+                            }
+                        }
+                    ]
+                }
+            elif self.call_count == 2:
                 return {
                     "choices": [
                         {
@@ -108,12 +149,22 @@ def test_graph_rag_path_uses_retrieval(monkeypatch):
                     "choices": [
                         {
                             "message": {
-                                "content": '{"intent":"rag","reason":"llm_router"}'
+                                "content": '{"context_type":"default","needs_semantic_context":false}'
                             }
                         }
                     ]
                 }
             elif self.call_count == 2:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": '{"intent":"rag","reason":"llm_router"}'
+                            }
+                        }
+                    ]
+                }
+            elif self.call_count == 3:
                 return {
                     "choices": [
                         {
@@ -352,51 +403,89 @@ def test_generate_sql_extracts_from_markdown_fence(monkeypatch):
 
 
 class TestDetectContextType:
-    def test_detect_context_type_with_user_semantic_context(self):
-        context_type, semantic = _detect_context_type(
+    def test_fallback_context_type_with_user_semantic_context(self):
+        context_type, needs_ctx, semantic = _fallback_context_type(
             user_semantic_context="This is a UK online retail dataset",
             uploaded_files=[],
         )
         assert context_type == "user_provided"
+        assert needs_ctx is True
         assert semantic == "This is a UK online retail dataset"
 
-    def test_detect_context_type_with_uploaded_files_only(self):
-        context_type, semantic = _detect_context_type(
+    def test_fallback_context_type_with_uploaded_files_only(self):
+        context_type, needs_ctx, semantic = _fallback_context_type(
             user_semantic_context="",
             uploaded_files=["/path/to/file.csv"],
         )
         assert context_type == "csv_auto"
+        assert needs_ctx is True
         assert semantic is None
 
-    def test_detect_context_type_with_both(self):
-        context_type, semantic = _detect_context_type(
+    def test_fallback_context_type_with_both(self):
+        context_type, needs_ctx, semantic = _fallback_context_type(
             user_semantic_context="Retail data context",
             uploaded_files=["/path/to/file.csv"],
         )
         assert context_type == "mixed"
+        assert needs_ctx is True
         assert semantic == "Retail data context"
 
-    def test_detect_context_type_with_neither(self):
-        context_type, semantic = _detect_context_type(
+    def test_fallback_context_type_with_neither(self):
+        context_type, needs_ctx, semantic = _fallback_context_type(
             user_semantic_context="",
             uploaded_files=[],
         )
         assert context_type == "default"
+        assert needs_ctx is False
         assert semantic is None
 
-    def test_detect_context_type_node(self):
+    def test_detect_context_type_node(self, monkeypatch):
+        class _DummyContextClient:
+            def chat_completion(self, **kwargs):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": '{"context_type":"user_provided","needs_semantic_context":true}'
+                            }
+                        }
+                    ]
+                }
+
+        monkeypatch.setattr(
+            "app.graph.nodes.LLMClient.from_env",
+            lambda: _DummyContextClient(),
+        )
         state = {
+            "user_query": "Test query",
             "user_semantic_context": "Dataset about customer transactions",
             "uploaded_files": [],
             "step_count": 0,
         }
         out = detect_context_type(state)
         assert out["context_type"] == "user_provided"
-        assert out["user_semantic_context"] == "Dataset about customer transactions"
+        assert out["needs_semantic_context"] is True
         assert out["tool_history"][0]["tool"] == "detect_context_type"
 
-    def test_detect_context_type_node_with_files(self):
+    def test_detect_context_type_node_with_files(self, monkeypatch):
+        class _DummyContextClient:
+            def chat_completion(self, **kwargs):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": '{"context_type":"csv_auto","needs_semantic_context":true}'
+                            }
+                        }
+                    ]
+                }
+
+        monkeypatch.setattr(
+            "app.graph.nodes.LLMClient.from_env",
+            lambda: _DummyContextClient(),
+        )
         state = {
+            "user_query": "Test query",
             "user_semantic_context": "",
             "uploaded_files": ["data.csv"],
             "step_count": 0,
@@ -501,6 +590,16 @@ class TestGraphWithContextTypes:
             def chat_completion(self, **kwargs):  # noqa: ANN003
                 self.call_count += 1
                 if self.call_count == 1:
+                    return {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": '{"context_type":"default","needs_semantic_context":false}'
+                                }
+                            }
+                        ]
+                    }
+                elif self.call_count == 2:
                     return {
                         "choices": [
                             {

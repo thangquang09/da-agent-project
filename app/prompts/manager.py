@@ -9,6 +9,7 @@ from typing import Any, Literal
 from app.config import load_settings
 from app.logger import logger
 from app.prompts.analysis import ANALYSIS_PROMPT_DEFINITION
+from app.prompts.context_detection import CONTEXT_DETECTION_PROMPT_DEFINITION
 from app.prompts.router import ROUTER_PROMPT_DEFINITION
 from app.prompts.sql import SQL_PROMPT_DEFINITION
 
@@ -145,6 +146,21 @@ class PromptManager:
 
     def router_messages(self, query: str) -> list[dict[str, str]]:
         return self._compile_prompt(ROUTER_PROMPT_DEFINITION, {"query": query})
+
+    def context_detection_messages(
+        self,
+        query: str,
+        user_semantic_context: str | None = None,
+        uploaded_files: list[str] | None = None,
+    ) -> list[dict[str, str]]:
+        return self._compile_prompt(
+            CONTEXT_DETECTION_PROMPT_DEFINITION,
+            {
+                "query": query,
+                "user_semantic_context": user_semantic_context or "",
+                "uploaded_files": uploaded_files or [],
+            },
+        )
 
     def sql_messages(
         self,

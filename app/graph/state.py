@@ -34,6 +34,8 @@ class AgentState(TypedDict, total=False):
     user_semantic_context: str
     retrieved_dataset_context: list[dict[str, Any]]
     context_type: ContextType
+    needs_semantic_context: bool
+    detected_intent: list[str]
     uploaded_files: list[str]
     retrieved_context: list[dict[str, Any]]
     generated_sql: str
@@ -66,3 +68,4 @@ class GraphOutputState(TypedDict, total=False):
     step_count: int
     run_id: str
     context_type: ContextType
+    needs_semantic_context: bool
