@@ -58,6 +58,8 @@ class AgentState(TypedDict, total=False):
     expected_keywords: list[str]
     file_cache: dict[str, Any]  # Session-level CSV cache: hash_key -> metadata
     skipped_tables: list[str]  # Tables skipped due to caching
+    sql_retry_count: int  # SQL self-correction retry counter (0-2)
+    sql_last_error: str | None  # Error message from last SQL failure
 
 
 class GraphInputState(TypedDict, total=False):

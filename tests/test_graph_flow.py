@@ -199,17 +199,30 @@ def test_graph_rag_path_uses_retrieval(monkeypatch):
 
 def test_graph_mixed_sql_failure_returns_partial_answer(monkeypatch):
     _patch_router(monkeypatch, intent="mixed")
-    monkeypatch.setattr(
-        "app.graph.graph.generate_sql",
-        lambda state: {
+    # Mock generate_sql to simulate self-correction behavior
+    # Must properly increment retry_count to avoid infinite loops
+    call_count = [0]
+
+    def mock_generate_sql(state):
+        call_count[0] += 1
+        # Properly increment retry count when there's a previous error
+        current_retry = state.get("sql_retry_count", 0)
+        last_error = state.get("sql_last_error")
+        new_retry_count = current_retry + 1 if last_error else current_retry
+        return {
             "generated_sql": "DELETE FROM daily_metrics",
+            "sql_retry_count": new_retry_count,
             "tool_history": [],
             "step_count": 1,
-        },
+        }
+
+    monkeypatch.setattr(
+        "app.graph.graph.generate_sql",
+        mock_generate_sql,
     )
     graph = build_sql_v1_graph()
     config = to_langgraph_config(
-        new_run_config(thread_id="test-mixed-fallback", recursion_limit=20)
+        new_run_config(thread_id="test-mixed-fallback", recursion_limit=25)
     )
 
     out = graph.invoke(

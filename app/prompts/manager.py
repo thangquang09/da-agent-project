@@ -168,7 +168,26 @@ class PromptManager:
         schema_context: str,
         dataset_context: str = "",
         semantic_context: str = "",
+        previous_sql: str | None = None,
+        error_message: str | None = None,
     ) -> list[dict[str, str]]:
+        # Use self-correction prompt if we have an error context
+        if previous_sql and error_message:
+            from app.prompts.sql import SQL_SELF_CORRECTION_PROMPT_DEFINITION
+
+            return self._compile_prompt(
+                SQL_SELF_CORRECTION_PROMPT_DEFINITION,
+                {
+                    "query": query,
+                    "schema_context": schema_context or "",
+                    "dataset_context": dataset_context or "",
+                    "semantic_context": semantic_context or "",
+                    "previous_sql": previous_sql,
+                    "error_message": error_message,
+                },
+            )
+
+        # Otherwise use standard prompt
         return self._compile_prompt(
             SQL_PROMPT_DEFINITION,
             {

@@ -453,6 +453,21 @@ def generate_sql(state: AgentState) -> AgentState:
     semantic_context = _build_semantic_context(state)
     generation_status = "skipped"
 
+    # Check if this is a retry attempt with previous error
+    retry_count = state.get("sql_retry_count", 0)
+    last_error = state.get("sql_last_error")
+    previous_sql = state.get("generated_sql") if retry_count > 0 else None
+
+    # Increment retry count for next attempt if we have an error context
+    new_retry_count = retry_count + 1 if last_error else retry_count
+
+    if last_error and retry_count > 0:
+        logger.info(
+            "SQL self-correction attempt {retry_count}/2 with error: {error}",
+            retry_count=retry_count,
+            error=last_error[:100],
+        )
+
     try:
         client = LLMClient.from_env()
         response = client.chat_completion(
@@ -461,6 +476,8 @@ def generate_sql(state: AgentState) -> AgentState:
                 state.get("schema_context", ""),
                 state.get("dataset_context", ""),
                 semantic_context,
+                previous_sql=previous_sql,
+                error_message=last_error,
             ),
             model=settings.default_router_model,
             temperature=0.0,
@@ -478,7 +495,10 @@ def generate_sql(state: AgentState) -> AgentState:
             extracted_sql = _extract_sql_from_content(content)
             if extracted_sql:
                 sql = extracted_sql
-                generation_status = "llm_generated"
+                if retry_count > 0:
+                    generation_status = f"llm_self_corrected_retry_{retry_count}"
+                else:
+                    generation_status = "llm_generated"
         if not sql:
             generation_status = "llm_empty_output"
     except Exception as exc:  # noqa: BLE001
@@ -487,6 +507,7 @@ def generate_sql(state: AgentState) -> AgentState:
 
     return {
         "generated_sql": sql,
+        "sql_retry_count": new_retry_count,
         "tool_history": [
             {
                 "tool": "generate_sql",
@@ -495,6 +516,8 @@ def generate_sql(state: AgentState) -> AgentState:
                 "token_usage": llm_usage,
                 "cost_usd": llm_cost_usd,
                 "has_semantic_context": bool(semantic_context),
+                "retry_count": retry_count,
+                "had_error_context": last_error is not None,
             }
         ],
         "step_count": state.get("step_count", 0) + 1,
@@ -506,8 +529,11 @@ def validate_sql_node(state: AgentState) -> AgentState:
     result = validate_sql(
         state.get("generated_sql", ""), db_path=db_path, max_limit=200
     )
+    error_message = "; ".join(result.reasons) if not result.is_valid else None
+
     update: AgentState = {
         "validated_sql": result.sanitized_sql,
+        "sql_last_error": error_message,  # Store error for self-correction
         "tool_history": [
             {
                 "tool": "validate_sql",
@@ -522,61 +548,106 @@ def validate_sql_node(state: AgentState) -> AgentState:
         update["errors"] = [
             {
                 "category": "SQL_VALIDATION_ERROR",
-                "message": "; ".join(result.reasons),
+                "message": error_message,
+                "retryable": True,
             }
         ]
     return update
 
 
 def execute_sql_node(state: AgentState) -> AgentState:
+    from app.graph.error_classifier import classify_sql_error
+
     validated_sql = state.get("validated_sql", "")
     db_path = Path(state["target_db_path"]) if state.get("target_db_path") else None
     settings = load_settings()
 
-    if settings.enable_mcp_tool_client:
-        mcp_args: dict[str, Any] = {"sql": validated_sql, "row_limit": 200}
-        if db_path:
-            mcp_args["db_path"] = str(db_path)
-        result = call_mcp_tool("query_sql", mcp_args)
-        source = "mcp"
-    else:
-        result = query_sql(validated_sql, db_path=db_path)
-        source = "local"
+    try:
+        if settings.enable_mcp_tool_client:
+            mcp_args: dict[str, Any] = {"sql": validated_sql, "row_limit": 200}
+            if db_path:
+                mcp_args["db_path"] = str(db_path)
+            result = call_mcp_tool("query_sql", mcp_args)
+            source = "mcp"
+        else:
+            result = query_sql(validated_sql, db_path=db_path)
+            source = "local"
 
-    row_count = int(result.get("row_count", 0)) if isinstance(result, dict) else 0
-    validation_reasons = (
-        result.get("validation_reasons") if isinstance(result, dict) else None
-    )
-    rejected_by_validator = bool(validation_reasons)
+        row_count = int(result.get("row_count", 0)) if isinstance(result, dict) else 0
+        validation_reasons = (
+            result.get("validation_reasons") if isinstance(result, dict) else None
+        )
+        rejected_by_validator = bool(validation_reasons)
 
-    update: AgentState = {
-        "sql_result": result,
-        "tool_history": [
-            {
-                "tool": "query_sql",
-                "status": "failed" if rejected_by_validator else "ok",
-                "row_count": row_count,
-                "db_path": str(db_path) if db_path else "default",
-                "source": source,
-                **(
-                    {"validation_reasons": validation_reasons}
-                    if rejected_by_validator
-                    else {}
-                ),
-            }
-        ],
-        "step_count": state.get("step_count", 0) + 1,
-    }
+        update: AgentState = {
+            "sql_result": result,
+            "sql_last_error": None,  # Clear error on success
+            "tool_history": [
+                {
+                    "tool": "query_sql",
+                    "status": "failed" if rejected_by_validator else "ok",
+                    "row_count": row_count,
+                    "db_path": str(db_path) if db_path else "default",
+                    "source": source,
+                    **(
+                        {"validation_reasons": validation_reasons}
+                        if rejected_by_validator
+                        else {}
+                    ),
+                }
+            ],
+            "step_count": state.get("step_count", 0) + 1,
+        }
 
-    if rejected_by_validator:
-        update["errors"] = [
-            {
-                "category": "SQL_VALIDATION_ERROR",
-                "message": "; ".join(validation_reasons),
-            }
-        ]
+        if rejected_by_validator:
+            error_message = "; ".join(validation_reasons)
+            update["sql_last_error"] = error_message
+            update["errors"] = [
+                {
+                    "category": "SQL_VALIDATION_ERROR",
+                    "message": error_message,
+                    "retryable": True,
+                }
+            ]
 
-    return update
+        return update
+
+    except Exception as exc:
+        # Handle execution errors
+        error_category = classify_sql_error(exc)
+        error_message = str(exc)
+        is_retryable = error_category == "retryable"
+
+        logger.error(
+            "SQL execution failed: {error} (category: {category}, retryable: {retryable})",
+            error=error_message,
+            category=error_category,
+            retryable=is_retryable,
+        )
+
+        return {
+            "sql_result": {"error": error_message, "rows": [], "row_count": 0},
+            "sql_last_error": error_message,
+            "errors": [
+                {
+                    "category": "SQL_EXECUTION_ERROR",
+                    "message": error_message,
+                    "retryable": is_retryable,
+                    "error_type": type(exc).__name__,
+                }
+            ],
+            "tool_history": [
+                {
+                    "tool": "query_sql",
+                    "status": "failed",
+                    "error": error_message,
+                    "error_type": type(exc).__name__,
+                    "db_path": str(db_path) if db_path else "default",
+                    "retryable": is_retryable,
+                }
+            ],
+            "step_count": state.get("step_count", 0) + 1,
+        }
 
 
 def _generate_data_summary(rows: list[dict[str, Any]], query: str) -> str:

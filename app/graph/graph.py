@@ -11,6 +11,7 @@ from app.graph.edges import (
     route_after_context_detection,
     route_after_intent,
     route_after_process_files,
+    route_after_sql_execution,
     route_after_sql_validation,
 )
 from app.graph.nodes import (
@@ -81,7 +82,6 @@ def build_sql_v1_graph(checkpointer=None):
     builder.add_node(
         "execute_sql_node",
         _instrument_node("execute_sql_node", execute_sql_node, "tool"),
-        retry_policy=RetryPolicy(max_attempts=2, retry_on=sqlite3.OperationalError),
     )
     builder.add_node(
         "analyze_result", _instrument_node("analyze_result", analyze_result, "chain")
@@ -121,12 +121,20 @@ def build_sql_v1_graph(checkpointer=None):
         "validate_sql_node",
         route_after_sql_validation,
         {
+            "generate_sql": "generate_sql",  # Self-correction loop
             "execute_sql_node": "execute_sql_node",
             "retrieve_context_node": "retrieve_context_node",
             "synthesize_answer": "synthesize_answer",
         },
     )
-    builder.add_edge("execute_sql_node", "analyze_result")
+    builder.add_conditional_edges(
+        "execute_sql_node",
+        route_after_sql_execution,
+        {
+            "generate_sql": "generate_sql",  # Self-correction loop
+            "analyze_result": "analyze_result",
+        },
+    )
     builder.add_conditional_edges(
         "analyze_result",
         route_after_analysis,
