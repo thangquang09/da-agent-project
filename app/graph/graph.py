@@ -10,11 +10,15 @@ from app.graph.edges import (
     route_after_analysis,
     route_after_context_detection,
     route_after_intent,
+    route_after_planning,
     route_after_process_files,
     route_after_sql_execution,
     route_after_sql_validation,
+    route_to_execution_mode,
+    route_after_worker_execution,
 )
 from app.graph.nodes import (
+    aggregate_results,
     analyze_result,
     detect_context_type,
     execute_sql_node,
@@ -24,8 +28,10 @@ from app.graph.nodes import (
     retrieve_context_node,
     route_intent,
     synthesize_answer,
+    task_planner,
     validate_sql_node,
 )
+from app.graph.sql_worker_graph import get_sql_worker_graph
 from app.graph.state import AgentState, GraphInputState, GraphOutputState
 from app.observability import get_current_tracer
 
@@ -144,6 +150,131 @@ def build_sql_v1_graph(checkpointer=None):
         },
     )
     builder.add_edge("retrieve_context_node", "synthesize_answer")
+    builder.add_edge("synthesize_answer", END)
+
+    return builder.compile(checkpointer=checkpointer or InMemorySaver())
+
+
+def _sql_worker_wrapper(task_state: dict) -> dict:
+    """
+    Wrapper node that runs SQL worker and returns result for accumulation.
+
+    This wrapper properly isolates the worker subgraph execution and returns
+    only the task result to be added to task_results via operator.add.
+    """
+    from app.graph.sql_worker_graph import get_sql_worker_graph
+
+    worker = get_sql_worker_graph()
+
+    # Run the worker subgraph
+    result = worker.invoke(task_state)
+
+    # Return the task result wrapped for accumulation
+    # The task_results field uses Annotated[list, operator.add]
+    return {"task_results": [result]}
+
+
+def build_sql_v2_graph(checkpointer=None):
+    """
+    Version 2 with Plan-and-Execute architecture using Send API.
+
+    This graph introduces:
+    - task_planner: Decomposes queries into parallelizable sub-tasks
+    - sql_worker: Subgraph for executing individual tasks in parallel
+    - aggregate_results: Fan-in to combine parallel task results
+
+    Routing logic:
+    - If task_planner outputs 1 task: routes through single worker (linear)
+    - If task_planner outputs >1 tasks: fans out to parallel workers (parallel)
+    """
+    builder = StateGraph(
+        AgentState,
+        input_schema=GraphInputState,
+        output_schema=GraphOutputState,
+    )
+
+    # Add existing nodes
+    builder.add_node(
+        "detect_context_type",
+        _instrument_node("detect_context_type", detect_context_type, "classifier"),
+    )
+    builder.add_node(
+        "process_uploaded_files",
+        _instrument_node("process_uploaded_files", process_uploaded_files, "tool"),
+    )
+    builder.add_node(
+        "route_intent", _instrument_node("route_intent", route_intent, "agent")
+    )
+    builder.add_node(
+        "retrieve_context_node",
+        _instrument_node("retrieve_context_node", retrieve_context_node, "retriever"),
+    )
+    builder.add_node(
+        "synthesize_answer",
+        _instrument_node("synthesize_answer", synthesize_answer, "generation"),
+    )
+
+    # Add Plan-and-Execute nodes
+    builder.add_node(
+        "task_planner",
+        _instrument_node("task_planner", task_planner, "planner"),
+    )
+    builder.add_node(
+        "sql_worker",
+        _sql_worker_wrapper,
+    )
+    builder.add_node(
+        "aggregate_results",
+        _instrument_node("aggregate_results", aggregate_results, "aggregator"),
+    )
+
+    # Context detection flow
+    builder.add_edge(START, "detect_context_type")
+    builder.add_conditional_edges(
+        "detect_context_type",
+        route_after_context_detection,
+        {
+            "process_uploaded_files": "process_uploaded_files",
+            "route_intent": "route_intent",
+        },
+    )
+    builder.add_edge("process_uploaded_files", "route_intent")
+
+    # Intent routing with Plan-and-Execute
+    builder.add_conditional_edges(
+        "route_intent",
+        route_to_execution_mode,
+        {
+            "task_planner": "task_planner",  # SQL/mixed -> task planner
+            "retrieve_context_node": "retrieve_context_node",  # RAG -> retrieval
+            "synthesize_answer": "synthesize_answer",  # unknown -> synthesis
+        },
+    )
+
+    # Plan-and-Execute flow
+    builder.add_conditional_edges(
+        "task_planner",
+        route_after_planning,
+        ["sql_worker", "synthesize_answer"],
+    )
+
+    # Worker results fan-in
+    builder.add_conditional_edges(
+        "sql_worker",
+        route_after_worker_execution,
+        {
+            "aggregate_results": "aggregate_results",
+            "synthesize_answer": "synthesize_answer",
+        },
+    )
+
+    # Aggregation to synthesis
+    builder.add_edge("aggregate_results", "synthesize_answer")
+
+    # RAG flow
+    builder.add_edge("retrieve_context_node", "synthesize_answer")
+
+    # Final synthesis
     builder.add_edge("synthesize_answer", END)
 
     return builder.compile(checkpointer=checkpointer or InMemorySaver())

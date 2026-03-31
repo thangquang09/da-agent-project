@@ -618,7 +618,7 @@ def execute_sql_node(state: AgentState) -> AgentState:
         error_message = str(exc)
         is_retryable = error_category == "retryable"
 
-        logger.error(
+        logger.exception(
             "SQL execution failed: {error} (category: {category}, retryable: {retryable})",
             error=error_message,
             category=error_category,
@@ -1012,6 +1012,253 @@ Always be helpful and concise. Respond in the same language as the user's query.
     return "I can help with data analysis questions about metrics, trends, and business definitions. Please ask about DAU, revenue, retention, or other KPIs."
 
 
+def task_planner(state: AgentState) -> AgentState:
+    """
+    Analyzes user query and decomposes into parallelizable sub-tasks.
+
+    Example:
+    Input: "Compare DAU last week vs this week and show top 5 videos by views"
+    Output: [
+        {"task_id": "1", "type": "sql_query", "query": "Get DAU last week"},
+        {"task_id": "2", "type": "sql_query", "query": "Get DAU this week"},
+        {"task_id": "3", "type": "sql_query", "query": "Get top 5 videos by views"}
+    ]
+    """
+    query = state["user_query"]
+    schema = state.get("schema_context", "")
+    target_db_path = state.get("target_db_path", "")
+
+    planner_prompt = """You are a query decomposition expert. 
+Given a user question, break it down into independent sub-tasks that can be executed in parallel.
+
+Rules:
+- Each sub-task should be self-contained and answerable with a single SQL query
+- Prefer parallel execution when tasks are independent
+- Use "sql_query" type for data retrieval tasks
+- If the query is simple and requires only one query, output a single task
+- If the query asks for multiple unrelated facts, split into separate tasks
+
+Respond with ONLY a JSON object in this format:
+{
+    "tasks": [
+        {"task_id": "1", "type": "sql_query", "query": "description of what to query"},
+        {"task_id": "2", "type": "sql_query", "query": "description of what to query"}
+    ]
+}
+
+Examples:
+Input: "What was the revenue yesterday?"
+Output: {"tasks": [{"task_id": "1", "type": "sql_query", "query": "Get revenue for yesterday"}]}
+
+Input: "Compare DAU last week vs this week and show top 5 videos"
+Output: {
+    "tasks": [
+        {"task_id": "1", "type": "sql_query", "query": "Get DAU for last week"},
+        {"task_id": "2", "type": "sql_query", "query": "Get DAU for this week"},
+        {"task_id": "3", "type": "sql_query", "query": "Get top 5 videos by views"}
+    ]
+}"""
+
+    try:
+        client = LLMClient.from_env()
+        settings = load_settings()
+        response = client.chat_completion(
+            messages=[
+                {"role": "system", "content": planner_prompt},
+                {
+                    "role": "user",
+                    "content": f"Schema: {schema[:1000]}\n\nQuery: {query}",
+                },
+            ],
+            model=settings.default_router_model,
+            temperature=0.0,
+        )
+
+        content = (
+            response.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+        llm_usage = response.get("_usage_normalized")
+        llm_cost_usd = response.get("_cost_usd_estimate")
+
+        parsed = _extract_first_json_object(content)
+        if parsed and "tasks" in parsed:
+            tasks = parsed["tasks"]
+            # Enrich tasks with context
+            for task in tasks:
+                task["target_db_path"] = target_db_path
+                task["schema_context"] = schema
+                task["status"] = "pending"
+
+            execution_mode = "parallel" if len(tasks) > 1 else "linear"
+
+            logger.info(
+                "Task planning complete: {task_count} tasks, mode={mode}",
+                task_count=len(tasks),
+                mode=execution_mode,
+            )
+
+            return {
+                "task_plan": tasks,
+                "execution_mode": execution_mode,
+                "tool_history": [
+                    {
+                        "tool": "task_planner",
+                        "status": "ok",
+                        "task_count": len(tasks),
+                        "execution_mode": execution_mode,
+                        "token_usage": llm_usage,
+                        "cost_usd": llm_cost_usd,
+                    }
+                ],
+                "step_count": state.get("step_count", 0) + 1,
+            }
+        else:
+            logger.warning(
+                "Task planner returned invalid JSON: {content}", content=content[:200]
+            )
+            return _fallback_task_plan(query, target_db_path, schema, state)
+
+    except Exception as exc:
+        logger.error("Task planning failed: {error}", error=str(exc))
+        return _fallback_task_plan(query, target_db_path, schema, state)
+
+
+def _fallback_task_plan(
+    query: str, target_db_path: str, schema: str, state: AgentState
+) -> AgentState:
+    """Fallback when task planner fails."""
+    return {
+        "task_plan": [
+            {
+                "task_id": "1",
+                "type": "sql_query",
+                "query": query,
+                "target_db_path": target_db_path,
+                "schema_context": schema,
+                "status": "pending",
+            }
+        ],
+        "execution_mode": "linear",
+        "tool_history": [
+            {
+                "tool": "task_planner",
+                "status": "fallback",
+                "task_count": 1,
+                "execution_mode": "linear",
+            }
+        ],
+        "step_count": state.get("step_count", 0) + 1,
+    }
+
+
+def aggregate_results(state: AgentState) -> AgentState:
+    """
+    Fan-in: Combine all parallel task results into unified analysis.
+    """
+    results = state.get("task_results", [])
+    query = state.get("user_query", "")
+
+    if not results:
+        return {
+            "aggregate_analysis": {"error": "No task results available"},
+            "step_count": state.get("step_count", 0) + 1,
+            "tool_history": [
+                {
+                    "tool": "aggregate_results",
+                    "status": "failed",
+                    "error": "No task results",
+                }
+            ],
+        }
+
+    # Collect all SQL results
+    combined_data = {
+        "task_count": len(results),
+        "successful_tasks": sum(1 for r in results if r.get("status") == "success"),
+        "failed_tasks": sum(1 for r in results if r.get("status") == "failed"),
+        "results_by_task": {
+            r["task_id"]: {
+                "query": r.get("query", ""),
+                "sql": r.get("validated_sql", ""),
+                "row_count": r.get("sql_result", {}).get("row_count", 0),
+                "data": r.get("sql_result", {}).get("rows", [])[:5],
+                "status": r.get("status"),
+                "error": r.get("error"),
+            }
+            for r in results
+        },
+    }
+
+    # LLM-based synthesis of combined results
+    synthesis_prompt = f"""Synthesize these parallel query results into a cohesive answer.
+    
+User Query: {query}
+
+Task Results Summary:
+- Total tasks: {combined_data["task_count"]}
+- Successful: {combined_data["successful_tasks"]}
+- Failed: {combined_data["failed_tasks"]}
+
+Results by Task:
+{json.dumps(combined_data["results_by_task"], indent=2, default=str)[:2000]}
+
+Provide a unified analysis that:
+1. Directly answers the user's original question
+2. Compares results where applicable
+3. Notes any data quality issues or inconsistencies
+4. Is concise and data-driven"""
+
+    try:
+        client = LLMClient.from_env()
+        settings = load_settings()
+        response = client.chat_completion(
+            messages=[{"role": "user", "content": synthesis_prompt}],
+            model=settings.default_router_model,
+            temperature=0.3,
+        )
+
+        content = (
+            response.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+        llm_usage = response.get("_usage_normalized")
+        llm_cost_usd = response.get("_cost_usd_estimate")
+
+        analysis = {
+            "synthesis": content,
+            "task_summary": combined_data,
+            "parallel_execution": combined_data["task_count"] > 1,
+        }
+    except Exception as exc:
+        logger.warning("LLM aggregation failed: {error}", error=str(exc))
+        analysis = {
+            "synthesis": f"Results aggregated from {combined_data['task_count']} parallel queries.",
+            "task_summary": combined_data,
+            "error": str(exc),
+        }
+
+    return {
+        "aggregate_analysis": analysis,
+        "tool_history": [
+            {
+                "tool": "aggregate_results",
+                "status": "ok",
+                "task_count": len(results),
+                "successful": combined_data["successful_tasks"],
+                "failed": combined_data["failed_tasks"],
+                "token_usage": llm_usage if "llm_usage" in locals() else None,
+                "cost_usd": llm_cost_usd if "llm_cost_usd" in locals() else None,
+            }
+        ],
+        "step_count": state.get("step_count", 0) + 1,
+    }
+
+
 def process_uploaded_files(state: AgentState) -> AgentState:
     """
     Process uploaded CSV files: validate, profile, and auto-register into database.
@@ -1038,6 +1285,7 @@ def process_uploaded_files(state: AgentState) -> AgentState:
         logger.info("No uploaded files to process")
         return {
             "registered_tables": [],
+            "skipped_tables": [],
             "file_cache": file_cache,
             "step_count": state.get("step_count", 0) + 1,
             "tool_history": [
@@ -1103,6 +1351,8 @@ def process_uploaded_files(state: AgentState) -> AgentState:
             )
             file_cache[cache_key] = {
                 "table_name": table_name,
+                "row_count": 0,  # Unknown without full scan
+                "columns": 0,  # Unknown without schema inspection
                 "cached_at": datetime.now().isoformat(),
                 "source": "db_check",
             }

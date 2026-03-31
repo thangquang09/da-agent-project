@@ -3,11 +3,22 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from app.graph import build_sql_v1_graph, new_run_config, to_langgraph_config
+from app.graph import (
+    build_sql_v1_graph,
+    build_sql_v2_graph,
+    new_run_config,
+    to_langgraph_config,
+)
 from app.logger import logger
 from app.observability import RunTracer, reset_current_tracer, set_current_tracer
+
+# Graph version registry (Factory Pattern)
+GRAPH_REGISTRY: dict[str, Callable] = {
+    "v1": build_sql_v1_graph,
+    "v2": build_sql_v2_graph,
+}
 
 
 def _extract_numeric_evidence(payload: dict, key: str) -> int | None:
@@ -29,8 +40,11 @@ def run_query(
     uploaded_files: list[str] | None = None,
     uploaded_file_data: list[dict[str, Any]] | None = None,
     expected_keywords: list[str] | None = None,
+    version: str = "v2",
 ) -> dict:
-    graph = build_sql_v1_graph()
+    # Get graph builder from registry (fallback to v2)
+    graph_builder = GRAPH_REGISTRY.get(version, build_sql_v2_graph)
+    graph = graph_builder()
     run_cfg = new_run_config(recursion_limit=recursion_limit)
     tracer = RunTracer(
         run_id=run_cfg.run_id,
@@ -109,13 +123,22 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional SQLite db path override for this run",
     )
+    parser.add_argument(
+        "--version",
+        choices=["v1", "v2"],
+        default="v2",
+        help="Graph version to use (v1=linear, v2=plan-and-execute)",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     result = run_query(
-        args.query, recursion_limit=args.recursion_limit, db_path=args.db_path
+        args.query,
+        recursion_limit=args.recursion_limit,
+        db_path=args.db_path,
+        version=args.version,
     )
     logger.info(
         "Query completed with confidence={confidence}",

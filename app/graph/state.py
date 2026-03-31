@@ -7,6 +7,25 @@ from typing import Annotated, Any, Literal, TypedDict
 Intent = Literal["sql", "rag", "mixed", "unknown"]
 Confidence = Literal["high", "medium", "low"]
 ContextType = Literal["user_provided", "csv_auto", "mixed", "default"]
+TaskType = Literal["sql_query", "data_analysis", "context_lookup"]
+ExecutionMode = Literal["single", "parallel", "linear"]
+
+
+class TaskState(TypedDict, total=False):
+    """State for individual task execution in parallel workers."""
+
+    task_id: str
+    task_type: TaskType
+    query: str
+    target_db_path: str
+    schema_context: str
+    generated_sql: str
+    validated_sql: str
+    sql_result: dict[str, Any]
+    analysis_result: dict[str, Any]
+    status: Literal["pending", "running", "success", "failed"]
+    error: str | None
+    execution_time_ms: float
 
 
 class AnswerPayload(TypedDict, total=False):
@@ -60,6 +79,11 @@ class AgentState(TypedDict, total=False):
     skipped_tables: list[str]  # Tables skipped due to caching
     sql_retry_count: int  # SQL self-correction retry counter (0-2)
     sql_last_error: str | None  # Error message from last SQL failure
+    # Plan-and-Execute additions
+    task_plan: list[TaskState]  # Output from task_planner
+    task_results: Annotated[list[TaskState], operator.add]  # Fan-in from workers
+    aggregate_analysis: dict[str, Any]  # Combined analysis from parallel tasks
+    execution_mode: ExecutionMode  # Router decision: single/parallel/linear
 
 
 class GraphInputState(TypedDict, total=False):

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from app.graph.state import AgentState
+from langgraph.types import Send
+
+from app.graph.state import AgentState, TaskState
 
 
 def route_after_context_detection(
@@ -50,12 +52,10 @@ def route_after_sql_validation(
     retry_count = state.get("sql_retry_count", 0)
     max_retries = 2
 
-    # Check for SQL validation errors
-    validation_errors = [
-        e for e in errors if e.get("category") == "SQL_VALIDATION_ERROR"
-    ]
+    # Check only the most recent error (last in accumulated list)
+    last_error = errors[-1] if errors else None
 
-    if validation_errors:
+    if last_error and last_error.get("category") == "SQL_VALIDATION_ERROR":
         # Check if we should retry
         if retry_count < max_retries:
             # Will route back to generate_sql for self-correction
@@ -90,12 +90,10 @@ def route_after_sql_execution(
     retry_count = state.get("sql_retry_count", 0)
     max_retries = 2
 
-    # Check for SQL execution errors
-    execution_errors = [e for e in errors if e.get("category") == "SQL_EXECUTION_ERROR"]
+    # Check only the most recent error (last in accumulated list)
+    last_error = errors[-1] if errors else None
 
-    if execution_errors:
-        last_error = execution_errors[-1]
-
+    if last_error and last_error.get("category") == "SQL_EXECUTION_ERROR":
         # Check if error is retryable
         if not last_error.get("retryable", False):
             # Non-retryable error - proceed to analysis with error
@@ -107,3 +105,100 @@ def route_after_sql_execution(
 
     # No errors or max retries reached - proceed to analysis
     return "analyze_result"
+
+
+def route_to_execution_mode(
+    state: AgentState,
+) -> Literal[
+    "task_planner", "get_schema", "retrieve_context_node", "synthesize_answer"
+]:
+    """
+    Router after intent detection that decides execution strategy.
+
+    For SQL/mixed queries, route to task_planner to potentially parallelize.
+    For RAG queries, route directly to retrieval.
+    For unknown, go to synthesis.
+    """
+    intent = state.get("intent", "unknown")
+
+    if intent in {"sql", "mixed"}:
+        # Route to task_planner which will decide single vs parallel
+        return "task_planner"
+    if intent == "rag":
+        return "retrieve_context_node"
+
+    return "synthesize_answer"
+
+
+def route_after_planning(
+    state: AgentState,
+) -> list[Send] | Literal["aggregate_results", "sql_worker", "synthesize_answer"]:
+    """
+    Fan-out router using Send API for parallel task execution.
+
+    If task_plan has multiple tasks, create Send objects for parallel workers.
+    If single task, can route directly or through worker for consistency.
+    """
+    task_plan = state.get("task_plan", [])
+    execution_mode = state.get("execution_mode", "linear")
+
+    if not task_plan:
+        # No tasks planned - go to synthesis with error
+        return "synthesize_answer"
+
+    if execution_mode == "parallel" and len(task_plan) > 1:
+        # Fan-out: Create Send for each task
+        # These will execute in parallel via sql_worker subgraph
+        sends = []
+        for task in task_plan:
+            send_state = {
+                "task_id": str(task.get("task_id", "unknown")),
+                "task_type": str(task.get("type", "sql_query")),
+                "query": str(task.get("query", "")),
+                "target_db_path": str(task.get("target_db_path"))
+                if task.get("target_db_path")
+                else "",
+                "schema_context": str(task.get("schema_context", "")),
+                "status": "pending",
+            }
+            sends.append(Send("sql_worker", send_state))
+
+        return sends
+
+    # Single task mode - route to aggregation directly or through worker
+    if len(task_plan) == 1:
+        # For single tasks, we could skip parallel overhead
+        # But for consistency, let's route through the same path
+        task = task_plan[0]
+        send_state = {
+            "task_id": str(task.get("task_id", "1")),
+            "task_type": str(task.get("type", "sql_query")),
+            "query": str(task.get("query", "")),
+            "target_db_path": str(task.get("target_db_path"))
+            if task.get("target_db_path")
+            else "",
+            "schema_context": str(task.get("schema_context", "")),
+            "status": "pending",
+        }
+        return [Send("sql_worker", send_state)]
+
+    # Fallback
+    return "synthesize_answer"
+
+
+def route_after_worker_execution(
+    state: AgentState,
+) -> Literal["aggregate_results", "synthesize_answer"]:
+    """
+    Route after parallel worker execution.
+
+    Always go to aggregation to combine results, even for single tasks
+    (provides consistent handling).
+    """
+    task_results = state.get("task_results", [])
+
+    if task_results:
+        return "aggregate_results"
+
+    # No results - something went wrong
+    return "synthesize_answer"

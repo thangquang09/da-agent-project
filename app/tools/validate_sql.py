@@ -24,8 +24,18 @@ FORBIDDEN_SQL_PATTERNS = [
     r"\bPRAGMA\b",
 ]
 READ_QUERY_PATTERN = re.compile(r"^\s*(SELECT|WITH)\b", flags=re.IGNORECASE | re.DOTALL)
-TABLE_TOKEN_PATTERN = re.compile(r"\b(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)\b", flags=re.IGNORECASE)
-CTE_NAME_PATTERN = re.compile(r"with\s+([a-zA-Z_][a-zA-Z0-9_]*?)\s+as\s*\(", flags=re.IGNORECASE | re.DOTALL)
+TABLE_TOKEN_PATTERN = re.compile(
+    r"\b(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)\b", flags=re.IGNORECASE
+)
+# Pattern to match the first CTE after WITH (supports RECURSIVE)
+CTE_NAME_PATTERN = re.compile(
+    r"\bWITH\s+(?:RECURSIVE\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s+AS\s*\(",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+# Pattern to match subsequent CTEs in a chain (after comma)
+CTE_CHAIN_PATTERN = re.compile(
+    r"\)\s*,\s*([a-zA-Z_][a-zA-Z0-9_]*)\s+AS\s*\(", flags=re.IGNORECASE | re.DOTALL
+)
 
 
 @dataclass(frozen=True)
@@ -69,20 +79,40 @@ def _sanitize_sql(sql: str) -> str:
 
 
 def _extract_cte_names(sql: str) -> set[str]:
-    """Return lower-cased CTE names defined in a WITH clause."""
-    return {match.group(1).lower() for match in CTE_NAME_PATTERN.finditer(sql)}
+    """Return lower-cased CTE names defined in a WITH clause.
+
+    Handles:
+    - Simple CTEs: WITH cte1 AS (...)
+    - Recursive CTEs: WITH RECURSIVE cte1 AS (...)
+    - Chained CTEs: WITH cte1 AS (...), cte2 AS (...), cte3 AS (...)
+    """
+    names = set()
+
+    # Find initial CTE after WITH (handles RECURSIVE keyword)
+    for match in CTE_NAME_PATTERN.finditer(sql):
+        names.add(match.group(1).lower())
+
+    # Find chained CTEs after commas
+    for match in CTE_CHAIN_PATTERN.finditer(sql):
+        names.add(match.group(1).lower())
+
+    return names
 
 
 def _has_limit_clause(sql: str) -> bool:
     return bool(re.search(r"\blimit\s+\d+\b", sql, flags=re.IGNORECASE))
 
 
-def validate_sql(sql: str, db_path: Path | None = None, *, max_limit: int | None = None) -> SQLValidationResult:
+def validate_sql(
+    sql: str, db_path: Path | None = None, *, max_limit: int | None = None
+) -> SQLValidationResult:
     path = db_path or _default_db_path()
     reasons: list[str] = []
     sanitized_sql = _sanitize_sql(sql)
     table_names = _list_tables(path)
-    detected_tables = [name.lower() for name in TABLE_TOKEN_PATTERN.findall(sanitized_sql)]
+    detected_tables = [
+        name.lower() for name in TABLE_TOKEN_PATTERN.findall(sanitized_sql)
+    ]
     cte_names = _extract_cte_names(sanitized_sql)
 
     if not sanitized_sql:
@@ -99,11 +129,21 @@ def validate_sql(sql: str, db_path: Path | None = None, *, max_limit: int | None
             keyword = pattern.replace("\\b", "")
             reasons.append(f"Forbidden SQL keyword detected: {keyword}")
 
-    unknown_tables = sorted({tbl for tbl in detected_tables if tbl not in table_names and tbl not in cte_names})
+    unknown_tables = sorted(
+        {
+            tbl
+            for tbl in detected_tables
+            if tbl not in table_names and tbl not in cte_names
+        }
+    )
     if unknown_tables:
         reasons.append(f"Unknown table(s): {', '.join(unknown_tables)}")
 
-    if max_limit is not None and max_limit > 0 and READ_QUERY_PATTERN.search(sanitized_sql):
+    if (
+        max_limit is not None
+        and max_limit > 0
+        and READ_QUERY_PATTERN.search(sanitized_sql)
+    ):
         if not _has_limit_clause(sanitized_sql):
             sanitized_sql = f"{sanitized_sql}\nLIMIT {max_limit}"
 

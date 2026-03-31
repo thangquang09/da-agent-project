@@ -30,6 +30,10 @@ def classify_sql_error(error: Exception) -> ErrorCategory:
     error_str = str(error).lower()
     error_type = type(error).__name__
 
+    # Retryable: Syntax/logic errors (check before DatabaseError since OperationalError is a subclass)
+    if isinstance(error, sqlite3.OperationalError):
+        return "retryable"
+
     # Non-retryable: Systemic/permission issues
     if isinstance(error, (sqlite3.DatabaseError, sqlite3.IntegrityError)):
         return "non_retryable"
@@ -45,10 +49,6 @@ def classify_sql_error(error: Exception) -> ErrorCategory:
         ]
     ):
         return "non_retryable"
-
-    # Retryable: Syntax/logic errors
-    if isinstance(error, sqlite3.OperationalError):
-        return "retryable"
 
     if any(
         keyword in error_str
