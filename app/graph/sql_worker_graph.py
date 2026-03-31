@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -67,8 +68,6 @@ Respond with ONLY the SQL query, no explanations."""
         )
 
         # Extract SQL from markdown if present
-        import re
-
         fenced_match = re.search(
             r"```(?:sql)?\s*(.*?)```", content, re.DOTALL | re.IGNORECASE
         )

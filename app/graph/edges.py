@@ -134,10 +134,11 @@ def route_after_planning(
     state: AgentState,
 ) -> list[Send] | Literal["aggregate_results", "sql_worker", "synthesize_answer"]:
     """
-    Fan-out router using Send API for parallel task execution.
+    Fan-out router using Send API for task execution.
 
-    If task_plan has multiple tasks, create Send objects for parallel workers.
-    If single task, can route directly or through worker for consistency.
+    If task_plan has tasks, create Send objects for workers.
+    Tasks are always executed regardless of execution_mode.
+    execution_mode may influence future optimizations but does not block execution.
     """
     task_plan = state.get("task_plan", [])
     execution_mode = state.get("execution_mode", "linear")
@@ -146,9 +147,9 @@ def route_after_planning(
         # No tasks planned - go to synthesis with error
         return "synthesize_answer"
 
-    if execution_mode == "parallel" and len(task_plan) > 1:
-        # Fan-out: Create Send for each task
-        # These will execute in parallel via sql_worker subgraph
+    # Always execute tasks if present
+    # execution_mode is informational; tasks must be processed
+    if len(task_plan) >= 1:
         sends = []
         for task in task_plan:
             send_state = {
@@ -158,31 +159,19 @@ def route_after_planning(
                 "target_db_path": str(task.get("target_db_path"))
                 if task.get("target_db_path")
                 else "",
-                "schema_context": str(task.get("schema_context", "")),
+                "schema_context": str(task.get("task_context", "")),
                 "status": "pending",
             }
             sends.append(Send("sql_worker", send_state))
 
+        logger.info(
+            "Routing {count} task(s) to sql_worker (mode={mode})",
+            count=len(task_plan),
+            mode=execution_mode,
+        )
         return sends
 
-    # Single task mode - route to aggregation directly or through worker
-    if len(task_plan) == 1:
-        # For single tasks, we could skip parallel overhead
-        # But for consistency, let's route through the same path
-        task = task_plan[0]
-        send_state = {
-            "task_id": str(task.get("task_id", "1")),
-            "task_type": str(task.get("type", "sql_query")),
-            "query": str(task.get("query", "")),
-            "target_db_path": str(task.get("target_db_path"))
-            if task.get("target_db_path")
-            else "",
-            "schema_context": str(task.get("schema_context", "")),
-            "status": "pending",
-        }
-        return [Send("sql_worker", send_state)]
-
-    # Fallback
+    # No tasks - should not reach here, but fallback
     return "synthesize_answer"
 
 
