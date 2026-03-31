@@ -1,5 +1,29 @@
 # Implementation TODO - DA Agent (Week/Day Build Plan)
-Date: 2026-03-29
+Date: 2026-03-31
+
+## Recent Updates (2026-03-31)
+### Context Filtering & Dataset Context System
+- **Phase 1** (COMMITTED): State & Flow updates for context filtering
+  - Add ContextType literal: `user_provided | csv_auto | mixed | default`
+  - Add `detect_context_type` node to graph (START → detect_context_type → route_intent)
+  - Add GraphInputState fields for context input
+  - Update SQL prompt to include semantic context template
+
+- **Phase 2** (COMMITTED): LLM-driven context detection
+  - Replace rule-based `_detect_context_type` with LLM-driven version
+  - Add ContextMemoryStore for SQLite persistence
+  - Add `needs_semantic_context` and `detected_intent` fields to state
+
+- **Phase 3** (COMMITTED): CSV tools and MCP integration
+  - Add `validate_csv`: File size, encoding, delimiter detection, column sanitization
+  - Add `profile_csv`: Pandas-based profiling with type inference
+  - Add `auto_register_csv`: Full pipeline (validate → profile → CREATE TABLE → INSERT)
+  - Add `context_resolver`: Conflict resolution between user and dataset context
+  - Expose `validate_csv`, `profile_csv`, `auto_register_csv` as MCP tools
+
+### Remaining Work
+- **Eval metrics for context detection**: Add context_type accuracy metrics
+- **Streamlit UI**: File upload handling for CSV auto-context
 
 ## Research links
 - Text-to-SQL deep research (NotebookLM, 2026-03-30):
