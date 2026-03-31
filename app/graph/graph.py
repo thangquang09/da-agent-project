@@ -6,9 +6,15 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import RetryPolicy
 
-from app.graph.edges import route_after_analysis, route_after_intent, route_after_sql_validation
+from app.graph.edges import (
+    route_after_analysis,
+    route_after_context_detection,
+    route_after_intent,
+    route_after_sql_validation,
+)
 from app.graph.nodes import (
     analyze_result,
+    detect_context_type,
     execute_sql_node,
     generate_sql,
     get_schema,
@@ -26,7 +32,9 @@ def _instrument_node(node_name: str, fn, observation_type: str = "span"):  # noq
         tracer = get_current_tracer()
         if tracer is None:
             return fn(state)
-        scope = tracer.start_node(node_name=node_name, state=state, observation_type=observation_type)
+        scope = tracer.start_node(
+            node_name=node_name, state=state, observation_type=observation_type
+        )
         try:
             update = fn(state)
         except Exception as exc:  # noqa: BLE001
@@ -45,24 +53,50 @@ def build_sql_v1_graph(checkpointer=None):
         output_schema=GraphOutputState,
     )
 
-    builder.add_node("route_intent", _instrument_node("route_intent", route_intent, "agent"))
-    builder.add_node("get_schema", _instrument_node("get_schema", get_schema, "retriever"))
+    builder.add_node(
+        "detect_context_type",
+        _instrument_node("detect_context_type", detect_context_type, "classifier"),
+    )
+    builder.add_node(
+        "route_intent", _instrument_node("route_intent", route_intent, "agent")
+    )
+    builder.add_node(
+        "get_schema", _instrument_node("get_schema", get_schema, "retriever")
+    )
     builder.add_node(
         "generate_sql",
         _instrument_node("generate_sql", generate_sql, "generation"),
         retry_policy=RetryPolicy(max_attempts=2),
     )
-    builder.add_node("validate_sql_node", _instrument_node("validate_sql_node", validate_sql_node, "guardrail"))
+    builder.add_node(
+        "validate_sql_node",
+        _instrument_node("validate_sql_node", validate_sql_node, "guardrail"),
+    )
     builder.add_node(
         "execute_sql_node",
         _instrument_node("execute_sql_node", execute_sql_node, "tool"),
         retry_policy=RetryPolicy(max_attempts=2, retry_on=sqlite3.OperationalError),
     )
-    builder.add_node("analyze_result", _instrument_node("analyze_result", analyze_result, "chain"))
-    builder.add_node("retrieve_context_node", _instrument_node("retrieve_context_node", retrieve_context_node, "retriever"))
-    builder.add_node("synthesize_answer", _instrument_node("synthesize_answer", synthesize_answer, "generation"))
+    builder.add_node(
+        "analyze_result", _instrument_node("analyze_result", analyze_result, "chain")
+    )
+    builder.add_node(
+        "retrieve_context_node",
+        _instrument_node("retrieve_context_node", retrieve_context_node, "retriever"),
+    )
+    builder.add_node(
+        "synthesize_answer",
+        _instrument_node("synthesize_answer", synthesize_answer, "generation"),
+    )
 
-    builder.add_edge(START, "route_intent")
+    builder.add_edge(START, "detect_context_type")
+    builder.add_conditional_edges(
+        "detect_context_type",
+        route_after_context_detection,
+        {
+            "route_intent": "route_intent",
+        },
+    )
     builder.add_conditional_edges(
         "route_intent",
         route_after_intent,

@@ -7,10 +7,15 @@ from pathlib import Path
 from typing import Any
 
 from app.config import load_settings
-from app.graph.state import AgentState
+from app.graph.state import AgentState, ContextType
 from app.llm import LLMClient
 from app.logger import logger
-from app.prompts import prompt_manager, ROUTER_PROMPT_DEFINITION, SQL_PROMPT_DEFINITION
+from app.prompts import (
+    ANALYSIS_PROMPT_DEFINITION,
+    prompt_manager,
+    ROUTER_PROMPT_DEFINITION,
+    SQL_PROMPT_DEFINITION,
+)
 from app.tools import (
     dataset_context,
     get_schema_overview,
@@ -23,59 +28,78 @@ from app.tools.mcp_client import call_mcp_tool
 
 
 def _fallback_route_intent(query: str) -> str:
-    q = query.lower()
-    q_ascii = _strip_diacritics(q)
-    unknown_keywords = {
-        "ban co the lam gi",
-        "ban lam duoc gi",
-        "help",
-        "xin chao",
-        "hello",
-        "hi",
-        "alo",
-    }
-    rag_keywords = {
-        "definition",
-        "what is",
-        "meaning",
-        "caveat",
-        "explain",
-        "là gì",
-        "định nghĩa",
-        "quy tắc",
-        "business rule",
-    }
-    sql_keywords = {
-        "top",
-        "trend",
-        "compare",
-        "bao nhiêu",
-        "tăng",
-        "giảm",
-        "7 ngày",
-        "week",
-        "doanh thu",
-        "dau",
-    }
-
-    if any(keyword in q_ascii for keyword in unknown_keywords):
-        return "unknown"
-
-    has_rag = any(_strip_diacritics(word) in q_ascii for word in rag_keywords)
-    has_sql = any(_strip_diacritics(word) in q_ascii for word in sql_keywords)
-    if has_rag and has_sql:
-        return "mixed"
-    if has_rag:
-        return "rag"
-    if has_sql:
-        return "sql"
     return "unknown"
 
 
 def _strip_diacritics(text: str) -> str:
     normalized = unicodedata.normalize("NFD", text)
-    return "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn").replace("đ", "d")
+    return "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn").replace(
+        "đ", "d"
+    )
 
+
+def _detect_context_type(
+    user_semantic_context: str | None,
+    uploaded_files: list[str] | None,
+) -> tuple[ContextType, str | None]:
+    """
+    Detect context type from input.
+
+    Returns:
+        tuple of (context_type, semantic_context if available)
+    """
+    uploaded_files = uploaded_files or []
+    has_files = bool(uploaded_files)
+
+    if user_semantic_context and user_semantic_context.strip():
+        semantic = user_semantic_context.strip()
+        if has_files:
+            return ("mixed", semantic)
+        return ("user_provided", semantic)
+
+    if has_files:
+        return ("csv_auto", None)
+
+    return ("default", None)
+
+
+def detect_context_type(state: AgentState) -> AgentState:
+    """
+    Detect the type of context provided by user:
+    - user_provided: User sent semantic context directly
+    - csv_auto: User uploaded CSV files, need auto-generation
+    - mixed: Both context and files provided
+    - default: No special context, use standard flow
+    """
+    user_context = state.get("user_semantic_context", "") or ""
+    uploaded_files = state.get("uploaded_files", []) or []
+
+    context_type, semantic_context = _detect_context_type(user_context, uploaded_files)
+
+    logger.info(
+        "Context detection: type={context_type}, has_files={has_files}, has_context={has_context}",
+        context_type=context_type,
+        has_files=bool(uploaded_files),
+        has_context=bool(semantic_context),
+    )
+
+    update: AgentState = {
+        "context_type": context_type,
+        "tool_history": [
+            {
+                "tool": "detect_context_type",
+                "status": "ok",
+                "context_type": context_type,
+                "uploaded_files": uploaded_files,
+            }
+        ],
+        "step_count": state.get("step_count", 0) + 1,
+    }
+
+    if semantic_context:
+        update["user_semantic_context"] = semantic_context
+
+    return update
 
 
 def _extract_first_json_object(text: str) -> dict[str, Any] | None:
@@ -94,8 +118,8 @@ def _extract_first_json_object(text: str) -> dict[str, Any] | None:
 def route_intent(state: AgentState) -> AgentState:
     query = state["user_query"]
     settings = load_settings()
-    intent = _fallback_route_intent(query)
-    intent_reason = "fallback_keyword_router"
+    intent = "unknown"
+    intent_reason = "llm_router"
     llm_usage: dict[str, int] | None = None
     llm_cost_usd: float | None = None
 
@@ -107,7 +131,12 @@ def route_intent(state: AgentState) -> AgentState:
             temperature=0.0,
             stream=False,
         )
-        content = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        content = (
+            response.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
         llm_usage = response.get("_usage_normalized")
         llm_cost_usd = response.get("_cost_usd_estimate")
         parsed = _extract_first_json_object(content)
@@ -117,11 +146,13 @@ def route_intent(state: AgentState) -> AgentState:
             intent = candidate
             intent_reason = reason or "llm_router"
         else:
-            logger.warning("Router LLM returned invalid intent. Using fallback.")
+            logger.warning(
+                "Router LLM returned invalid intent: {candidate}", candidate=candidate
+            )
             intent_reason = "llm_invalid_output"
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Router LLM failed, using fallback intent: {error}", error=str(exc))
-        intent_reason = f"fallback_due_to_error:{type(exc).__name__}"
+        logger.error("Router LLM failed: {error}", error=str(exc))
+        intent_reason = f"llm_error:{type(exc).__name__}"
 
     logger.info("Routed intent={intent} for query={query}", intent=intent, query=query)
     return {
@@ -129,22 +160,35 @@ def route_intent(state: AgentState) -> AgentState:
         "intent_reason": intent_reason,
         "tool_history": [
             {
-            "tool": "route_intent",
-            "status": "ok",
-            "intent": intent,
-            "reason": intent_reason,
-            "prompt_name": ROUTER_PROMPT_DEFINITION.name,
-            "token_usage": llm_usage,
-            "cost_usd": llm_cost_usd,
-        }
+                "tool": "route_intent",
+                "status": "ok",
+                "intent": intent,
+                "reason": intent_reason,
+                "prompt_name": ROUTER_PROMPT_DEFINITION.name,
+                "token_usage": llm_usage,
+                "cost_usd": llm_cost_usd,
+            }
         ],
         "step_count": state.get("step_count", 0) + 1,
     }
 
 
+def retrieve_dataset_context(query: str, top_k: int = 3) -> list[dict[str, Any]]:
+    """
+    Retrieve relevant dataset context chunks from RAG index.
+    For Phase 1: Uses existing RAG retriever with dataset_contexts filter.
+    """
+    from app.rag.retriever import query_index as _query_index
+
+    results = _query_index(query=query, top_k=top_k, source_filter=None)
+    return results
+
+
 def get_schema(state: AgentState) -> AgentState:
     settings = load_settings()
     db_path = Path(state["target_db_path"]) if state.get("target_db_path") else None
+    context_type = state.get("context_type", "default")
+
     if settings.enable_mcp_tool_client:
         mcp_args = {"db_path": str(db_path)} if db_path else {}
         overview = call_mcp_tool("get_schema", mcp_args)
@@ -154,8 +198,10 @@ def get_schema(state: AgentState) -> AgentState:
         overview = get_schema_overview(db_path=db_path)
         dataset_ctx = dataset_context(db_path=db_path)
         source = "local"
+
     schema_context = json.dumps(overview, ensure_ascii=False)
-    return {
+
+    update: AgentState = {
         "schema_context": schema_context,
         "dataset_context": json.dumps(dataset_ctx, ensure_ascii=False),
         "tool_history": [
@@ -165,10 +211,68 @@ def get_schema(state: AgentState) -> AgentState:
                 "table_count": len(overview.get("tables", [])),
                 "db_path": str(db_path) if db_path else "default",
                 "source": source,
+                "context_type": context_type,
             }
         ],
         "step_count": state.get("step_count", 0) + 1,
     }
+
+    if context_type in ("user_provided", "csv_auto", "mixed"):
+        try:
+            query = state["user_query"]
+            retrieved = retrieve_dataset_context(query=query, top_k=3)
+            update["retrieved_dataset_context"] = retrieved
+            logger.info(
+                "Retrieved {count} dataset context chunks for context_type={context_type}",
+                count=len(retrieved),
+                context_type=context_type,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to retrieve dataset context: {error}", error=str(exc)
+            )
+            update["retrieved_dataset_context"] = []
+
+    return update
+
+
+def _llm_decide_retrieval_type(query: str) -> str:
+    """
+    Use LLM to decide whether to retrieve metric definition or business context.
+    Returns 'metric_definition' or 'business_context'.
+    """
+    system_prompt = """You are a query classifier for a data analyst agent.
+Given a user query, decide whether it asks for:
+1. 'metric_definition' - if the user is asking for the definition, formula, or meaning of a metric/KPI (e.g., "What is DAU?", "Retention D1 là gì?", "How is revenue calculated?")
+2. 'business_context' - if the user is asking for business rules, caveats, data quality notes, or general business context (e.g., "What caveats apply?", "Any data quality notes?", "Business rules for this metric?")
+
+Respond with ONLY a JSON object: {"retrieval_type": "metric_definition" or "business_context", "reason": "brief reason"}"""
+
+    try:
+        client = LLMClient.from_env()
+        response = client.chat_completion(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": query},
+            ],
+            model="gh/gpt-4o-mini",
+            temperature=0.0,
+            stream=False,
+        )
+        content = (
+            response.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+        parsed = _extract_first_json_object(content)
+        if parsed and "retrieval_type" in parsed:
+            retrieval_type = str(parsed["retrieval_type"]).strip().lower()
+            if retrieval_type in ("metric_definition", "business_context"):
+                return retrieval_type
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("LLM retrieval type decision failed: {error}", error=str(exc))
+    return "business_context"
 
 
 def retrieve_context_node(state: AgentState) -> AgentState:
@@ -177,27 +281,18 @@ def retrieve_context_node(state: AgentState) -> AgentState:
     settings = load_settings()
 
     try:
-        query_ascii = _strip_diacritics(query.lower())
-        is_definition_like = any(
-            _strip_diacritics(keyword) in query_ascii
-            for keyword in {
-                "là gì",
-                "định nghĩa",
-                "definition",
-                "what is",
-                "meaning",
-            }
-        )
+        retrieval_type = _llm_decide_retrieval_type(query)
+        tool_name = f"retrieve_{retrieval_type}"
 
-        if intent == "rag" and is_definition_like:
+        if retrieval_type == "metric_definition":
             if settings.enable_mcp_tool_client:
-                result = call_mcp_tool("retrieve_metric_definition", {"query": query, "top_k": 4})
+                result = call_mcp_tool(
+                    "retrieve_metric_definition", {"query": query, "top_k": 4}
+                )
             else:
                 result = retrieve_metric_definition(query=query, top_k=4)
-            tool_name = "retrieve_metric_definition"
         else:
             result = retrieve_business_context(query=query, top_k=4)
-            tool_name = "retrieve_business_context"
 
         return {
             "retrieved_context": result["results"],
@@ -206,6 +301,7 @@ def retrieve_context_node(state: AgentState) -> AgentState:
                     "tool": tool_name,
                     "status": "ok",
                     "result_count": result["result_count"],
+                    "retrieval_type": retrieval_type,
                 }
             ],
             "step_count": state.get("step_count", 0) + 1,
@@ -229,24 +325,15 @@ def retrieve_context_node(state: AgentState) -> AgentState:
         }
 
 
-def _rule_based_sql(query: str) -> str:
-    q = _strip_diacritics(query.lower())
-    if "top" in q and "retention" in q:
-        return "SELECT title, retention_rate FROM videos ORDER BY retention_rate DESC LIMIT 5"
-    if "revenue" in q and (_strip_diacritics("7 ngày") in q or "7 day" in q):
-        return "SELECT date, revenue FROM daily_metrics ORDER BY date DESC LIMIT 7"
-    if "dau" in q:
-        return "SELECT date, dau FROM daily_metrics ORDER BY date DESC LIMIT 7"
-    return "SELECT date, dau, revenue FROM daily_metrics ORDER BY date DESC LIMIT 7"
-
-
 def _extract_sql_from_content(content: str) -> str:
     text = content.strip()
     if not text:
         return ""
 
     # Prefer fenced SQL blocks when the model returns markdown.
-    fenced_matches = re.findall(r"```(?:sql)?\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL)
+    fenced_matches = re.findall(
+        r"```(?:sql)?\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL
+    )
     for candidate in fenced_matches:
         cleaned = candidate.strip()
         if cleaned:
@@ -260,45 +347,80 @@ def _extract_sql_from_content(content: str) -> str:
     return text
 
 
+def _build_semantic_context(state: AgentState) -> str:
+    """
+    Build semantic context string from user provided context and RAG retrieved chunks.
+    """
+    parts: list[str] = []
+
+    user_context = state.get("user_semantic_context", "")
+    if user_context:
+        parts.append(f"[User provided]: {user_context}")
+
+    retrieved = state.get("retrieved_dataset_context", [])
+    if retrieved:
+        chunks = []
+        for item in retrieved[:3]:
+            source = item.get("source", "unknown")
+            text = item.get("text", "")[:200]
+            chunks.append(f"- [{source}] {text}")
+        if chunks:
+            parts.append("[Relevant context]:\n" + "\n".join(chunks))
+
+    return "\n\n".join(parts) if parts else ""
+
+
 def generate_sql(state: AgentState) -> AgentState:
     query = state["user_query"]
     settings = load_settings()
-    sql = _rule_based_sql(query)
+    sql = ""
     llm_usage: dict[str, int] | None = None
     llm_cost_usd: float | None = None
+    semantic_context = _build_semantic_context(state)
+    generation_status = "skipped"
 
-    if settings.enable_llm_sql_generation:
-        try:
-            client = LLMClient.from_env()
-            response = client.chat_completion(
-                messages=prompt_manager.sql_messages(
-                    query,
-                    state.get("schema_context", ""),
-                    state.get("dataset_context", ""),
-                ),
-                model=settings.default_router_model,
-                temperature=0.0,
-                stream=False,
-            )
-            content = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-            llm_usage = response.get("_usage_normalized")
-            llm_cost_usd = response.get("_cost_usd_estimate")
-            if content:
-                extracted_sql = _extract_sql_from_content(content)
-                if extracted_sql:
-                    sql = extracted_sql
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Falling back to rule-based SQL generation: {error}", error=str(exc))
+    try:
+        client = LLMClient.from_env()
+        response = client.chat_completion(
+            messages=prompt_manager.sql_messages(
+                query,
+                state.get("schema_context", ""),
+                state.get("dataset_context", ""),
+                semantic_context,
+            ),
+            model=settings.default_router_model,
+            temperature=0.0,
+            stream=False,
+        )
+        content = (
+            response.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+        llm_usage = response.get("_usage_normalized")
+        llm_cost_usd = response.get("_cost_usd_estimate")
+        if content:
+            extracted_sql = _extract_sql_from_content(content)
+            if extracted_sql:
+                sql = extracted_sql
+                generation_status = "llm_generated"
+        if not sql:
+            generation_status = "llm_empty_output"
+    except Exception as exc:  # noqa: BLE001
+        logger.error("LLM SQL generation failed: {error}", error=str(exc))
+        generation_status = f"llm_error:{type(exc).__name__}"
 
     return {
         "generated_sql": sql,
         "tool_history": [
             {
                 "tool": "generate_sql",
-                "status": "ok",
+                "status": generation_status,
                 "prompt_name": SQL_PROMPT_DEFINITION.name,
                 "token_usage": llm_usage,
                 "cost_usd": llm_cost_usd,
+                "has_semantic_context": bool(semantic_context),
             }
         ],
         "step_count": state.get("step_count", 0) + 1,
@@ -307,7 +429,9 @@ def generate_sql(state: AgentState) -> AgentState:
 
 def validate_sql_node(state: AgentState) -> AgentState:
     db_path = Path(state["target_db_path"]) if state.get("target_db_path") else None
-    result = validate_sql(state.get("generated_sql", ""), db_path=db_path, max_limit=200)
+    result = validate_sql(
+        state.get("generated_sql", ""), db_path=db_path, max_limit=200
+    )
     update: AgentState = {
         "validated_sql": result.sanitized_sql,
         "tool_history": [
@@ -346,7 +470,9 @@ def execute_sql_node(state: AgentState) -> AgentState:
         source = "local"
 
     row_count = int(result.get("row_count", 0)) if isinstance(result, dict) else 0
-    validation_reasons = result.get("validation_reasons") if isinstance(result, dict) else None
+    validation_reasons = (
+        result.get("validation_reasons") if isinstance(result, dict) else None
+    )
     rejected_by_validator = bool(validation_reasons)
 
     update: AgentState = {
@@ -358,7 +484,11 @@ def execute_sql_node(state: AgentState) -> AgentState:
                 "row_count": row_count,
                 "db_path": str(db_path) if db_path else "default",
                 "source": source,
-                **({"validation_reasons": validation_reasons} if rejected_by_validator else {}),
+                **(
+                    {"validation_reasons": validation_reasons}
+                    if rejected_by_validator
+                    else {}
+                ),
             }
         ],
         "step_count": state.get("step_count", 0) + 1,
@@ -378,36 +508,64 @@ def execute_sql_node(state: AgentState) -> AgentState:
 def analyze_result(state: AgentState) -> AgentState:
     sql_result = state.get("sql_result", {})
     rows = sql_result.get("rows", [])
-    analysis: dict[str, Any] = {"summary": "No rows returned.", "trend": "unknown"}
+    query = state.get("user_query", "")
+    validated_sql = state.get("validated_sql", state.get("generated_sql", ""))
+    expected_keywords = state.get("expected_keywords", [])
+    settings = load_settings()
+    llm_usage: dict[str, int] | None = None
+    llm_cost_usd: float | None = None
 
-    if rows and "dau" in rows[0]:
-        recent = rows[:2]
-        if len(recent) == 2:
-            trend = "up" if recent[0]["dau"] >= recent[1]["dau"] else "down"
-            analysis = {
-                "summary": f"Latest DAU={recent[0]['dau']} vs previous={recent[1]['dau']}",
-                "trend": trend,
-            }
-    elif rows and "revenue" in rows[0]:
-        values = [float(row["revenue"]) for row in rows]
-        avg = sum(values) / len(values)
-        analysis = {
-            "summary": f"Average revenue over {len(values)} rows is {avg:.2f}",
-            "trend": "computed_average",
-        }
-    elif rows and "retention_rate" in rows[0]:
-        top = rows[0]
-        analysis = {
-            "summary": (
-                f"Top retention video is '{top.get('title', 'unknown')}' "
-                f"with retention_rate={float(top['retention_rate']):.2%}"
-            ),
-            "trend": "top_k",
-        }
+    if not rows:
+        analysis: dict[str, Any] = {"summary": "No rows returned.", "trend": "unknown"}
+    else:
+        analysis = {"summary": "Query executed successfully.", "trend": "unknown"}
+
+        try:
+            client = LLMClient.from_env()
+            response = client.chat_completion(
+                messages=prompt_manager.analysis_messages(
+                    query=query,
+                    sql=validated_sql,
+                    results=rows,
+                    expected_keywords=expected_keywords if expected_keywords else None,
+                ),
+                model=settings.default_router_model,
+                temperature=0.0,
+                stream=False,
+            )
+            content = (
+                response.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+            )
+            llm_usage = response.get("_usage_normalized")
+            llm_cost_usd = response.get("_cost_usd_estimate")
+
+            if content:
+                parsed = _extract_first_json_object(content)
+                if parsed and isinstance(parsed, dict):
+                    analysis = {
+                        "summary": parsed.get("summary", analysis["summary"]),
+                        "trend": parsed.get("trend", "analyzed"),
+                        "insights": parsed.get("insights", []),
+                    }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "LLM analysis failed, using basic summary: {error}", error=str(exc)
+            )
 
     return {
         "analysis_result": analysis,
-        "tool_history": [{"tool": "analyze_result", "status": "ok"}],
+        "tool_history": [
+            {
+                "tool": "analyze_result",
+                "status": "ok",
+                "prompt_name": ANALYSIS_PROMPT_DEFINITION.name,
+                "token_usage": llm_usage,
+                "cost_usd": llm_cost_usd,
+            }
+        ],
         "step_count": state.get("step_count", 0) + 1,
     }
 
@@ -429,7 +587,11 @@ def _unsupported_numeric_claims(answer: str, evidence: list[str]) -> list[str]:
     answer_numbers = set(re.findall(r"\b\d+(?:[.,]\d+)?%?\b", answer))
     evidence_text = " ".join(evidence)
     evidence_numbers = set(re.findall(r"\b\d+(?:[.,]\d+)?%?\b", evidence_text))
-    return [f"numeric_claim:{number}" for number in sorted(answer_numbers) if number not in evidence_numbers]
+    return [
+        f"numeric_claim:{number}"
+        for number in sorted(answer_numbers)
+        if number not in evidence_numbers
+    ]
 
 
 def synthesize_answer(state: AgentState) -> AgentState:
@@ -470,8 +632,12 @@ def synthesize_answer(state: AgentState) -> AgentState:
             answer = "I could not retrieve relevant business documentation for this question."
             confidence = "low"
     elif intent == "mixed":
-        has_sql_validation_error = any(err.get("category") == "SQL_VALIDATION_ERROR" for err in errors)
-        sql_executed = "sql_result" in state and isinstance(state.get("sql_result"), dict)
+        has_sql_validation_error = any(
+            err.get("category") == "SQL_VALIDATION_ERROR" for err in errors
+        )
+        sql_executed = "sql_result" in state and isinstance(
+            state.get("sql_result"), dict
+        )
         has_sql = sql_executed and not has_sql_validation_error
         has_context = bool(retrieved_context)
         if has_sql and has_context:
@@ -497,9 +663,10 @@ def synthesize_answer(state: AgentState) -> AgentState:
             answer = "I could not complete either SQL or retrieval branch for this mixed question."
             confidence = "low"
     else:
-        answer = (
-            "Mình hỗ trợ tốt các câu hỏi phân tích dữ liệu/KPI như: xu hướng DAU, doanh thu, top video, "
-            "hoặc định nghĩa metric. Bạn có thể hỏi theo mẫu: 'DAU 3 ngày gần đây thế nào?'"
+        answer = _llm_synthesize_fallback(
+            query=state.get("user_query", ""),
+            intent=intent,
+            errors=errors,
         )
         confidence = "medium"
 
@@ -526,6 +693,7 @@ def synthesize_answer(state: AgentState) -> AgentState:
         "total_token_usage": total_token_usage,
         "total_cost_usd": round(total_cost_usd, 8),
         "unsupported_claims": unsupported_claims,
+        "context_type": state.get("context_type", "default"),
     }
     return {
         "final_answer": answer,
@@ -537,3 +705,43 @@ def synthesize_answer(state: AgentState) -> AgentState:
         "step_count": state.get("step_count", 0) + 1,
     }
 
+
+def _llm_synthesize_fallback(
+    query: str, intent: str, errors: list[dict[str, Any]]
+) -> str:
+    """
+    Use LLM to synthesize a helpful response when intent is unknown or routing failed.
+    """
+    system_prompt = """You are a helpful data analyst assistant. A user query could not be classified into SQL/RAG/Mixed intent.
+
+If the query asks about data analysis, metrics, KPIs, trends, or business definitions, politely explain what types of questions you can answer and suggest example questions.
+
+If the query is a greeting or conversational, respond friendly and briefly.
+
+Always be helpful and concise. Respond in the same language as the user's query."""
+
+    user_prompt = f"Query: {query}\nPredicted intent: {intent}\nErrors: {errors}\n\nProvide a helpful response."
+
+    try:
+        client = LLMClient.from_env()
+        response = client.chat_completion(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            model="gh/gpt-4o-mini",
+            temperature=0.7,
+            stream=False,
+        )
+        content = (
+            response.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+        if content:
+            return content
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("LLM fallback synthesis failed: {error}", error=str(exc))
+
+    return "I can help with data analysis questions about metrics, trends, and business definitions. Please ask about DAU, revenue, retention, or other KPIs."

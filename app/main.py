@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 from app.graph import build_sql_v1_graph, new_run_config, to_langgraph_config
 from app.logger import logger
@@ -20,7 +21,14 @@ def _extract_numeric_evidence(payload: dict, key: str) -> int | None:
     return None
 
 
-def run_query(user_query: str, recursion_limit: int = 25, db_path: str | None = None) -> dict:
+def run_query(
+    user_query: str,
+    recursion_limit: int = 25,
+    db_path: str | None = None,
+    user_semantic_context: str | None = None,
+    uploaded_files: list[str] | None = None,
+    expected_keywords: list[str] | None = None,
+) -> dict:
     graph = build_sql_v1_graph()
     run_cfg = new_run_config(recursion_limit=recursion_limit)
     tracer = RunTracer(
@@ -29,9 +37,15 @@ def run_query(user_query: str, recursion_limit: int = 25, db_path: str | None = 
         query=user_query,
     )
     tracer_token = set_current_tracer(tracer)
-    graph_input: dict[str, str] = {"user_query": user_query}
+    graph_input: dict[str, Any] = {"user_query": user_query}
     if db_path:
         graph_input["target_db_path"] = str(Path(db_path))
+    if user_semantic_context:
+        graph_input["user_semantic_context"] = user_semantic_context
+    if uploaded_files:
+        graph_input["uploaded_files"] = uploaded_files
+    if expected_keywords:
+        graph_input["expected_keywords"] = expected_keywords
     try:
         output = graph.invoke(
             graph_input,
@@ -46,7 +60,10 @@ def run_query(user_query: str, recursion_limit: int = 25, db_path: str | None = 
         payload["tool_history"] = output.get("tool_history", [])
         payload["rows"] = _extract_numeric_evidence(payload, "rows")
         payload["context_chunks"] = _extract_numeric_evidence(payload, "context_chunks")
-        payload["error_categories"] = [str(item.get("category", "UNKNOWN")) for item in payload.get("errors", [])]
+        payload["error_categories"] = [
+            str(item.get("category", "UNKNOWN")) for item in payload.get("errors", [])
+        ]
+        payload["context_type"] = output.get("context_type", "default")
         tracer.finish(payload=payload, status="success")
         return payload
     except Exception as exc:  # noqa: BLE001
@@ -67,6 +84,7 @@ def run_query(user_query: str, recursion_limit: int = 25, db_path: str | None = 
             "error_categories": ["SYNTHESIS_ERROR"],
             "total_token_usage": None,
             "total_cost_usd": None,
+            "context_type": "default",
         }
         tracer.finish(payload=payload, status="failed", error_message=str(exc))
         return payload
@@ -93,8 +111,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    result = run_query(args.query, recursion_limit=args.recursion_limit, db_path=args.db_path)
-    logger.info("Query completed with confidence={confidence}", confidence=result.get("confidence"))
+    result = run_query(
+        args.query, recursion_limit=args.recursion_limit, db_path=args.db_path
+    )
+    logger.info(
+        "Query completed with confidence={confidence}",
+        confidence=result.get("confidence"),
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

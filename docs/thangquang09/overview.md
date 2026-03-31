@@ -28,6 +28,16 @@ Cập nhật: 2026-03-30
 - Logger chuẩn toàn project: `loguru`
 - API rule bắt buộc: luôn `stream=false`
 
+### Stack cụ thể cho Text2SQL + Memory
+- Checklist kỹ thuật chi tiết (công nghệ + module + tiêu chí done):
+  - `docs/thangquang09/text2sql_memory_implementation_checklist_2026-03-30.md`
+- Tóm tắt công nghệ đang/chốt dùng:
+  - Orchestration: `LangGraph`
+  - SQL runtime: `SQLite` + deterministic SQL guardrail
+  - Retrieval: local vector index (hybrid vector/graph roadmap cho memory)
+  - Observability: `loguru` + JSONL traces
+  - Eval: `evals/runner.py` (domain/spider + memory stress planned)
+
 ## 4) Test để ổn định (mới thêm)
 Mục tiêu: tránh việc phải chạy đi chạy lại nhiều lệnh thủ công.
 
@@ -132,3 +142,87 @@ Test regression đã thêm:
 - Cấu hình mới:
   - `TRACE_JSONL_PATH` (default: `evals/reports/traces.jsonl`)
   - `ENABLE_LANGFUSE` (default: `true`)
+
+## 12) Streamlit logic upgrade (2026-03-30)
+- Refactor `streamlit_app.py` sang kiểu **chatbot thực thụ** với `st.chat_input` + `st.chat_message`.
+- Thêm hàng đợi `pending_queries` để xử lý tuần tự khi người dùng gửi liên tục (spam query).
+- Mỗi query có trạng thái assistant `thinking` trước khi trả kết quả.
+- Kết quả mỗi turn giữ đầy đủ debug panel:
+  - metrics: confidence / intent / tokens / cost
+  - logs: SQL / Trace / Errors / Raw payload
+- Thêm sidebar session control:
+  - trạng thái `idle|processing`
+  - số lượng query đang chờ
+  - nút `Clear Chat History`
+- Logging theo chuẩn project (`loguru`) ở các boundary của luồng Streamlit.
+- Regression check: `uv run pytest -q` => `19 passed`.
+
+## 13) Bugfix: natural question routing (2026-03-30)
+- Vấn đề: câu hỏi kiểu tự nhiên/capability như `bạn có thể làm gì?` bị route sang `rag` khiến flow không hợp lý.
+- Đã fix:
+  - Router hỗ trợ intent `unknown` (LLM output + fallback keyword).
+  - Graph route `unknown` đi thẳng `synthesize_answer`, không gọi SQL/RAG tools.
+  - `synthesize_answer` thêm câu trả lời capability rõ ràng cho `unknown`.
+- Không thay đổi rule-based SQL trong đợt fix này (theo yêu cầu).
+- Regression tests đã thêm:
+  - `test_route_intent_fallback_handles_natural_question_as_unknown`
+  - `test_graph_unknown_intent_goes_direct_to_synthesize`
+- Verify: `uv run pytest -q` => `21 passed`.
+
+## 14) Prompt hardening + Langfuse management (2026-03-30)
+- Added `PromptManager` to pull router/SQL prompts from Langfuse (with per-prompt caching) and keep local templates as fallbacks when credentials are missing or offline.
+- Router prompt now requires JSON intent output, logs the prompt name in `tool_history`, and uses Langfuse fallback when the API is unavailable; SQL prompt reiterates read-only rules and schema grounding before every generation call.
+- NotebookLM prompt-hardening queries (commands issued via session IDs 34781 and 39650) plus Langfuse prompt-management docs shaped the anti-hallucination checklist collected at `docs/research/notes/prompt_hardening_2026-03-30.md`.
+- Tests impacted: `tests/test_prompt_manager.py`, `tests/test_graph_flow.py` (autouse fixture for disabling LLM SQL), plus `uv run pytest -q` => `26 passed`.
+
+## 15) Regression fix: empty SQL after prompt-manager migration (2026-03-30)
+- Root cause: SQL extractor in `generate_sql` parsed markdown fences with `split("```")[-1]`, which returns empty string when the model emits a standard ` ```sql ... ``` ` block.
+- Fix: add `_extract_sql_from_content(...)` in `app/graph/nodes.py` that:
+  - prefers fenced SQL blocks,
+  - falls back to first `SELECT/WITH` statement,
+  - otherwise keeps raw content.
+- Added regression test `test_generate_sql_extracts_from_markdown_fence`.
+- Verify:
+  - `uv run pytest -q` => all tests pass
+  - `uv run python -m app.main "DAU 7 ngày gần đây như thế nào?"` now validates SQL and executes query successfully.
+
+## 16) Langfuse prompt issue note (2026-03-30)
+- Current runtime warning observed:
+  - `Langfuse.get_prompt() got an unexpected keyword argument 'labels'`
+- Impact:
+  - Prompt fetch from Langfuse fails for now, but local prompt fallback remains active and stable.
+- Decision:
+  - Keep this as a tracked issue only (non-blocking) per current project priority.
+  - Continue using local prompt templates while preserving Langfuse prompt-manager structure for later SDK/version alignment.
+
+## 17) Week2 Day5 + Week3 Day3 completion (2026-03-30)
+- Week2 Day5:
+  - Streamlit now includes sample query buttons in sidebar (`SQL`, `RAG`, `Mixed`) to speed up demo flow.
+- Week3 Day3:
+  - Added groundedness baseline module at `evals/groundedness.py`.
+  - Eval runner now computes:
+    - `groundedness_score`
+    - `groundedness_pass`
+    - `unsupported_claims`
+    - `groundedness_fail_reasons`
+    - `marked_answer`
+  - Gate threshold extended with `groundedness_pass_rate`.
+  - Failure taxonomy extended with `HALLUCINATION_RISK` when groundedness check fails.
+  - Runtime answer payload now includes `unsupported_claims`; if detected, answer is marked with `[UNSUPPORTED_CLAIMS] ...`.
+
+## 18) WSL path migration for eval stability (2026-03-30)
+- Problem confirmed:
+  - Eval cases used Windows-style paths (`data\\...`) while running in WSL.
+  - SQLite opened unintended empty DB files, causing widespread `Unknown table(s)` and low SQL validity.
+- Implemented fixes:
+  - `evals/case_contracts.py`: normalize `target_db_path` on load (`\\` -> `/`).
+  - `evals/build_cases.py`: always emit POSIX-style `target_db_path` via `.as_posix()`.
+  - Rewrote `evals/cases/domain_cases.jsonl` and `evals/cases/spider_cases.jsonl` with normalized paths.
+  - Removed accidental backslash-named DB artifacts created in repo root.
+- Re-run result (`uv run python -m evals.runner`):
+  - `sql_validity_rate`: **0.2727 -> 0.7500**
+  - `tool_path_accuracy`: **0.2500 -> 0.7273**
+  - `groundedness_pass_rate`: **0.1591 -> 0.2045**
+- Remaining top blockers after WSL migration:
+  - SQL validator still flags CTE aliases as unknown tables in some domain cases (`last_7_days`, `last_two_days`, `recent_dates`).
+  - Groundedness rule is overly strict by treating retrieval scores/time tokens as unsupported numeric claims.

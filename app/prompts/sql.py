@@ -33,8 +33,12 @@ SQL_PROMPT_DEFINITION = PromptDefinition(
                 "{{query}}\n\n"
                 "Schema context:\n"
                 "{{schema_context}}\n\n"
-                "Dataset context (row counts, min/max dates, sample rows):\n"
+                "Dataset stats (row counts, min/max dates, sample rows):\n"
                 "{{dataset_context}}\n\n"
+                "{{#if semantic_context}}"
+                "Relevant semantic context:\n"
+                "{{semantic_context}}\n\n"
+                "{{/if}}"
                 "Return SQL only."
             ),
         },

@@ -1,5 +1,5 @@
 # Eval Pipeline (Dataset-Driven)
-Updated: 2026-03-30
+Updated: 2026-03-31
 
 ## Goal
 Run behavior-first evaluation with real datasets instead of hardcoded default queries.
@@ -30,6 +30,11 @@ Spider-only run:
 uv run python -m evals.runner --suite spider
 ```
 
+Domain-only run (12 cases, fast):
+```powershell
+uv run python -m evals.runner --suite domain --limit 12
+```
+
 Gate-enforced run:
 ```powershell
 uv run python -m evals.runner --suite all --enforce-gates
@@ -50,3 +55,16 @@ uv run python -m evals.runner --suite spider --enable-llm-sql-generation
 - `sql_validity_rate >= 0.90`
 - `tool_path_accuracy >= 0.95`
 - `answer_format_validity == 1.00`
+- `groundedness_pass_rate >= 0.70`
+
+## Latest Results (2026-03-31, LLM-Generalized)
+After removing hardcoded logic and making all nodes LLM-driven:
+- routing_accuracy: **1.0**
+- tool_path_accuracy: **1.0**
+- sql_validity_rate: **1.0**
+- answer_format_validity: **1.0**
+- groundedness_pass_rate: **0.1667** (needs improvement - see `EVAL_FIX_TASK.md`)
+
+## Known Issue: Groundedness
+The low groundedness score (~0.17) is due to keyword-based evaluation mismatch, NOT agent quality.
+See `docs/research/evaluation/EVAL_FIX_TASK.md` for fix specification.

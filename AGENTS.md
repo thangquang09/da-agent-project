@@ -816,3 +816,144 @@ This section upgrades the draft with concrete implementation defaults.
   - `info`: normal flow events
   - `warning`: recoverable issues or degraded mode
   - `error`/`exception`: failed operations
+
+---
+
+## Development Commands
+
+### Running the Application
+```bash
+# Streamlit app
+streamlit run streamlit_app.py
+
+# MCP server
+python -m mcp_server.server
+
+# CLI main
+python -m app.main
+```
+
+### Testing
+```bash
+# Run all tests
+pytest
+
+# Run a single test file
+pytest tests/test_sql_tools.py
+
+# Run a single test function
+pytest tests/test_sql_tools.py::test_validate_sql_accepts_read_only_query -v
+
+# Run tests matching a pattern
+pytest -k "validate_sql"
+
+# Run with coverage
+pytest --cov=app --cov-report=term-missing
+
+# Run evals
+python evals/runner.py
+```
+
+### Database Setup
+```bash
+# Create seed database
+python data/seeds/create_seed_db.py
+```
+
+---
+
+## Code Style Guidelines
+
+### Imports
+- Always use `from __future__ import annotations` as the first import.
+- Group imports in order: stdlib, third-party, local/project.
+- Use explicit imports (no `import *` except in `__init__.py`).
+- Example:
+  ```python
+  from __future__ import annotations
+  
+  import re
+  import sqlite3
+  from dataclasses import dataclass
+  from pathlib import Path
+  from typing import Any
+  
+  from app.config import load_settings
+  from app.logger import logger
+  ```
+
+### Type Hints
+- Use modern Python type hints with `|` for unions (e.g., `Path | None`).
+- Use `TypedDict` for structured dicts (state, payloads).
+- Use `Literal` for enum-like string constants (intent, confidence).
+- Use `Annotated[..., operator.add]` for LangGraph state fields that accumulate.
+- Example:
+  ```python
+  Intent = Literal["sql", "rag", "mixed", "unknown"]
+  
+  class AgentState(TypedDict, total=False):
+      user_query: str
+      intent: Intent
+      tool_history: Annotated[list[dict[str, Any]], operator.add]
+  ```
+
+### Naming Conventions
+- **Files**: snake_case (e.g., `get_schema.py`, `query_sql.py`)
+- **Classes**: PascalCase (e.g., `SQLValidationResult`, `AgentState`)
+- **Functions/methods**: snake_case (e.g., `validate_sql`, `get_schema_overview`)
+- **Constants**: SCREAMING_SNAKE_CASE (e.g., `FORBIDDEN_SQL_PATTERNS`)
+- **Type variables**: PascalCase (e.g., `Intent`, `Confidence`)
+- **Private helpers**: prefix with underscore (e.g., `_default_db_path`)
+
+### Data Classes
+- Use `@dataclass(frozen=True)` for immutable data structures (configs, validation results).
+- Example:
+  ```python
+  @dataclass(frozen=True)
+  class SQLValidationResult:
+      is_valid: bool
+      sanitized_sql: str
+      reasons: list[str]
+      detected_tables: list[str]
+  ```
+
+### Error Handling
+- Use specific exception types; avoid bare `except:`.
+- Let exceptions propagate for unrecoverable errors.
+- Log errors with `logger.exception()` at the boundary where they are caught.
+- Return validation results with `is_valid=False` and `reasons` list instead of raising for expected validation failures.
+
+### SQL Safety
+- All SQL operations must go through `validate_sql` before execution.
+- Never allow: INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, REPLACE.
+- Only allow SELECT and CTE queries.
+- Always use parameterized queries via sqlite3; never interpolate user input directly.
+
+### Logging Patterns
+- Use loguru's structured logging with named placeholders: `logger.info("msg {key}", key=value)`.
+- Log at component boundaries with `logger.info()` for start/completion.
+- Use `logger.warning()` for recoverable issues (e.g., missing optional config).
+- Use `logger.exception()` when catching and logging errors.
+
+### Testing Patterns
+- Use `pytest` with fixtures from `conftest.py`.
+- Test file naming: `test_<module_name>.py`.
+- Use `monkeypatch` for mocking LLM clients and environment variables.
+- Create dummy client classes with `chat_completion` method for mocking.
+- Example:
+  ```python
+  class _DummyRouterClient:
+      def chat_completion(self, **kwargs):  # noqa: ANN003
+          return {"choices": [{"message": {"content": '{"intent":"sql"}'}]}
+  ```
+
+### State Management
+- Keep critical artifacts explicit in state: `intent`, `generated_sql`, `retrieved_context`, `tool_history`, `errors`.
+- Use `Annotated[list, operator.add]` for fields that accumulate across nodes.
+- Never hide intermediate values; they are needed for tracing and evaluation.
+
+### Module Organization
+- Each tool should have explicit input/output schemas.
+- Keep business logic in tools, not buried in prompts.
+- Use `__init__.py` to expose public API with `__all__`.
+- Place MCP server in separate adapter layer (`mcp_server/`).

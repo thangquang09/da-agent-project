@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from pydotenv import Environment
+from dotenv import load_dotenv
 
 from app.logger import logger
 
@@ -15,30 +15,20 @@ ENV_PATH = PROJECT_ROOT / ".env"
 MODELS_PATH = PROJECT_ROOT / "models.txt"
 
 
-def _load_dotenv(path: Path) -> None:
-    env_file = Environment(file_path=str(path), check_file_exists=False)
-    loaded_keys = 0
-
-    for key, value in env_file.items():
-        if key and key not in os.environ:
-            clean_value = value.strip()
-            if (
-                len(clean_value) >= 2
-                and clean_value[0] == clean_value[-1]
-                and clean_value[0] in {"'", '"'}
-            ):
-                clean_value = clean_value[1:-1]
-            os.environ[key] = clean_value
-            loaded_keys += 1
-
-    logger.info("Loaded {count} env keys from {path}", count=loaded_keys, path=path)
+def _load_dotenv() -> None:
+    loaded = load_dotenv(dotenv_path=str(ENV_PATH), override=False)
+    logger.info("Loaded env from {path} (found={found})", path=ENV_PATH, found=loaded)
 
 
 def load_model_list(path: Path = MODELS_PATH) -> list[str]:
     if not path.exists():
         logger.warning("Model list not found at {path}", path=path)
         return []
-    models = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    models = [
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
     logger.info("Loaded {count} models from {path}", count=len(models), path=path)
     return models
 
@@ -84,7 +74,7 @@ def _env_int(value: str | None, default: int) -> int:
 
 @lru_cache(maxsize=1)
 def load_settings() -> Settings:
-    _load_dotenv(ENV_PATH)
+    _load_dotenv()
 
     models = load_model_list()
     default_router_model = os.getenv("DEFAULT_ROUTER_MODEL", "gh/gpt-4o-mini")
@@ -103,7 +93,9 @@ def load_settings() -> Settings:
             "SQLITE_DB_PATH",
             str(PROJECT_ROOT / "data" / "warehouse" / "analytics.db"),
         ),
-        enable_llm_sql_generation=_env_bool(os.getenv("ENABLE_LLM_SQL_GENERATION"), True),
+        enable_llm_sql_generation=_env_bool(
+            os.getenv("ENABLE_LLM_SQL_GENERATION"), True
+        ),
         trace_jsonl_path=os.getenv(
             "TRACE_JSONL_PATH",
             str(PROJECT_ROOT / "evals" / "reports" / "traces.jsonl"),
@@ -123,14 +115,18 @@ def load_settings() -> Settings:
             if item.strip()
         ),
         langfuse_project_name=os.getenv("LANGFUSE_PROJECT_NAME", "da-agent-project"),
-        langfuse_project_id=os.getenv("LANGFUSE_PROJECT_ID", "cmncpq4xj0010ad07yughrjzi"),
+        langfuse_project_id=os.getenv(
+            "LANGFUSE_PROJECT_ID", "cmncpq4xj0010ad07yughrjzi"
+        ),
         langfuse_org_name=os.getenv("LANGFUSE_ORG_NAME", "Kyanon_AppliedTrainee"),
         langfuse_org_id=os.getenv("LANGFUSE_ORG_ID", "cmcfrrpid00gcad07cln6jg0f"),
         langfuse_cloud_region=os.getenv("LANGFUSE_CLOUD_REGION", "EU"),
     )
 
     if not settings.llm_api_key:
-        logger.warning("LLM_API_KEY is empty. API calls will fail until key is provided.")
+        logger.warning(
+            "LLM_API_KEY is empty. API calls will fail until key is provided."
+        )
 
     logger.info(
         "Settings ready (router_model={router}, synthesis_model={synthesis}, api_url={url})",

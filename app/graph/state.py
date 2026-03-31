@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal, TypedDict
 
 Intent = Literal["sql", "rag", "mixed", "unknown"]
 Confidence = Literal["high", "medium", "low"]
+ContextType = Literal["user_provided", "csv_auto", "mixed", "default"]
 
 
 class AnswerPayload(TypedDict, total=False):
@@ -19,6 +20,7 @@ class AnswerPayload(TypedDict, total=False):
     total_token_usage: int
     total_cost_usd: float
     unsupported_claims: list[str]
+    context_type: ContextType
 
 
 class AgentState(TypedDict, total=False):
@@ -29,6 +31,10 @@ class AgentState(TypedDict, total=False):
     messages: Annotated[list[dict[str, Any]], operator.add]
     schema_context: str
     dataset_context: str
+    user_semantic_context: str
+    retrieved_dataset_context: list[dict[str, Any]]
+    context_type: ContextType
+    uploaded_files: list[str]
     retrieved_context: list[dict[str, Any]]
     generated_sql: str
     validated_sql: str
@@ -41,11 +47,14 @@ class AgentState(TypedDict, total=False):
     step_count: int
     confidence: Confidence
     run_id: str
+    expected_keywords: list[str]
 
 
 class GraphInputState(TypedDict, total=False):
     user_query: str
     target_db_path: str
+    user_semantic_context: str
+    uploaded_files: list[str]
 
 
 class GraphOutputState(TypedDict, total=False):
@@ -56,3 +65,4 @@ class GraphOutputState(TypedDict, total=False):
     errors: list[dict[str, Any]]
     step_count: int
     run_id: str
+    context_type: ContextType

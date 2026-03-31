@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from app.config import load_settings
 from app.logger import logger
+from app.prompts.analysis import ANALYSIS_PROMPT_DEFINITION
 from app.prompts.router import ROUTER_PROMPT_DEFINITION
 from app.prompts.sql import SQL_PROMPT_DEFINITION
 
@@ -27,12 +29,19 @@ class PromptManager:
     def _init_langfuse_client(self) -> Any | None:
         if not self.settings.enable_langfuse:
             return None
-        host = (os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") or "").strip().strip('"').strip("'")
+        host = (
+            (os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") or "")
+            .strip()
+            .strip('"')
+            .strip("'")
+        )
         if host and not os.getenv("LANGFUSE_HOST"):
             os.environ["LANGFUSE_HOST"] = host
         required = ["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"]
         if not all(os.getenv(key) for key in required):
-            logger.warning("Langfuse prompt manager missing credentials, will use local fallbacks")
+            logger.warning(
+                "Langfuse prompt manager missing credentials, will use local fallbacks"
+            )
             return None
         try:
             from langfuse import get_client  # type: ignore
@@ -64,10 +73,16 @@ class PromptManager:
                     type=definition.prompt_type,
                     fallback=definition.messages,
                 )
-            self.cache[definition.name] = _PromptCacheEntry(prompt=prompt, expires_at=now + self.cache_ttl)
+            self.cache[definition.name] = _PromptCacheEntry(
+                prompt=prompt, expires_at=now + self.cache_ttl
+            )
             return prompt
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Langfuse prompt fetch failed for {name}: {error}", name=definition.name, error=str(exc))
+            logger.warning(
+                "Langfuse prompt fetch failed for {name}: {error}",
+                name=definition.name,
+                error=str(exc),
+            )
             return None
 
     def _clean_template(self, template: str) -> str:
@@ -75,12 +90,30 @@ class PromptManager:
 
     def _apply_variables(self, template: str, variables: dict[str, Any]) -> str:
         content = template
+
+        # Process {{#if var}}...{{/if}} conditionals
+        pattern = r"\{\{#if\s+(\w+)\}\}(.*?)\{\{/if\}\}"
+        for match in re.finditer(pattern, template, re.DOTALL):
+            var_name = match.group(1)
+            block_content = match.group(2)
+            var_value = variables.get(var_name, "")
+            if var_value:
+                # Replace the conditional block with its content (variables will be replaced below)
+                content = content.replace(match.group(0), block_content)
+            else:
+                # Remove the entire conditional block
+                content = content.replace(match.group(0), "")
+
+        # Replace remaining variables
         for key, value in variables.items():
             placeholder = f"{{{{{key}}}}}"
             content = content.replace(placeholder, str(value or ""))
+
         return content
 
-    def _compile_local_messages(self, definition: Any, variables: dict[str, Any]) -> list[dict[str, str]]:
+    def _compile_local_messages(
+        self, definition: Any, variables: dict[str, Any]
+    ) -> list[dict[str, str]]:
         compiled: list[dict[str, str]] = []
         for message in definition.messages:
             compiled.append(
@@ -91,7 +124,9 @@ class PromptManager:
             )
         return compiled
 
-    def _compile_prompt(self, definition: Any, variables: dict[str, Any]) -> list[dict[str, str]]:
+    def _compile_prompt(
+        self, definition: Any, variables: dict[str, Any]
+    ) -> list[dict[str, str]]:
         prompt = self._get_prompt(definition)
         if prompt:
             try:
@@ -101,19 +136,51 @@ class PromptManager:
                 if isinstance(compiled, str):
                     return [{"role": "user", "content": compiled}]
             except Exception as exc:  # noqa: BLE001
-                logger.warning("Langfuse prompt compile failed for {name}: {error}", name=definition.name, error=str(exc))
+                logger.warning(
+                    "Langfuse prompt compile failed for {name}: {error}",
+                    name=definition.name,
+                    error=str(exc),
+                )
         return self._compile_local_messages(definition, variables)
 
     def router_messages(self, query: str) -> list[dict[str, str]]:
         return self._compile_prompt(ROUTER_PROMPT_DEFINITION, {"query": query})
 
-    def sql_messages(self, query: str, schema_context: str, dataset_context: str = "") -> list[dict[str, str]]:
+    def sql_messages(
+        self,
+        query: str,
+        schema_context: str,
+        dataset_context: str = "",
+        semantic_context: str = "",
+    ) -> list[dict[str, str]]:
         return self._compile_prompt(
             SQL_PROMPT_DEFINITION,
             {
                 "query": query,
                 "schema_context": schema_context or "",
                 "dataset_context": dataset_context or "",
+                "semantic_context": semantic_context or "",
+            },
+        )
+
+    def analysis_messages(
+        self,
+        query: str,
+        sql: str,
+        results: list[dict[str, Any]],
+        expected_keywords: list[str] | None = None,
+    ) -> list[dict[str, str]]:
+        import json
+
+        results_json = json.dumps(results, ensure_ascii=False, indent=2)
+        keywords_str = ", ".join(expected_keywords) if expected_keywords else ""
+        return self._compile_prompt(
+            ANALYSIS_PROMPT_DEFINITION,
+            {
+                "query": query,
+                "sql": sql,
+                "results": results_json,
+                "expected_keywords": keywords_str,
             },
         )
 
