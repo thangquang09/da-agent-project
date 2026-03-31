@@ -56,6 +56,8 @@ class AgentState(TypedDict, total=False):
     confidence: Confidence
     run_id: str
     expected_keywords: list[str]
+    file_cache: dict[str, Any]  # Session-level CSV cache: hash_key -> metadata
+    skipped_tables: list[str]  # Tables skipped due to caching
 
 
 class GraphInputState(TypedDict, total=False):

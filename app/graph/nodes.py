@@ -950,17 +950,24 @@ def process_uploaded_files(state: AgentState) -> AgentState:
     1. Validate file (size, encoding, delimiter)
     2. Profile data (schema, stats)
     3. Auto-register as table in SQLite database
+
+    Uses session-level caching to avoid re-processing the same files.
     """
+    from datetime import datetime
     from pathlib import Path
     from tempfile import NamedTemporaryFile
 
     from app.tools.auto_register import auto_register_csv
+    from app.tools.check_table_exists import table_exists
+    from app.utils.file_hash import compute_file_hash
 
     uploaded_file_data = state.get("uploaded_file_data", [])
+    file_cache = state.get("file_cache", {})
     if not uploaded_file_data:
         logger.info("No uploaded files to process")
         return {
             "registered_tables": [],
+            "file_cache": file_cache,
             "step_count": state.get("step_count", 0) + 1,
             "tool_history": [
                 {
@@ -975,6 +982,7 @@ def process_uploaded_files(state: AgentState) -> AgentState:
         Path(__file__).parent.parent.parent / "data" / "warehouse" / "analytics.db"
     )
     registered_tables: list[str] = []
+    skipped_tables: list[str] = []
     tool_history_entries: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
 
@@ -991,6 +999,56 @@ def process_uploaded_files(state: AgentState) -> AgentState:
             )
             continue
 
+        # Generate cache key
+        file_hash = compute_file_hash(file_bytes)
+        table_name = Path(filename).stem
+        cache_key = f"{db_path}::{table_name}::{file_hash}"
+
+        # Check session cache first
+        if cache_key in file_cache:
+            logger.info(
+                "Cache hit for {filename} (table: {table}), skipping re-registration",
+                filename=filename,
+                table=table_name,
+            )
+            registered_tables.append(table_name)
+            skipped_tables.append(table_name)
+            tool_history_entries.append(
+                {
+                    "tool": "auto_register_csv",
+                    "status": "cached",
+                    "file": filename,
+                    "table": table_name,
+                    "source": "session_cache",
+                }
+            )
+            continue
+
+        # Check if table exists in DB (might be from previous session)
+        if table_exists(db_path, table_name):
+            logger.info(
+                "Table {table} exists in DB, adding to cache",
+                table=table_name,
+            )
+            file_cache[cache_key] = {
+                "table_name": table_name,
+                "cached_at": datetime.now().isoformat(),
+                "source": "db_check",
+            }
+            registered_tables.append(table_name)
+            skipped_tables.append(table_name)
+            tool_history_entries.append(
+                {
+                    "tool": "auto_register_csv",
+                    "status": "cached",
+                    "file": filename,
+                    "table": table_name,
+                    "source": "db_check",
+                }
+            )
+            continue
+
+        # Not cached - proceed with full registration
         try:
             with NamedTemporaryFile(mode="wb", suffix=".csv", delete=False) as tmp:
                 tmp.write(file_bytes)
@@ -999,7 +1057,7 @@ def process_uploaded_files(state: AgentState) -> AgentState:
             result, error = auto_register_csv(
                 file_path=tmp_path,
                 db_path=db_path,
-                table_name=Path(filename).stem,
+                table_name=table_name,
             )
 
             Path(tmp_path).unlink(missing_ok=True)
@@ -1022,6 +1080,14 @@ def process_uploaded_files(state: AgentState) -> AgentState:
                 )
             else:
                 registered_tables.append(result.table_name)
+                # Add to cache
+                file_cache[cache_key] = {
+                    "table_name": result.table_name,
+                    "row_count": result.row_count,
+                    "columns": len(result.columns),
+                    "cached_at": datetime.now().isoformat(),
+                    "source": "registration",
+                }
                 tool_history_entries.append(
                     {
                         "tool": "auto_register_csv",
@@ -1058,6 +1124,8 @@ def process_uploaded_files(state: AgentState) -> AgentState:
 
     return {
         "registered_tables": registered_tables,
+        "file_cache": file_cache,
+        "skipped_tables": skipped_tables,
         "errors": errors,
         "step_count": state.get("step_count", 0) + 1,
         "tool_history": tool_history_entries,
