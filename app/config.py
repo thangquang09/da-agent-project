@@ -105,7 +105,7 @@ def load_settings() -> Settings:
     settings = Settings(
         llm_api_url=os.getenv(
             "LLM_API_URL",
-            "https://thangquangly0909--9router-web.modal.run/v1/chat/completions",
+            "https://api.openai.com/v1/chat/completions",
         ),
         llm_api_key=os.getenv("LLM_API_KEY", ""),
         default_router_model=default_router_model,
@@ -137,11 +137,9 @@ def load_settings() -> Settings:
             if item.strip()
         ),
         langfuse_project_name=os.getenv("LANGFUSE_PROJECT_NAME", "da-agent-project"),
-        langfuse_project_id=os.getenv(
-            "LANGFUSE_PROJECT_ID", "cmncpq4xj0010ad07yughrjzi"
-        ),
-        langfuse_org_name=os.getenv("LANGFUSE_ORG_NAME", "Kyanon_AppliedTrainee"),
-        langfuse_org_id=os.getenv("LANGFUSE_ORG_ID", "cmcfrrpid00gcad07cln6jg0f"),
+        langfuse_project_id=os.getenv("LANGFUSE_PROJECT_ID", ""),
+        langfuse_org_name=os.getenv("LANGFUSE_ORG_NAME", ""),
+        langfuse_org_id=os.getenv("LANGFUSE_ORG_ID", ""),
         langfuse_cloud_region=os.getenv("LANGFUSE_CLOUD_REGION", "EU"),
         # Node-specific model configuration
         model_router=model_router,

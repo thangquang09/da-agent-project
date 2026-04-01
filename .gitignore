@@ -66,7 +66,12 @@ skills-lock.json
 evals/reports/
 evals/reports/traces.jsonl
 
+# Local scratch / test files (may contain real credentials)
+curl_command.txt
+
 # Graph export images (re-generated via export_graph.py)
-docs/thangquang09/langgraph_graph.png
-docs/thangquang09/langgraph_graph.svg
+docs/thangquang09/langgraph_graph_v1.png
+docs/thangquang09/langgraph_graph_v2.png
+docs/thangquang09/langgraph_graph_v1.mmd
+docs/thangquang09/langgraph_graph_v2.mmd
 docs/thangquang09/_render.html
