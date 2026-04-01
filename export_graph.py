@@ -1,7 +1,9 @@
-"""Export LangGraph graph as Mermaid (.mmd) and image (.png).
+"""Export LangGraph graph(s) as Mermaid (.mmd) and image (.png).
 
 Usage:
-    .venv/bin/python export_graph.py              # saves to docs/thangquang09/
+    .venv/bin/python export_graph.py              # exports all graphs to docs/thangquang09/
+    .venv/bin/python export_graph.py --version v1 # export only v1
+    .venv/bin/python export_graph.py --version v2 # export only v2
     .venv/bin/python export_graph.py --output ./  # custom output dir
 """
 
@@ -15,7 +17,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-from app.graph.graph import build_sql_v1_graph
+from app.graph.graph import build_sql_v1_graph, build_sql_v2_graph
 
 _MERMAID_HTML = """\
 <!DOCTYPE html>
@@ -39,27 +41,18 @@ _MERMAID_HTML = """\
 </html>
 """
 
+GRAPHS = {
+    "v1": ("langgraph_graph_v1", build_sql_v1_graph),
+    "v2": ("langgraph_graph_v2", build_sql_v2_graph),
+}
 
-def export_graph(output_dir: Path) -> None:
-    """Build the graph, export .mmd and .png files."""
-    graph = build_sql_v1_graph()
-    mermaid_text = graph.get_graph().draw_mermaid()
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # 1. Save Mermaid source
-    mmd_path = output_dir / "langgraph_graph.mmd"
-    mmd_path.write_text(mermaid_text)
-    print(f"[ok] Mermaid source: {mmd_path}")
-
-    # 2. Render PNG via Playwright + local HTTP server
+def _render_mermaid_png(mermaid_text: str, png_path: Path) -> None:
+    """Render a mermaid diagram to PNG using Playwright + local HTTP server."""
     html = _MERMAID_HTML.format(diagram=mermaid_text)
-    html_path = output_dir / "_render.html"
+    html_path = png_path.parent / "_render.html"
     html_path.write_text(html)
 
-    png_path = output_dir / "langgraph_graph.png"
-
-    # Start local HTTP server to avoid file:// CORS issues with CDN
     handler = http.server.SimpleHTTPRequestHandler
     port = 8765
     with socketserver.TCPServer(("127.0.0.1", port), handler) as httpd:
@@ -70,16 +63,13 @@ def export_graph(output_dir: Path) -> None:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1920, "height": 1080})
 
-            # Serve via HTTP to allow external scripts
             url = f"http://127.0.0.1:{port}/{html_path}"
             print(f"[info] Loading: {url}")
             page.goto(url, wait_until="networkidle", timeout=60_000)
 
-            # Wait for SVG to appear
             page.wait_for_selector("div.mermaid svg", timeout=30_000)
             page.wait_for_timeout(2000)
 
-            # Debug: check SVG content
             svg_outer = page.eval_on_selector("div.mermaid svg", "el => el.outerHTML")
             print(f"[info] SVG length: {len(svg_outer)} chars")
 
@@ -87,7 +77,6 @@ def export_graph(output_dir: Path) -> None:
                 print("[warn] SVG seems empty, waiting more...")
                 page.wait_for_timeout(5000)
 
-            # Take screenshot
             page.screenshot(path=str(png_path), full_page=True)
             browser.close()
 
@@ -95,7 +84,23 @@ def export_graph(output_dir: Path) -> None:
 
     html_path.unlink(missing_ok=True)
 
-    # Verify output
+
+def export_graph(name: str, prefix: str, build_fn, output_dir: Path) -> None:
+    """Build a single graph and export .mmd + .png files."""
+    graph = build_fn()
+    mermaid_text = graph.get_graph().draw_mermaid()
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Save Mermaid source
+    mmd_path = output_dir / f"{prefix}.mmd"
+    mmd_path.write_text(mermaid_text)
+    print(f"[ok] Mermaid source: {mmd_path}")
+
+    # 2. Render PNG
+    png_path = output_dir / f"{prefix}.png"
+    _render_mermaid_png(mermaid_text, png_path)
+
     png_size = png_path.stat().st_size
     print(f"[ok] PNG image: {png_path} ({png_size:,} bytes)")
 
@@ -104,7 +109,13 @@ def export_graph(output_dir: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Export LangGraph graph diagram")
+    parser = argparse.ArgumentParser(description="Export LangGraph graph diagram(s)")
+    parser.add_argument(
+        "--version",
+        choices=["v1", "v2", "all"],
+        default="all",
+        help="Which graph version to export (default: all)",
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -112,7 +123,12 @@ def main() -> None:
         help="Output directory (default: docs/thangquang09)",
     )
     args = parser.parse_args()
-    export_graph(args.output)
+
+    versions = ["v1", "v2"] if args.version == "all" else [args.version]
+    for v in versions:
+        prefix, build_fn = GRAPHS[v]
+        print(f"\n--- Exporting {v.upper()} ---")
+        export_graph(v, prefix, build_fn, args.output)
 
 
 if __name__ == "__main__":

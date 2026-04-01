@@ -25,10 +25,16 @@ class ExecutionAccuracyResult:
 
 
 def _normalize_result_rows(rows: list[dict[str, Any]], limit: int = 100) -> list[tuple]:
+    """Normalize result rows for comparison.
+
+    Lowercases column names so that ``SELECT Name`` and ``SELECT name``
+    are treated as equivalent.  Values are stringified for safe comparison
+    across heterogeneous SQLite types.
+    """
     compact = rows[:limit]
     normalized: list[tuple] = []
     for row in compact:
-        items = tuple(sorted((str(k), str(v)) for k, v in row.items()))
+        items = tuple(sorted((str(k).lower(), str(v)) for k, v in row.items()))
         normalized.append(items)
     normalized.sort()
     return normalized
@@ -132,8 +138,8 @@ class ExecutionAccuracyEvaluator:
                 result_comparison="row_count_mismatch",
                 error=None,
             )
-        gold_cols = set(gold_rows[0].keys()) if gold_rows else set()
-        pred_cols = set(pred_rows[0].keys()) if pred_rows else set()
+        gold_cols = {k.lower() for k in gold_rows[0].keys()} if gold_rows else set()
+        pred_cols = {k.lower() for k in pred_rows[0].keys()} if pred_rows else set()
         if gold_cols != pred_cols:
             return ExecutionAccuracyResult(
                 execution_match=False,

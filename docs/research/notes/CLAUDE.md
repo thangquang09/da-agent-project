@@ -1,4 +1,4 @@
-﻿# AGENTS.md - docs/research/notes/
+# CLAUDE.md - docs/research/notes/
 
 Folder nay chua ghi chu nghien cuu tong hop (ly thuyet + practical playbook).
 

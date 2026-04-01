@@ -10,22 +10,22 @@ from app.logger import logger
 
 def route_after_context_detection(
     state: AgentState,
-) -> Literal["process_uploaded_files", "route_intent"]:
+) -> Literal["process_uploaded_files", "inject_session_context"]:
     """
     After context detection, check if there are uploaded files to process.
-    If yes, route to process_uploaded_files. Otherwise, go directly to route_intent.
+    If yes, route to process_uploaded_files. Otherwise, go directly to inject_session_context.
     """
     uploaded_file_data = state.get("uploaded_file_data", [])
     if uploaded_file_data:
         return "process_uploaded_files"
-    return "route_intent"
+    return "inject_session_context"
 
 
-def route_after_process_files(state: AgentState) -> Literal["route_intent"]:
+def route_after_process_files(state: AgentState) -> Literal["inject_session_context"]:
     """
-    After processing uploaded files, always route to route_intent.
+    After processing uploaded files, always route to inject_session_context.
     """
-    return "route_intent"
+    return "inject_session_context"
 
 
 def route_after_intent(
@@ -149,10 +149,6 @@ def route_after_planning(
     - sql_query tasks -> sql_worker (with nested visualization if requires_visualization=True)
     - standalone_visualization tasks -> standalone_visualization worker (for user-provided raw data)
     """
-    import logging
-
-    logger = logging.getLogger(__name__)
-
     task_plan = state.get("task_plan", [])
     execution_mode = state.get("execution_mode", "linear")
 
@@ -179,7 +175,9 @@ def route_after_planning(
                 }
                 sends.append(Send("standalone_visualization", send_state))
                 logger.info(
-                    f"Routing standalone visualization task {send_state['task_id']} with {len(raw_data)} data points"
+                    "Routing standalone visualization task {task_id} with {count} data points",
+                    task_id=send_state["task_id"],
+                    count=len(raw_data),
                 )
                 continue
 
@@ -199,10 +197,15 @@ def route_after_planning(
             sends.append(Send("sql_worker", send_state))
             if requires_viz:
                 logger.info(
-                    f"Routing task {send_state['task_id']} with requires_visualization=True"
+                    "Routing task {task_id} with requires_visualization=True",
+                    task_id=send_state["task_id"],
                 )
 
-        logger.info(f"Routing {len(task_plan)} task(s) (mode={execution_mode})")
+        logger.info(
+            "Routing {count} task(s) (mode={mode})",
+            count=len(task_plan),
+            mode=execution_mode,
+        )
         return sends
 
     # No tasks - should not reach here, but fallback

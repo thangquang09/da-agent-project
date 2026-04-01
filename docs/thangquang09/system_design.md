@@ -1034,7 +1034,7 @@ mcp_server/
 docs/
 ├── research/rag/          # RAG source documents
 └── thangquang09/
-    ├── AGENTS.md          # Owner priority docs
+    ├── CLAUDE.md          # Owner priority docs
     ├── overview.md
     ├── implementation_todo.md
     └── system_design.md    # This file

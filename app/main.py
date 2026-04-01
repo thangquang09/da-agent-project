@@ -41,11 +41,12 @@ def run_query(
     uploaded_file_data: list[dict[str, Any]] | None = None,
     expected_keywords: list[str] | None = None,
     version: str = "v2",
+    thread_id: str | None = None,
 ) -> dict:
     # Get graph builder from registry (fallback to v2)
     graph_builder = GRAPH_REGISTRY.get(version, build_sql_v2_graph)
     graph = graph_builder()
-    run_cfg = new_run_config(recursion_limit=recursion_limit)
+    run_cfg = new_run_config(recursion_limit=recursion_limit, thread_id=thread_id)
     tracer = RunTracer(
         run_id=run_cfg.run_id,
         thread_id=run_cfg.thread_id,
@@ -63,6 +64,9 @@ def run_query(
         graph_input["uploaded_file_data"] = uploaded_file_data
     if expected_keywords:
         graph_input["expected_keywords"] = expected_keywords
+    # Pass thread_id to graph input for session memory
+    if thread_id:
+        graph_input["thread_id"] = thread_id
     try:
         output = graph.invoke(
             graph_input,
@@ -81,11 +85,13 @@ def run_query(
             str(item.get("category", "UNKNOWN")) for item in payload.get("errors", [])
         ]
         payload["context_type"] = output.get("context_type", "default")
+        payload["thread_id"] = run_cfg.thread_id
         tracer.finish(payload=payload, status="success")
         return payload
     except Exception as exc:  # noqa: BLE001
         payload = {
             "run_id": run_cfg.run_id,
+            "thread_id": run_cfg.thread_id,
             "answer": f"Run failed: {exc}",
             "evidence": ["intent=unknown", "rows=0", "context_chunks=0"],
             "confidence": "low",

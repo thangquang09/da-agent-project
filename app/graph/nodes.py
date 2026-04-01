@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import unicodedata
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -477,6 +479,7 @@ def generate_sql(state: AgentState) -> AgentState:
                 state.get("schema_context", ""),
                 state.get("dataset_context", ""),
                 semantic_context,
+                session_context=state.get("session_context", ""),
                 previous_sql=previous_sql,
                 error_message=last_error,
             ),
@@ -787,7 +790,11 @@ def _unsupported_numeric_claims(answer: str, evidence: list[str]) -> list[str]:
 
 
 def _generate_natural_response(
-    query: str, sql_rows: list[dict[str, Any]], row_count: int
+    query: str,
+    sql_rows: list[dict[str, Any]],
+    row_count: int,
+    session_context: str = "",
+    has_visualization: bool = False,
 ) -> tuple[str, dict[str, int] | None, float | None]:
     """Use LLM to generate a natural language response from SQL results."""
     if not sql_rows:
@@ -797,14 +804,30 @@ def _generate_natural_response(
     llm_usage: dict[str, int] | None = None
     llm_cost_usd: float | None = None
 
+    # Build messages with visualization meta-instruction if applicable
+    messages = prompt_manager.synthesis_messages(
+        query=query,
+        results=sql_rows,
+        row_count=row_count,
+        session_context=session_context,
+    )
+
+    # Inject meta-instruction if visualization was successfully generated
+    if has_visualization:
+        # Add system message or modify first message to include meta-instruction
+        meta_instruction = """[SYSTEM META: A visualization chart has ALREADY been successfully generated and will be displayed below your text automatically. Do NOT offer to draw a chart. Instead, acknowledge the chart, briefly explain what it shows based on the data, and conclude your answer.]"""
+
+        # Prepend to the user message content
+        for msg in messages:
+            if msg.get("role") == "user":
+                original_content = msg.get("content", "")
+                msg["content"] = f"{meta_instruction}\n\n{original_content}"
+                break
+
     try:
         client = LLMClient.from_env()
         response = client.chat_completion(
-            messages=prompt_manager.synthesis_messages(
-                query=query,
-                results=sql_rows,
-                row_count=row_count,
-            ),
+            messages=messages,
             model=settings.model_synthesis,
             temperature=0.3,
             stream=False,
@@ -835,6 +858,7 @@ def synthesize_answer(state: AgentState) -> AgentState:
     retrieved_context = state.get("retrieved_context", [])
     context_evidence = _context_evidence(retrieved_context)
     tool_history = state.get("tool_history", [])
+    session_context = state.get("session_context", "")
 
     total_token_usage = 0
     total_cost_usd = 0.0
@@ -849,6 +873,16 @@ def synthesize_answer(state: AgentState) -> AgentState:
             total_cost_usd += float(item.get("cost_usd", 0) or 0)
 
     confidence = "low"
+
+    # Check if visualization was successfully generated
+    visualization = state.get("visualization")
+    has_visualization = bool(
+        visualization
+        and isinstance(visualization, dict)
+        and visualization.get("success")
+        and visualization.get("image_data")
+    )
+
     if intent == "sql":
         if errors:
             error_msg = errors[-1]["message"]
@@ -861,6 +895,8 @@ def synthesize_answer(state: AgentState) -> AgentState:
                 state.get("user_query", ""),
                 sql_rows,
                 row_count,
+                session_context=session_context,
+                has_visualization=has_visualization,
             )
             answer = natural_answer
             synthesis_usage = syn_usage
@@ -898,6 +934,8 @@ def synthesize_answer(state: AgentState) -> AgentState:
                 state.get("user_query", ""),
                 sql_rows,
                 row_count,
+                session_context=session_context,
+                has_visualization=has_visualization,
             )
             if syn_usage:
                 total_token_usage += int(syn_usage.get("total_tokens", 0) or 0)
@@ -1383,7 +1421,6 @@ def process_uploaded_files(state: AgentState) -> AgentState:
 
     Uses session-level caching to avoid re-processing the same files.
     """
-    from datetime import datetime
     from pathlib import Path
     from tempfile import NamedTemporaryFile
 
@@ -1563,3 +1600,437 @@ def process_uploaded_files(state: AgentState) -> AgentState:
         "step_count": state.get("step_count", 0) + 1,
         "tool_history": tool_history_entries,
     }
+
+
+# =============================================================================
+# Session Memory Nodes
+# =============================================================================
+
+MAX_TURNS_BEFORE_SUMMARY = 10
+MAX_TURNS_IN_CONTEXT = 5
+
+
+def inject_session_context(state: AgentState) -> AgentState:
+    """
+    Inject relevant session context before routing.
+
+    This node runs BEFORE route_intent to provide conversation history
+    for better intent classification, especially for follow-up questions.
+
+    Retrieves:
+    - Recent conversation turns from SQLite
+    - Conversation summary if exists
+    - Semantically similar past queries from Qdrant (if available)
+
+    Updates state with:
+    - session_context: Formatted context for prompt injection
+    - conversation_turn: Current turn number
+    """
+    thread_id = state.get("thread_id")
+    if not thread_id:
+        logger.debug("No thread_id provided, skipping session context injection")
+        return {}
+
+    from app.memory.conversation_store import (
+        get_conversation_memory_store,
+    )
+
+    conv_store = get_conversation_memory_store()
+
+    # Get recent turns and summary
+    recent_turns = conv_store.get_recent_turns(thread_id, limit=MAX_TURNS_IN_CONTEXT)
+    summary = conv_store.get_summary(thread_id)
+    turn_count = conv_store.get_turn_count(thread_id)
+
+    if not recent_turns and not summary:
+        logger.debug(
+            "No conversation history found for thread: {thread}", thread=thread_id
+        )
+        return {
+            "conversation_turn": 1,  # Starting new conversation
+        }
+
+    context_parts: list[str] = []
+
+    # Add summary if exists
+    if summary and summary.summary:
+        context_parts.append(f"[Conversation Summary]\n{summary.summary}")
+        if summary.key_entities:
+            context_parts[-1] += (
+                f"\n\nKey entities: {', '.join(summary.key_entities[:5])}"
+            )
+
+    # Add recent turns
+    if recent_turns:
+        turns_text = []
+        for turn in recent_turns:
+            if turn.role == "user":
+                turns_text.append(f"User: {turn.content[:300]}")
+            else:
+                # Assistant turn - use result_summary if available
+                content = turn.result_summary or turn.sql_generated or ""
+                if content:
+                    turns_text.append(f"Assistant: {content[:300]}")
+
+        if turns_text:
+            context_parts.append("[Recent Turns]\n" + "\n".join(turns_text))
+
+    # Qdrant semantic search — find similar past queries across all threads
+    user_query = state.get("user_query", "")
+    if user_query:
+        similar_context = _search_similar_queries(user_query, thread_id)
+        if similar_context:
+            context_parts.append(similar_context)
+
+    session_context = "\n\n".join(context_parts)
+
+    logger.info(
+        "Injected session context: {turns} turns, {summary_len} chars summary",
+        turns=len(recent_turns),
+        summary_len=len(summary.summary) if summary else 0,
+    )
+
+    return {
+        "session_context": session_context,
+        "conversation_turn": turn_count // 2
+        + 1,  # Divide by 2 (user+assistant pairs), +1 for current
+    }
+
+
+def _search_similar_queries(
+    query: str,
+    current_thread_id: str,
+    limit: int = 3,
+) -> str | None:
+    """Search Qdrant for semantically similar past queries.
+
+    Returns formatted context string or None if Qdrant is unavailable
+    or no relevant results found.
+    """
+    try:
+        from app.memory.qdrant_client import (
+            COLLECTION_NAME,
+            embed_text,
+            get_qdrant_client,
+            is_qdrant_available,
+        )
+
+        if not is_qdrant_available():
+            return None
+
+        query_vector = embed_text(query)
+        client = get_qdrant_client()
+
+        results = client.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=query_vector,
+            limit=limit + 2,  # Fetch a few extra to filter current thread
+            score_threshold=0.65,  # Only include reasonably similar results
+        )
+
+        if not results:
+            return None
+
+        similar_items = []
+        for hit in results:
+            payload = hit.payload or {}
+            # Skip results from the current thread (already in recent turns)
+            if payload.get("thread_id") == current_thread_id:
+                continue
+            past_query = payload.get("query", "")
+            past_summary = payload.get("result_summary", "")
+            if past_query:
+                entry = f"- Q: {past_query[:200]}"
+                if past_summary:
+                    entry += f"\n  A: {past_summary[:200]}"
+                similar_items.append(entry)
+            if len(similar_items) >= limit:
+                break
+
+        if not similar_items:
+            return None
+
+        logger.debug(
+            "Found {count} similar past queries from Qdrant",
+            count=len(similar_items),
+        )
+        return "[Similar Past Queries]\n" + "\n".join(similar_items)
+
+    except Exception as exc:
+        logger.warning(
+            "Qdrant semantic search failed (degrading gracefully): {error}",
+            error=str(exc),
+        )
+        return None
+
+
+def compact_and_save_memory(state: AgentState) -> AgentState:
+    """
+    Save conversation turn and compact if needed.
+
+    This node runs at the END of the graph, after synthesize_answer.
+
+    - Saves current turn to SQLite
+    - Embeds and saves to Qdrant for semantic search
+    - Generates/updates summary if turn_count > threshold
+    """
+    thread_id = state.get("thread_id")
+    if not thread_id:
+        logger.debug("No thread_id provided, skipping memory save")
+        return {}
+
+    from app.memory.conversation_store import (
+        ConversationMemoryStore,
+        ConversationTurn,
+        ConversationSummary,
+        get_conversation_memory_store,
+    )
+
+    user_query = state.get("user_query", "")
+    intent = state.get("intent")
+    generated_sql = state.get("generated_sql")
+
+    # Get final answer for result_summary
+    final_payload = state.get("final_payload", {})
+    result_summary = final_payload.get("answer", "")[:500] if final_payload else None
+
+    # Extract entities (metrics, tables mentioned)
+    entities = _extract_entities_from_state(state)
+
+    conv_store = get_conversation_memory_store()
+
+    # Get current turn count
+    current_turn_count = conv_store.get_turn_count(thread_id)
+    turn_number = current_turn_count + 1
+
+    # Save user turn
+    user_turn = ConversationTurn(
+        thread_id=thread_id,
+        turn_number=turn_number,
+        role="user",
+        content=user_query,
+        intent=intent,
+        sql_generated=None,
+        result_summary=None,
+        entities=entities,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    )
+    conv_store.save_turn(user_turn)
+
+    # Save assistant turn
+    assistant_turn = ConversationTurn(
+        thread_id=thread_id,
+        turn_number=turn_number + 1,
+        role="assistant",
+        content="",
+        intent=None,
+        sql_generated=generated_sql,
+        result_summary=result_summary,
+        entities=entities,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    )
+    conv_store.save_turn(assistant_turn)
+
+    # Embed and save to Qdrant
+    _save_to_qdrant(thread_id, user_query, result_summary, entities, turn_number)
+
+    # Compact if needed
+    total_turns = turn_number + 1
+    if total_turns > MAX_TURNS_BEFORE_SUMMARY * 2:
+        _compact_conversation(conv_store, thread_id)
+
+    return {"step_count": state.get("step_count", 0) + 1}
+
+
+def _extract_entities_from_state(state: AgentState) -> list[str]:
+    """Extract entities from state (metrics, tables mentioned)."""
+    entities = []
+
+    # From schema context - extract table names
+    schema_ctx = state.get("schema_context", "")
+    if schema_ctx:
+        # Simple extraction: look for "Table:" patterns
+        table_matches = re.findall(r"Table:\s*(\w+)", schema_ctx)
+        entities.extend(table_matches[:3])
+
+    # From SQL
+    sql = state.get("generated_sql", "")
+    if sql:
+        # Extract table names from SQL
+        table_matches = re.findall(r"(?:FROM|JOIN)\s+(\w+)", sql, re.IGNORECASE)
+        entities.extend(table_matches[:3])
+
+    # From retrieved context
+    retrieved = state.get("retrieved_context", [])
+    for item in retrieved[:2]:
+        source = item.get("source", "")
+        if source and source not in entities:
+            entities.append(source)
+
+    # Dedupe and limit
+    seen = set()
+    unique_entities = []
+    for e in entities:
+        if e.lower() not in seen:
+            seen.add(e.lower())
+            unique_entities.append(e)
+            if len(unique_entities) >= 5:
+                break
+
+    return unique_entities
+
+
+def _save_to_qdrant(
+    thread_id: str,
+    query: str,
+    result_summary: str | None,
+    entities: list[str],
+    turn_number: int,
+) -> None:
+    """Save turn to Qdrant for semantic search."""
+    try:
+        from app.memory.qdrant_client import (
+            COLLECTION_NAME,
+            get_qdrant_client,
+            embed_text,
+            is_qdrant_available,
+        )
+
+        if not is_qdrant_available():
+            logger.debug("Qdrant not available, skipping vector save")
+            return
+
+        from qdrant_client.models import PointStruct
+
+        client = get_qdrant_client()
+
+        # Embed query + summary
+        text_to_embed = f"{query}"
+        if result_summary:
+            text_to_embed += f"\n{result_summary}"
+
+        vector = embed_text(text_to_embed)
+
+        # Stable ID based on thread and turn (deterministic across processes)
+        point_id = int(
+            hashlib.sha256(f"{thread_id}_{turn_number}".encode()).hexdigest(), 16
+        ) % (2**63)
+
+        client.upsert(
+            collection_name=COLLECTION_NAME,
+            points=[
+                PointStruct(
+                    id=point_id,
+                    vector=vector,
+                    payload={
+                        "thread_id": thread_id,
+                        "turn_number": turn_number,
+                        "query": query,
+                        "result_summary": result_summary,
+                        "entities": entities,
+                    },
+                )
+            ],
+        )
+        logger.debug(
+            "Saved turn to Qdrant: thread={thread}, turn={turn}",
+            thread=thread_id,
+            turn=turn_number,
+        )
+
+    except Exception as exc:
+        logger.warning("Failed to save to Qdrant: {error}", error=str(exc))
+
+
+def _compact_conversation(
+    conv_store: ConversationMemoryStore,
+    thread_id: str,
+) -> None:
+    """Use LLM to summarize old turns, update summary, and prune old turns."""
+    try:
+        # Get all turns — the caller already verified total_turns > threshold
+        turns = conv_store.get_recent_turns(thread_id, limit=50)
+        if not turns:
+            return
+
+        # Keep last MAX_TURNS_BEFORE_SUMMARY turns, summarize the rest
+        retention_window = MAX_TURNS_BEFORE_SUMMARY
+        turns_to_summarize = turns[:-retention_window] if len(turns) > retention_window else []
+
+        if not turns_to_summarize:
+            return
+
+        # Build summarization prompt
+        turns_text = []
+        for turn in turns_to_summarize:
+            if turn.role == "user":
+                turns_text.append(f"User: {turn.content}")
+            elif turn.result_summary:
+                turns_text.append(f"Assistant: {turn.result_summary}")
+
+        if not turns_text:
+            return
+
+        from app.config import load_settings
+        from app.llm import LLMClient
+
+        settings = load_settings()
+
+        client = LLMClient.from_env()
+        response = client.chat_completion(
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant that summarizes conversations concisely. "
+                    "Create a brief summary (2-3 sentences) that captures the key topics, questions asked, "
+                    "and insights gained. Focus on metrics, data analysis, and SQL queries discussed.",
+                },
+                {
+                    "role": "user",
+                    "content": f"Summarize this conversation:\n\n{chr(10).join(turns_text)}",
+                },
+            ],
+            model=settings.default_router_model,
+            temperature=0.0,
+        )
+
+        summary_text = (
+            response.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+
+        if summary_text:
+            # Extract key entities from all turns
+            all_entities = []
+            for turn in turns:
+                all_entities.extend(turn.entities)
+            seen = set()
+            key_entities = []
+            for e in all_entities:
+                if e.lower() not in seen:
+                    seen.add(e.lower())
+                    key_entities.append(e)
+
+            summary = ConversationSummary(
+                thread_id=thread_id,
+                summary=summary_text,
+                turn_count=len(turns),
+                last_updated=datetime.now(timezone.utc).isoformat(),
+                key_entities=key_entities[:10],
+            )
+            conv_store.update_summary(summary)
+
+            # Prune old turns, keeping only the retention window
+            conv_store.delete_old_turns(thread_id, keep_last_n=retention_window)
+
+            logger.info(
+                "Compacted conversation: thread={thread}, summarized={summarized}, kept={kept}",
+                thread=thread_id,
+                summarized=len(turns_to_summarize),
+                kept=retention_window,
+            )
+
+    except Exception as exc:
+        logger.warning("Failed to compact conversation: {error}", error=str(exc))

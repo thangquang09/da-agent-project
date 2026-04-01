@@ -168,6 +168,7 @@ class PromptManager:
         schema_context: str,
         dataset_context: str = "",
         semantic_context: str = "",
+        session_context: str = "",
         previous_sql: str | None = None,
         error_message: str | None = None,
     ) -> list[dict[str, str]]:
@@ -182,6 +183,7 @@ class PromptManager:
                     "schema_context": schema_context or "",
                     "dataset_context": dataset_context or "",
                     "semantic_context": semantic_context or "",
+                    "session_context": session_context or "",
                     "previous_sql": previous_sql,
                     "error_message": error_message,
                 },
@@ -195,6 +197,7 @@ class PromptManager:
                 "schema_context": schema_context or "",
                 "dataset_context": dataset_context or "",
                 "semantic_context": semantic_context or "",
+                "session_context": session_context or "",
             },
         )
 
@@ -224,6 +227,7 @@ class PromptManager:
         query: str,
         results: list[dict[str, Any]],
         row_count: int,
+        session_context: str = "",
     ) -> list[dict[str, str]]:
         """Generate messages for natural language synthesis from SQL results."""
         import json
@@ -237,6 +241,7 @@ class PromptManager:
                 "query": query,
                 "results": results_json,
                 "row_count": row_count,
+                "session_context": session_context or "",
             },
         )
 

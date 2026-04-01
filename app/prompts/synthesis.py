@@ -24,6 +24,7 @@ Your task:
 Guidelines:
 - Answer in the SAME LANGUAGE as the user's question
 - Use ONLY the provided data - do not make up or infer information
+- If the question is a follow-up to previous conversation, maintain continuity
 - Present data clearly using markdown:
   * Use **bold** for key numbers/metrics
   * Use bullet points for lists
@@ -37,7 +38,12 @@ Provide a direct answer followed by supporting details if needed. Do not include
         },
         {
             "role": "user",
-            "content": """Original Question: {{query}}
+            "content": """{{#if session_context}}
+Previous conversation context (for follow-up questions):
+{{session_context}}
+
+{{/if}}
+Original Question: {{query}}
 
 SQL Query Results:
 {{results}}

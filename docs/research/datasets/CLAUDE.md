@@ -1,4 +1,4 @@
-# AGENTS.md - docs/research/datasets/
+# CLAUDE.md - docs/research/datasets/
 
 Folder này chứa research về dữ liệu và benchmark dataset.
 

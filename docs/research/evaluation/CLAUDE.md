@@ -1,4 +1,4 @@
-﻿# AGENTS.md - docs/research/evaluation/
+# CLAUDE.md - docs/research/evaluation/
 
 Folder nay chua tai lieu quy trinh evaluation va gate.
 

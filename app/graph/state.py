@@ -93,6 +93,10 @@ class AgentState(TypedDict, total=False):
     aggregate_analysis: dict[str, Any]  # Combined analysis from parallel tasks
     execution_mode: ExecutionMode  # Router decision: single/parallel/linear
     visualization: dict[str, Any]  # Visualization data from nested sequential execution
+    # Session memory fields
+    thread_id: str  # Thread identifier for memory scoping
+    session_context: str  # Injected context from conversation memory
+    conversation_turn: int  # Current turn number in conversation
 
 
 class GraphInputState(TypedDict, total=False):
@@ -101,6 +105,7 @@ class GraphInputState(TypedDict, total=False):
     user_semantic_context: str
     uploaded_files: list[str]
     uploaded_file_data: list[dict[str, Any]]
+    thread_id: str  # Optional: for session memory scoping
 
 
 class GraphOutputState(TypedDict, total=False):

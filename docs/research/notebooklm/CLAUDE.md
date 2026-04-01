@@ -1,4 +1,4 @@
-# AGENTS.md - docs/research/notebooklm/
+# CLAUDE.md - docs/research/notebooklm/
 
 Folder này chứa tài liệu setup và vận hành NotebookLM MCP.
 

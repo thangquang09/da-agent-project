@@ -29,6 +29,10 @@ SQL_PROMPT_DEFINITION = PromptDefinition(
         {
             "role": "user",
             "content": (
+                "{{#if session_context}}"
+                "Previous conversation context (for follow-up questions):\n"
+                "{{session_context}}\n\n"
+                "{{/if}}"
                 "Question:\n"
                 "{{query}}\n\n"
                 "Schema context:\n"
@@ -67,6 +71,10 @@ SQL_SELF_CORRECTION_PROMPT_DEFINITION = PromptDefinition(
         {
             "role": "user",
             "content": (
+                "{{#if session_context}}"
+                "Previous conversation context (for follow-up questions):\n"
+                "{{session_context}}\n\n"
+                "{{/if}}"
                 "Question:\n"
                 "{{query}}\n\n"
                 "Schema context:\n"

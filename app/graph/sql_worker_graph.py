@@ -197,8 +197,8 @@ def _task_generate_visualization(task_state: TaskState) -> dict[str, Any]:
     This runs nested within the SQL worker after execute_sql, ensuring
     the SQL data is already available before visualization is attempted.
 
-    Uses LLM-based code generation to understand chart type requirements
-    from the user query instead of rule-based templates.
+    Uses LLM-based code generation with model_sql_generation. Falls back to
+    rule-based templates only if LLM code generation or execution fails.
     """
     query = task_state.get("query", "")
     sql_result = task_state.get("sql_result", {})
@@ -223,17 +223,35 @@ def _task_generate_visualization(task_state: TaskState) -> dict[str, Any]:
             "status": "skipped",
         }
 
-    try:
-        # Step 1: Generate Python visualization code using LLM
-        python_code = _generate_visualization_code_llm(query, rows)
+    # Step 1: Generate Python visualization code using LLM (preferred)
+    python_code = _generate_visualization_code_llm(query, rows)
 
-        # Step 2: Execute visualization in E2B sandbox
-        service = get_visualization_service()
+    # If LLM failed to generate code, fall back to template
+    if not python_code:
+        logger.warning("LLM code generation failed, falling back to template")
+        python_code = _generate_chart_code_template(query, rows)
+
+    # Step 2: Execute visualization in E2B sandbox
+    service = get_visualization_service()
+
+    try:
         result = service.generate_visualization(
             data_rows=rows,
             user_query=query,
             python_code=python_code,
         )
+
+        # If LLM code failed but template might succeed, try template as fallback
+        if not result.success and python_code != _generate_chart_code_template(
+            query, rows
+        ):
+            logger.warning("LLM code execution failed, trying template fallback")
+            template_code = _generate_chart_code_template(query, rows)
+            result = service.generate_visualization(
+                data_rows=rows,
+                user_query=query,
+                python_code=template_code,
+            )
 
         return {
             "visualization": {
@@ -249,22 +267,42 @@ def _task_generate_visualization(task_state: TaskState) -> dict[str, Any]:
 
     except Exception as exc:
         logger.exception("Visualization generation failed in worker")
-        return {
-            "visualization": {
-                "success": False,
-                "error": str(exc),
-            },
-            "status": "failed",
-        }
+        # Last resort: try template code
+        try:
+            template_code = _generate_chart_code_template(query, rows)
+            result = service.generate_visualization(
+                data_rows=rows,
+                user_query=query,
+                python_code=template_code,
+            )
+            return {
+                "visualization": {
+                    "success": result.success,
+                    "image_data": result.image_data,
+                    "image_format": result.image_format,
+                    "error": result.error if not result.success else None,
+                    "code_executed": result.code_executed,
+                    "execution_time_ms": result.execution_time_ms,
+                },
+                "status": "success" if result.success else "failed",
+            }
+        except Exception as exc2:
+            logger.exception("Template fallback also failed")
+            return {
+                "visualization": {
+                    "success": False,
+                    "error": f"Primary: {exc}; Fallback: {exc2}",
+                },
+                "status": "failed",
+            }
 
 
 def _generate_visualization_code_llm(query: str, data_rows: list[dict]) -> str | None:
-    """Generate Python visualization code using LLM.
+    """Generate Python visualization code using LLM with model_sql_generation.
 
-    This replaces rule-based templates with LLM understanding of:
-    - Chart type from user query (bar chart, line chart, etc.)
-    - Data schema and column selection
-    - Proper seaborn/matplotlib usage
+    This uses the LLM to understand chart type requirements from user query
+    instead of relying on rule-based templates. Uses model_sql_generation
+    for better code quality.
     """
     if not data_rows:
         return None
@@ -279,9 +317,9 @@ def _generate_visualization_code_llm(query: str, data_rows: list[dict]) -> str |
     system_prompt = """You are a Python data visualization expert. Write code using pandas, seaborn, and matplotlib.
 
 CRITICAL REQUIREMENTS:
-1. Read data from '/home/user/query_data.csv' using pandas
+1. Read data from '/home/user/query_data.csv' using pandas (df = pd.read_csv('/home/user/query_data.csv'))
 2. Choose the EXACT chart type the user requested (bar chart, line chart, scatter plot, pie chart, histogram)
-3. Use seaborn for the visualization (sns.barplot, sns.lineplot, sns.scatterplot, etc.)
+3. Use seaborn for the visualization (sns.barplot, sns.lineplot, sns.scatterplot, sns.histplot, etc.)
 4. Make the chart visually appealing with proper styling
 5. Set appropriate figure size (12x6 or similar)
 6. Add title, labels, and rotate x-axis labels if needed
@@ -291,7 +329,7 @@ CRITICAL REQUIREMENTS:
 
 Available libraries: pandas, seaborn, matplotlib, numpy
 
-IMPORTANT: If the user explicitly mentions a chart type (e.g., "bar chart", "line chart"), use that exact type. Do not default to scatter plot."""
+IMPORTANT: If the user explicitly mentions a chart type (e.g., "bar chart", "biểu đồ cột"), use that exact type. Do not default to scatter plot."""
 
     user_prompt = f"""Create visualization for this data based on the user's request.
 
@@ -312,12 +350,13 @@ Return ONLY the Python code, no markdown or explanations."""
         settings = load_settings()
         client = LLMClient.from_env()
 
+        # Use model_sql_generation as requested
         response = client.chat_completion(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            model=settings.model_synthesis,
+            model=settings.model_sql_generation,
             temperature=0.2,
         )
 
@@ -329,9 +368,9 @@ Return ONLY the Python code, no markdown or explanations."""
         )
 
         # Clean up code (remove markdown fences if present)
-        code = re.sub(r"^```python\s*", "", code)
-        code = re.sub(r"^```\s*", "", code)
-        code = re.sub(r"```$", "", code)
+        code = re.sub(r"^```python\s*", "", code, flags=re.IGNORECASE)
+        code = re.sub(r"^```\s*", "", code, flags=re.IGNORECASE)
+        code = re.sub(r"```$", "", code, flags=re.IGNORECASE)
         code = code.strip()
 
         if code and "plt.show()" in code:
@@ -349,6 +388,105 @@ Return ONLY the Python code, no markdown or explanations."""
             "LLM visualization code generation failed: {error}", error=str(exc)
         )
         return None
+
+
+def _generate_chart_code_template(query: str, data_rows: list[dict]) -> str:
+    """Generate basic Python visualization code using rule-based templates.
+
+    Used as a fallback when LLM code generation or execution fails.
+    """
+    if not data_rows:
+        return ""
+
+    columns = list(data_rows[0].keys())
+
+    # Detect chart type from query
+    query_lower = query.lower()
+    if any(kw in query_lower for kw in ["bar", "cột", "column"]):
+        chart_type = "bar"
+    elif any(kw in query_lower for kw in ["line", "đường", "trend", "trending"]):
+        chart_type = "line"
+    elif any(
+        kw in query_lower for kw in ["scatter", "phân tán", "phân bố", "correlation"]
+    ):
+        chart_type = "scatter"
+    elif any(kw in query_lower for kw in ["pie", "tròn", "bánh"]):
+        chart_type = "pie"
+    else:
+        # Default: try to auto-detect based on data
+        chart_type = "auto"
+
+    # Build code
+    code_lines = [
+        "import pandas as pd",
+        "import matplotlib.pyplot as plt",
+        "import seaborn as sns",
+        "import numpy as np",
+        "",
+        "# Read data",
+        "df = pd.read_csv('/home/user/query_data.csv')",
+        "",
+        "# Set style",
+        "sns.set_style('whitegrid')",
+        "plt.figure(figsize=(12, 6))",
+        "",
+    ]
+
+    # Add chart-specific code
+    if chart_type == "bar" or (chart_type == "auto" and len(columns) >= 2):
+        # Try to identify categorical and numeric columns
+        code_lines.extend(
+            [
+                "# Bar chart",
+                f"x_col = '{columns[0]}'",
+                f"y_col = '{columns[1]}' if len(df.columns) > 1 else '{columns[0]}'",
+                "sns.barplot(data=df, x=x_col, y=y_col, palette='viridis')",
+                "plt.title('Data Visualization')",
+                "plt.xticks(rotation=45, ha='right')",
+                "plt.tight_layout()",
+            ]
+        )
+    elif chart_type == "line":
+        code_lines.extend(
+            [
+                "# Line chart",
+                f"x_col = '{columns[0]}'",
+                f"y_col = '{columns[1]}' if len(df.columns) > 1 else '{columns[0]}'",
+                "sns.lineplot(data=df, x=x_col, y=y_col, marker='o')",
+                "plt.title('Trend Visualization')",
+                "plt.xticks(rotation=45, ha='right')",
+                "plt.tight_layout()",
+            ]
+        )
+    elif chart_type == "scatter":
+        code_lines.extend(
+            [
+                "# Scatter plot",
+                f"x_col = '{columns[0]}'",
+                f"y_col = '{columns[1]}' if len(df.columns) > 1 else '{columns[0]}'",
+                "sns.scatterplot(data=df, x=x_col, y=y_col, s=100)",
+                "plt.title('Scatter Plot')",
+                "plt.tight_layout()",
+            ]
+        )
+    else:
+        # Generic visualization
+        code_lines.extend(
+            [
+                "# Generic data visualization",
+                "if len(df.columns) >= 2:",
+                f"    sns.barplot(data=df, x='{columns[0]}', y='{columns[1]}', palette='viridis')",
+                "else:",
+                f"    df['{columns[0]}'].plot(kind='bar')",
+                "plt.title('Data Visualization')",
+                "plt.xticks(rotation=45, ha='right')",
+                "plt.tight_layout()",
+            ]
+        )
+
+    code_lines.append("plt.show()")
+
+    return "\n".join(code_lines)
 
 
 def _should_visualize(task_state: TaskState) -> bool:

@@ -20,10 +20,12 @@ from app.graph.edges import (
 from app.graph.nodes import (
     aggregate_results,
     analyze_result,
+    compact_and_save_memory,
     detect_context_type,
     execute_sql_node,
     generate_sql,
     get_schema,
+    inject_session_context,
     process_uploaded_files,
     retrieve_context_node,
     route_intent,
@@ -72,6 +74,10 @@ def build_sql_v1_graph(checkpointer=None):
         _instrument_node("process_uploaded_files", process_uploaded_files, "tool"),
     )
     builder.add_node(
+        "inject_session_context",
+        _instrument_node("inject_session_context", inject_session_context, "memory"),
+    )
+    builder.add_node(
         "route_intent", _instrument_node("route_intent", route_intent, "agent")
     )
     builder.add_node(
@@ -101,6 +107,10 @@ def build_sql_v1_graph(checkpointer=None):
         "synthesize_answer",
         _instrument_node("synthesize_answer", synthesize_answer, "generation"),
     )
+    builder.add_node(
+        "compact_and_save_memory",
+        _instrument_node("compact_and_save_memory", compact_and_save_memory, "memory"),
+    )
 
     builder.add_edge(START, "detect_context_type")
     builder.add_conditional_edges(
@@ -108,10 +118,11 @@ def build_sql_v1_graph(checkpointer=None):
         route_after_context_detection,
         {
             "process_uploaded_files": "process_uploaded_files",
-            "route_intent": "route_intent",
+            "inject_session_context": "inject_session_context",
         },
     )
-    builder.add_edge("process_uploaded_files", "route_intent")
+    builder.add_edge("process_uploaded_files", "inject_session_context")
+    builder.add_edge("inject_session_context", "route_intent")
     builder.add_conditional_edges(
         "route_intent",
         route_after_intent,
@@ -151,7 +162,8 @@ def build_sql_v1_graph(checkpointer=None):
         },
     )
     builder.add_edge("retrieve_context_node", "synthesize_answer")
-    builder.add_edge("synthesize_answer", END)
+    builder.add_edge("synthesize_answer", "compact_and_save_memory")
+    builder.add_edge("compact_and_save_memory", END)
 
     return builder.compile(checkpointer=checkpointer or InMemorySaver())
 
@@ -204,6 +216,10 @@ def build_sql_v2_graph(checkpointer=None):
         _instrument_node("process_uploaded_files", process_uploaded_files, "tool"),
     )
     builder.add_node(
+        "inject_session_context",
+        _instrument_node("inject_session_context", inject_session_context, "memory"),
+    )
+    builder.add_node(
         "route_intent", _instrument_node("route_intent", route_intent, "agent")
     )
     builder.add_node(
@@ -213,6 +229,10 @@ def build_sql_v2_graph(checkpointer=None):
     builder.add_node(
         "synthesize_answer",
         _instrument_node("synthesize_answer", synthesize_answer, "generation"),
+    )
+    builder.add_node(
+        "compact_and_save_memory",
+        _instrument_node("compact_and_save_memory", compact_and_save_memory, "memory"),
     )
 
     # Add Plan-and-Execute nodes
@@ -240,10 +260,11 @@ def build_sql_v2_graph(checkpointer=None):
         route_after_context_detection,
         {
             "process_uploaded_files": "process_uploaded_files",
-            "route_intent": "route_intent",
+            "inject_session_context": "inject_session_context",
         },
     )
-    builder.add_edge("process_uploaded_files", "route_intent")
+    builder.add_edge("process_uploaded_files", "inject_session_context")
+    builder.add_edge("inject_session_context", "route_intent")
 
     # Intent routing with Plan-and-Execute
     builder.add_conditional_edges(
@@ -282,7 +303,8 @@ def build_sql_v2_graph(checkpointer=None):
     # RAG flow
     builder.add_edge("retrieve_context_node", "synthesize_answer")
 
-    # Final synthesis
-    builder.add_edge("synthesize_answer", END)
+    # Final synthesis and memory save
+    builder.add_edge("synthesize_answer", "compact_and_save_memory")
+    builder.add_edge("compact_and_save_memory", END)
 
     return builder.compile(checkpointer=checkpointer or InMemorySaver())

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 import streamlit as st
@@ -18,6 +19,7 @@ def run_agent(
     user_semantic_context: str | None = None,
     uploaded_files: list[str] | None = None,
     uploaded_file_data: list[dict[str, Any]] | None = None,
+    thread_id: str | None = None,
 ) -> dict:
     logger.info("streamlit.run_agent start query_len={len}", len=len(user_query))
     payload = run_query(
@@ -26,6 +28,7 @@ def run_agent(
         user_semantic_context=user_semantic_context,
         uploaded_files=uploaded_files,
         uploaded_file_data=uploaded_file_data,
+        thread_id=thread_id,
     )
     logger.info(
         "streamlit.run_agent done run_id={run_id} intent={intent}",
@@ -42,6 +45,8 @@ def _init_state() -> None:
     st.session_state.setdefault("current_assistant_index", None)
     st.session_state.setdefault("user_semantic_context", "")
     st.session_state.setdefault("uploaded_csv_files", [])
+    # Session memory: thread_id persists for conversation memory
+    st.session_state.setdefault("thread_id", str(uuid.uuid4()))
 
 
 def _render_result(result: dict) -> None:
@@ -185,6 +190,7 @@ def _run_current_query_if_needed() -> None:
                     uploaded_file_data=uploaded_file_data
                     if uploaded_file_data
                     else None,
+                    thread_id=st.session_state.get("thread_id"),
                 )
                 pending_item["status"] = "done"
                 pending_item["content"] = result.get("answer", "No answer")
@@ -218,11 +224,28 @@ _init_state()
 
 with st.sidebar:
     st.subheader("Session")
+    st.write(f"Thread ID: `{st.session_state.get('thread_id', 'N/A')[:8]}...`")
     st.write(f"Pending queue: `{len(st.session_state['pending_queries'])}`")
     if st.session_state["is_processing"]:
         st.write("Status: `processing`")
     else:
         st.write("Status: `idle`")
+
+    if st.button(
+        "🔄 New Conversation",
+        use_container_width=True,
+        help="Start fresh without memory of previous messages",
+    ):
+        st.session_state["thread_id"] = str(uuid.uuid4())
+        st.session_state["chat_history"] = []
+        st.session_state["pending_queries"] = []
+        st.session_state["is_processing"] = False
+        st.session_state["current_assistant_index"] = None
+        logger.info(
+            "streamlit.new_conversation thread={thread}",
+            thread=st.session_state["thread_id"],
+        )
+        st.rerun()
 
     st.divider()
     st.subheader("Context Input")
@@ -263,6 +286,7 @@ with st.sidebar:
         st.session_state["pending_queries"] = []
         st.session_state["is_processing"] = False
         st.session_state["current_assistant_index"] = None
+        # Note: thread_id is preserved to keep conversation memory
         logger.info("streamlit.session cleared")
         st.rerun()
 

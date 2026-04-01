@@ -12,6 +12,19 @@ DATABASE_DIR = BASE_PATH / "database"
 TEST_DATABASE_DIR = BASE_PATH / "test_database"
 OUTPUT_DIR = Path("evals/cases")
 
+# v2 graph expected tools for SQL cases.
+# The v2 plan-and-execute graph records these tool names in tool_history
+# for a typical SQL query: detect_context_type → route_intent →
+# task_planner → (sql_worker subgraph) → aggregate_results.
+# Note: sql_worker internal steps (get_schema, generate_sql, validate_sql,
+# execute_sql) run in a subgraph and don't appear in the outer tool_history.
+SQL_EXPECTED_TOOLS = [
+    "detect_context_type",
+    "route_intent",
+    "task_planner",
+    "aggregate_results",
+]
+
 
 def load_dev_cases():
     with open(DEV_JSON) as f:
@@ -35,14 +48,7 @@ def load_dev_cases():
             "language": "en",
             "query": question,
             "expected_intent": "sql",
-            "expected_tools": [
-                "route_intent",
-                "get_schema",
-                "generate_sql",
-                "validate_sql",
-                "query_sql",
-                "analyze_result",
-            ],
+            "expected_tools": SQL_EXPECTED_TOOLS,
             "should_have_sql": True,
             "expected_keywords": [],
             "target_db_path": str(db_path),
@@ -73,14 +79,7 @@ def load_test_cases():
             "language": "en",
             "query": question,
             "expected_intent": "sql",
-            "expected_tools": [
-                "route_intent",
-                "get_schema",
-                "generate_sql",
-                "validate_sql",
-                "query_sql",
-                "analyze_result",
-            ],
+            "expected_tools": SQL_EXPECTED_TOOLS,
             "should_have_sql": True,
             "expected_keywords": [],
             "target_db_path": str(db_path),

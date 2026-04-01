@@ -115,10 +115,11 @@ def _sql_validity(sql: str, db_path: str | None) -> bool:
 
 
 def _normalize_rows(rows: list[dict[str, Any]], limit: int = 100) -> list[tuple]:
+    """Normalize rows for comparison — lowercases column names."""
     compact = rows[:limit]
     normalized: list[tuple] = []
     for row in compact:
-        items = tuple(sorted((str(k), str(v)) for k, v in row.items()))
+        items = tuple(sorted((str(k).lower(), str(v)) for k, v in row.items()))
         normalized.append(items)
     normalized.sort()
     return normalized

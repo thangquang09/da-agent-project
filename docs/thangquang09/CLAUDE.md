@@ -1,4 +1,4 @@
-﻿# AGENTS.md - docs/thangquang09/
+# CLAUDE.md - docs/thangquang09/
 
 Thu muc nay chua tai lieu uu tien cho owner (Thang) de theo doi tien do.
 

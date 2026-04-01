@@ -1,4 +1,4 @@
-# AGENTS.md - docs/research/rag/
+# CLAUDE.md - docs/research/rag/
 
 Folder này chứa business context docs được dùng bởi local RAG index.
 
@@ -10,5 +10,5 @@ Folder này chứa business context docs được dùng bởi local RAG index.
 
 ## Rules
 - Chỉ đặt tài liệu domain/business dùng cho retrieval.
-- Không đặt hướng dẫn vận hành, planning, hay AGENTS root vào index này.
+- Không đặt hướng dẫn vận hành, planning, hay CLAUDE root vào index này.
 - Nếu thêm file mới cho retrieval, cập nhật tool/retriever filter tương ứng.

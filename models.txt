@@ -1,6 +1,4 @@
 gh/gpt-4o
 gh/gpt-4o-mini
-qw/qwen3-coder-plus
-qw/qwen3-coder-flash
-qw/vision-model
-qw/coder-model
+gh/gpt-5-mini
+cu/default
