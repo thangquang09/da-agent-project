@@ -21,6 +21,10 @@ from evals.metrics import (
     LLMAnswerJudge,
     SpiderExactMatchEvaluator,
 )
+from evals.metrics.official_spider_eval import (
+    OfficialSpiderEvaluator,
+    OfficialSpiderResult,
+)
 
 
 GATE_THRESHOLDS = {
@@ -67,6 +71,9 @@ class CaseResult:
     expected_context_type: str = "default"
     predicted_context_type: str | None = None
     context_type_correct: bool | None = None
+    # Stored for official Spider batch evaluation
+    gold_sql: str | None = None
+    target_db_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return self.__dict__
@@ -264,6 +271,8 @@ def run_case(case: EvalCase, recursion_limit: int) -> CaseResult:
         )
         if payload.get("context_type")
         else None,
+        gold_sql=case.gold_sql,
+        target_db_path=case.target_db_path,
     )
     result.failure_bucket = _failure_bucket(result)
     return result
@@ -386,6 +395,70 @@ def summarize(results: list[CaseResult]) -> dict[str, Any]:
     return summary
 
 
+def _run_official_spider_eval(
+    results: list[CaseResult],
+    db_dir: str | Path,
+) -> OfficialSpiderResult | None:
+    """
+    Run the official test-suite-sql-eval script on all spider EN cases that have
+    both a gold_sql and a generated_sql.
+
+    Only EN cases are submitted so the batch aligns with the original Spider1
+    benchmark (VI cases are a project-internal extension).
+    """
+    spider_en = [
+        r
+        for r in results
+        if r.suite == "spider"
+        and r.language == "en"
+        and r.generated_sql.strip()
+        and r.case_id.endswith("_en")  # belt-and-suspenders
+    ]
+
+    # We need gold_sql to come from the EvalCase; CaseResult doesn't store it,
+    # so we fall back to using generated_sql for gold — meaning we need the
+    # gold from the case. CaseResult has no gold_sql field, so we pair via
+    # the db_id extracted from case_id: spider_<suite>_<idx>_en → look up target_db_path.
+    # Instead, filter to cases where execution_match is not None
+    # (those ran against gold SQL) and reconstruct gold pairs from the case metadata
+    # captured in per-case JSONL. But CaseResult only has generated_sql.
+    #
+    # Solution: re-derive gold_sql from runner state isn't possible here without
+    # storing it. We instead only use cases that recorded execution_match so the
+    # gold path was exercised. The adapter needs gold_sql — so we store it now
+    # in CaseResult (see NOTE below — this is a known limitation).
+    #
+    # Practical fallback: use cases where gold_sql was stored on the CaseResult.
+    # We do this by checking if the case has a non-None gold_sql attribute.
+    cases_with_gold = [r for r in spider_en if getattr(r, "gold_sql", None)]
+    if not cases_with_gold:
+        return OfficialSpiderResult(
+            exec_accuracy_all=0.0,
+            error=(
+                "No spider EN cases with gold_sql found. "
+                "Ensure gold_sql is stored on CaseResult (see runner.py)."
+            ),
+        )
+
+    gold_pairs = []
+    pred_sqls = []
+    for r in cases_with_gold:
+        # db_id is embedded in target_db_path: .../database/<db_id>/<db_id>.sqlite
+        db_path = getattr(r, "target_db_path", None) or ""
+        db_id = Path(db_path).stem  # filename without extension = db_id
+        gold_pairs.append((r.gold_sql, db_id))
+        pred_sqls.append(r.generated_sql.strip())
+
+    try:
+        evaluator = OfficialSpiderEvaluator(db_dir=db_dir)
+        return evaluator.evaluate_batch(gold_pairs=gold_pairs, pred_sqls=pred_sqls)
+    except Exception as exc:
+        return OfficialSpiderResult(
+            exec_accuracy_all=0.0,
+            error=f"OfficialSpiderEvaluator init/run error: {exc}",
+        )
+
+
 def _pass_gate(summary: dict[str, Any]) -> tuple[bool, list[str]]:
     failures: list[str] = []
     overall = summary.get("overall", {})
@@ -411,9 +484,19 @@ def _render_markdown(summary: dict[str, Any], per_case_path: Path) -> str:
         f"- Average latency (ms): {summary['overall']['avg_latency_ms']}",
         f"- Spider execution match: {summary.get('spider_execution_match_rate')}",
         f"- Spider exact set match: {summary.get('spider_exact_match_rate')}",
+        f"- **Official Spider exec accuracy (test-suite-sql-eval)**: {summary.get('official_spider_exec_accuracy')}",
         "",
         "## By Suite",
     ]
+    # Official Spider breakdown by hardness
+    official_breakdown = summary.get("official_spider_breakdown")
+    if official_breakdown:
+        lines.insert(-1, "## Official Spider Breakdown (by Hardness)")
+        for level, stats in official_breakdown.items():
+            lines.insert(
+                -1,
+                f"- {level}: exec={stats.get('exec_accuracy', 'n/a')} (n={stats.get('count', 0)})",
+            )
     for suite, stats in summary.get("by_suite", {}).items():
         lines.extend(
             [
@@ -476,6 +559,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split", choices=["dev", "test", "all"], default="dev")
     parser.add_argument("--recursion-limit", type=int, default=25)
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument(
+        "--language",
+        type=str,
+        default=None,
+        choices=["en", "vi"],
+        help="Filter cases by language (en=English, vi=Vietnamese). Default: all languages",
+    )
     parser.add_argument("--enforce-gates", action="store_true")
     parser.add_argument(
         "--enable-llm-sql-generation",
@@ -494,6 +584,14 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Custom tag for output files (e.g., 'debug', 'baseline')",
     )
+    parser.add_argument(
+        "--official-spider-eval",
+        action="store_true",
+        help=(
+            "Run the official test-suite-sql-eval script on spider suite results "
+            "after collecting all predictions. Requires vendor/test-suite-sql-eval to be present."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -508,6 +606,8 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     cases = _load_suite_cases(cases_dir=cases_dir, suite=args.suite, split=args.split)
+    if args.language:
+        cases = [c for c in cases if c.language == args.language]
     if args.limit and args.limit > 0:
         cases = cases[: args.limit]
     if not cases:
@@ -536,6 +636,27 @@ def main() -> None:
     elapsed = time.time() - start_time
 
     summary = summarize(results)
+
+    # --- Optional: official Spider eval (test-suite-sql-eval) ---
+    if args.official_spider_eval:
+        print("Running official Spider test-suite-sql-eval...")
+        spider_db_dir = Path("data/spider_1/spider_data/database")
+        official_result = _run_official_spider_eval(results, db_dir=spider_db_dir)
+        if official_result and official_result.ok:
+            summary["official_spider_exec_accuracy"] = official_result.exec_accuracy_all
+            summary["official_spider_breakdown"] = official_result.to_dict()[
+                "breakdown"
+            ]
+            print(
+                f"Official Spider Execution Accuracy: {official_result.exec_accuracy_all:.4f}"
+            )
+            for level, s in official_result.breakdown.items():
+                print(f"  {level:<8}: {s.exec_accuracy:.4f}  (n={s.count})")
+        else:
+            err = official_result.error if official_result else "unknown error"
+            print(f"Official Spider eval failed: {err}")
+            summary["official_spider_exec_accuracy"] = None
+            summary["official_spider_error"] = err
 
     per_case_path = output_dir / f"per_case_{run_prefix}.jsonl"
     with per_case_path.open("w", encoding="utf-8") as handle:

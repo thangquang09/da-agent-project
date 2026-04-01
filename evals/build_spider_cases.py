@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import random
 from pathlib import Path
 
 BASE_PATH = Path("data/spider_1/spider_data")
@@ -103,14 +102,12 @@ def main():
     test_cases = load_test_cases()
     print(f"Loaded {len(dev_cases)} dev cases (EN+VI)")
     print(f"Loaded {len(test_cases)} test cases (EN+VI)")
-    random.seed(42)
-    sampled_dev = random.sample(dev_cases, min(200, len(dev_cases)))
     dev_path = OUTPUT_DIR / "dev" / "spider_dev.jsonl"
     dev_path.parent.mkdir(parents=True, exist_ok=True)
     with dev_path.open("w", encoding="utf-8") as f:
-        for case in sampled_dev:
+        for case in dev_cases:
             f.write(json.dumps(case, ensure_ascii=False) + "\n")
-    print(f"Wrote {len(sampled_dev)} cases to {dev_path}")
+    print(f"Wrote {len(dev_cases)} cases to {dev_path}")
     test_path = OUTPUT_DIR / "test" / "spider_test.jsonl"
     test_path.parent.mkdir(parents=True, exist_ok=True)
     with test_path.open("w", encoding="utf-8") as f:

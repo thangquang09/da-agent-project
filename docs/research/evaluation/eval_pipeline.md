@@ -30,6 +30,15 @@ Spider-only run:
 uv run python -m evals.runner --suite spider
 ```
 
+Spider with official test-suite-sql-eval scoring:
+```powershell
+uv run python -m evals.runner --suite spider --official-spider-eval
+```
+**Note:** Official Spider eval requires NLTK data. Run once to download:
+```powershell
+uv run python -c "import nltk; nltk.download('punkt_tab')"
+```
+
 Domain-only run (12 cases, fast):
 ```powershell
 uv run python -m evals.runner --suite domain --limit 12
@@ -68,3 +77,20 @@ After removing hardcoded logic and making all nodes LLM-driven:
 ## Known Issue: Groundedness
 The low groundedness score (~0.17) is due to keyword-based evaluation mismatch, NOT agent quality.
 See `docs/research/evaluation/EVAL_FIX_TASK.md` for fix specification.
+
+## Official Spider Evaluation
+Implementation: `evals/metrics/official_spider_eval.py`
+- Uses official test-suite-sql-eval from taoyds/test-suite-sql-eval
+- Provides execution accuracy comparable to Spider leaderboard
+- Reports breakdown by hardness: easy/medium/hard/extra/all
+
+**Key differences from custom eval:**
+- Only checks execution results (values), not column names
+- Allows column permutation (doesn't require exact column name match)
+- Uses test suite generation for more robust execution matching
+- Scores are comparable with Spider1 leaderboard
+
+**Comparison with legacy eval:**
+- `execution_accuracy.py`: Stricter - checks column names, no permutation
+- `spider_exact_match.py`: Checks SQL structure with regex tokenizer
+- `official_spider_eval.py`: Most aligned with academic benchmark

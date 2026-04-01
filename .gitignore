@@ -66,6 +66,9 @@ skills-lock.json
 evals/reports/
 evals/reports/traces.jsonl
 
+# Vendor dependencies (clone from external repos)
+vendor/
+
 # Local scratch / test files (may contain real credentials)
 curl_command.txt
 
