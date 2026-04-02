@@ -9,6 +9,7 @@ from sse_starlette.sse import ServerSentEvent
 
 from app.logger import logger
 from app.main import run_query
+from backend.utils import make_serializable
 
 
 async def stream_query_events(
@@ -67,7 +68,7 @@ async def stream_query_events(
         )
 
         # Serialize payload — convert bytes to base64 for JSON transport
-        serializable = _make_serializable(payload)
+        serializable = make_serializable(payload)
 
         yield ServerSentEvent(
             data=json.dumps({"event": "result", "node": None, "data": serializable}),
@@ -84,14 +85,3 @@ async def stream_query_events(
             }),
             event="error",
         )
-
-
-def _make_serializable(obj: Any) -> Any:
-    """Recursively convert bytes → base64 str for JSON serialization."""
-    if isinstance(obj, bytes):
-        return base64.b64encode(obj).decode()
-    if isinstance(obj, dict):
-        return {k: _make_serializable(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_make_serializable(i) for i in obj]
-    return obj

@@ -7,6 +7,7 @@ from typing import Any
 from app.logger import logger
 from app.main import run_query
 from backend.models.responses import QueryResponse
+from backend.utils import make_serializable
 
 
 async def run_query_async(
@@ -58,5 +59,9 @@ async def run_query_async(
         intent=payload.get("intent", "?"),
     )
 
+    # Convert bytes → base64 str so Pydantic can parse the payload without
+    # ValidationError (non-ASCII bytes like PNG image_data are not valid str).
+    serializable = make_serializable(payload)
+
     # Build QueryResponse — use only keys that exist in the payload
-    return QueryResponse(**{k: v for k, v in payload.items() if v is not None and k in QueryResponse.model_fields})
+    return QueryResponse(**{k: v for k, v in serializable.items() if v is not None and k in QueryResponse.model_fields})
