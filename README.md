@@ -1,267 +1,251 @@
 # DA Agent Lab
 
-A LangGraph-based Data Analyst Agent that answers business and data questions through SQL query execution, RAG over business documentation, deterministic analysis, and production-grade observability.
-
----
-
-![DA Agent Graph](docs/thangquang09/langgraph_graph.png)
-
----
-
-## Overview
-
-The agent handles three classes of questions:
-
-| Class | Example | Route |
-|-------|---------|-------|
-| **SQL** | *"DAU 7 ngày gần đây có giảm không?"* | Schema → SQL Gen → Execute → Analyze |
-| **RAG** | *"Retention D1 là gì?"* | Retrieve metric definitions → Synthesize |
-| **Mixed** | *"Retention tuần này giảm từ ngày nào và metric này tính như thế nào?"* | SQL path + RAG retrieval → Synthesize |
-
----
+**LangGraph-based Data Analyst Agent** — trả lời business/data questions qua SQL tools, RAG retrieval, và full observability.
 
 ## Architecture
 
-### Main Graph (V2)
-
 ```
-User Query
-    │
-    ▼
-detect_context_type ──► [has CSV?] ──► process_uploaded_files
-    │                                           │
-    └───────────────────────────────────────────┘
-                         │
-                         ▼
-                    route_intent
-                         │
-          ┌──────────────┼──────────────┐
-        sql/mixed        rag         unknown
-          │               │               │
-     task_planner  retrieve_context   synthesize_answer
-          │               │
-    [Send fan-out]        └──────────────────┐
-          │                                  │
-    ┌─────┴──────┐                           │
-  sql_worker  standalone_viz                 │
-          │                                  │
-    aggregate_results ────────────────────── ┤
-          │                                  │
-        mixed? ──► retrieve_context_node     │
-          │               │                  │
-          └───────────────┴──────────────────┘
-                          │
-                    synthesize_answer
-                          │
-                     AnswerPayload
-```
+User
+ │
+ ▼
+Streamlit UI :8501   ──HTTP/SSE──►  FastAPI Backend :8001
+                                          │
+                                          ▼
+                                    LangGraph Agent
+                                    (SQL / RAG / Mixed)
+                                          │
+                                    ┌─────┴──────┐
+                                    │            │
+                                SQLite DB    ConvMemory
+                                (warehouse)  (SQLite)
 
-### SQL Worker Subgraph
-
-Each task dispatched via the Send API runs through an isolated SQL Worker subgraph with a built-in self-correction loop:
-
-```
-_task_get_schema
-    │
-    ▼
-_task_generate_sql ◄────────────────────────────┐
-    │                                            │
-    ▼                                            │ retry (≤ 2x)
-_task_validate_sql                               │ with error context
-    │                                            │
-    ├── [invalid] ───────────────────────────────┘
-    │
-    ▼
-_task_execute_sql
-    │
-    ├── [retryable error] ────────────────────────┘
-    │
-    ▼
-_task_generate_visualization  (optional)
-```
-
-**SQL safety** is enforced deterministically before execution: only `SELECT` and CTEs are allowed; `INSERT`, `UPDATE`, `DELETE`, `DROP`, and all DDL statements are blocked.
-
-### E2B Visualization
-
-```
-SQL Result / Raw Data
-    │
-    ▼
-LLM Code Generation (matplotlib / seaborn / pandas)
-    │
-    ├── success ──► E2B Sandbox ──► Base64 PNG
-    │
-    └── failure ──► Template Fallback ──► E2B Sandbox ──► Base64 PNG
-```
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Orchestration | [LangGraph](https://langchain-ai.github.io/langgraph/) — explicit state, conditional edges, Send API |
-| LLM Backend | OpenAI-compatible API (configurable via `LLM_API_URL`) |
-| Database | SQLite — analytics warehouse + LangGraph checkpointer |
-| Vector Store | ChromaDB — metric definitions, business context |
-| Observability | [Langfuse](https://langfuse.com/) — traces, spans, prompt versioning |
-| Visualization | [E2B](https://e2b.dev/) — sandboxed Python chart execution |
-| MCP Server | [FastMCP](https://gofastmcp.com/) — 7 tools exposed as MCP endpoints |
-| Logging | [Loguru](https://loguru.readthedocs.io/) |
-| UI | [Streamlit](https://streamlit.io/) |
-| Package Manager | [uv](https://docs.astral.sh/uv/) |
-
----
-
-## Project Structure
-
-```
-app/
-├── graph/
-│   ├── state.py                    # AgentState, TaskState, AnswerPayload
-│   ├── graph.py                    # build_sql_v1_graph(), build_sql_v2_graph()
-│   ├── nodes.py                    # All node functions
-│   ├── edges.py                    # Routing / conditional-edge functions
-│   ├── sql_worker_graph.py         # SQL worker subgraph (V2)
-│   ├── visualization_node.py       # E2B chart generation node
-│   ├── standalone_visualization.py # Standalone viz worker
-│   └── error_classifier.py         # SQL error taxonomy
-├── tools/
-│   ├── get_schema.py
-│   ├── query_sql.py
-│   ├── validate_sql.py
-│   ├── retrieve_metric_definition.py
-│   ├── retrieve_business_context.py
-│   ├── dataset_context.py
-│   ├── auto_register.py
-│   ├── csv_profiler.py
-│   ├── csv_validator.py
-│   └── visualization.py
-├── prompts/                        # Prompt modules with Langfuse versioning
-├── rag/                            # ChromaDB indexing and retrieval
-├── observability/                  # RunTracer, span schemas
-├── memory/                         # Cross-turn context store
-└── main.py
-
-mcp_server/                         # FastMCP server (7 exposed tools)
-data/seeds/                         # Seed database creation
-docs/research/rag/                  # Markdown docs indexed for RAG
-evals/                              # Eval runner, metrics, case contracts
-tests/                              # Pytest unit tests
-streamlit_app.py
+FastMCP Server :8000  (tool surface, independent)
 ```
 
 ---
 
 ## Quick Start
 
-**Prerequisites:** Python 3.11+, [`uv`](https://docs.astral.sh/uv/)
+### Option A — Local Mode (nhiều terminal)
+
+**Yêu cầu:** Python 3.12+, `uv`
 
 ```bash
-git clone https://github.com/thangquang09/da-agent-project.git
-cd da-agent-project
-
+# 1. Cài dependencies
 uv sync
-cp .env.example .env          # fill in credentials
 
+# 2. Seed database (lần đầu)
 uv run python data/seeds/create_seed_db.py
-uv run python -m app.rag.index_docs
 
-uv run streamlit run streamlit_app.py   # web UI
-uv run python -m app.main               # CLI
-uv run python -m mcp_server.server      # MCP server
+# 3. Terminal 1 — Backend (FastAPI)
+uv run uvicorn backend.main:app --port 8001 --reload
+
+# 4. Terminal 2 — Frontend (Streamlit)
+BACKEND_URL=http://localhost:8001 uv run streamlit run streamlit_app.py
+
+# 5. (Optional) Terminal 3 — MCP Server
+uv run python -m mcp_server.server
+
+# 6. (Optional) Terminal 4 — CLI trực tiếp
+uv run python -m app.main "DAU 7 ngày gần đây?"
+```
+
+**Truy cập:**
+| Service | URL |
+|---------|-----|
+| Streamlit UI | http://localhost:8501 |
+| FastAPI docs | http://localhost:8001/docs |
+| FastAPI health | http://localhost:8001/health |
+| MCP server | http://localhost:8000/mcp |
+
+---
+
+### Option B — Docker Compose Mode
+
+**Yêu cầu:** Docker Engine + Docker Compose v2
+
+**Bước 1 — Cấu hình env:**
+```bash
+cp .env.docker .env.docker.local
+# Mở .env.docker.local và điền các giá trị:
+#   LLM_API_URL=...
+#   LLM_API_KEY=...
+#   E2B_API_KEY=...  (nếu dùng visualization)
+```
+
+**Bước 2 — Build và chạy:**
+```bash
+docker compose --env-file .env.docker.local up --build
+```
+
+> Lần đầu build tốn ~5-10 phút do download ML deps (torch, sentence-transformers).
+> Các lần sau dùng cache, chỉ ~30 giây.
+
+**Bước 3 — Truy cập (giống Local Mode):**
+| Service | URL |
+|---------|-----|
+| Streamlit UI | http://localhost:8501 |
+| FastAPI docs | http://localhost:8001/docs |
+| FastAPI health | http://localhost:8001/health |
+| MCP server | http://localhost:8000/mcp |
+
+**Các lệnh Docker thường dùng:**
+```bash
+# Dừng tất cả
+docker compose --env-file .env.docker.local down
+
+# Xem logs
+docker compose logs -f backend      # Backend logs
+docker compose logs -f frontend     # Streamlit logs
+docker compose logs -f              # Tất cả
+
+# Restart một service
+docker compose --env-file .env.docker.local restart backend
+
+# Rebuild sau khi sửa code
+docker compose --env-file .env.docker.local up --build backend
+
+# Reset hoàn toàn (xóa data volumes)
+docker compose down -v   # ⚠️ xóa toàn bộ SQLite data
+docker compose --env-file .env.docker.local up --build
 ```
 
 ---
 
-## Configuration
+## Development Commands
 
 ```bash
-LLM_API_URL=https://api.openai.com/v1/chat/completions
-LLM_API_KEY=your-api-key
+# Tests
+uv run pytest                                       # All tests
+uv run pytest tests/test_backend_api.py -v          # Backend API tests
+uv run pytest tests/test_sql_tools.py -v            # SQL tools
+uv run pytest -k "memory" -v                        # Memory tests
+uv run pytest --cov=app --cov-report=term-missing   # Coverage
 
-DEFAULT_MODEL=gpt-4o
-MODEL_FALLBACK=gpt-4o-mini
+# Evaluation
+uv run python evals/runner.py                       # Full eval suite
 
-SQLITE_DB_PATH=data/warehouse/analytics.db
+# Database
+uv run python data/seeds/create_seed_db.py          # Re-seed database
 
-LANGFUSE_PUBLIC_KEY=pk-lf-...
-LANGFUSE_SECRET_KEY=sk-lf-...
-LANGFUSE_HOST=https://cloud.langfuse.com
+# API smoke tests (backend phải đang chạy)
+curl http://localhost:8001/health
+curl -X POST http://localhost:8001/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "DAU 7 ngày gần đây?", "thread_id": "test-001"}'
 
-E2B_API_KEY=your-e2b-api-key
+# SSE streaming test
+curl -N "http://localhost:8001/query/stream?q=DAU+hom+nay&thread_id=test"
 
-ENABLE_MCP_TOOL_CLIENT=false
-MCP_HTTP_URL=http://127.0.0.1:8000/mcp
+# Thread history
+curl http://localhost:8001/threads/test-001/history
 ```
 
 ---
 
-## Response Format
+## Environment Variables
 
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `LLM_API_URL` | ✅ | — | LLM API endpoint |
+| `LLM_API_KEY` | ✅ | — | API key |
+| `E2B_API_KEY` | ❌ | — | E2B sandbox (visualization) |
+| `BACKEND_URL` | ❌ | `http://localhost:8001` | Backend URL (Streamlit) |
+| `SQLITE_DB_PATH` | ❌ | `data/warehouse/analytics.db` | Database path |
+| `TRACE_JSONL_PATH` | ❌ | `evals/reports/traces.jsonl` | Trace output |
+| `ENABLE_LANGFUSE` | ❌ | `false` | Langfuse tracing |
+| `ENABLE_MCP_TOOL_CLIENT` | ❌ | `false` | Use MCP tools |
+| `BACKEND_PORT` | ❌ | `8001` | Backend port (Docker) |
+| `FRONTEND_PORT` | ❌ | `8501` | Frontend port (Docker) |
+| `MCP_PORT` | ❌ | `8000` | MCP port (Docker) |
+
+---
+
+## Project Structure
+
+```
+da-agent-project/
+├── app/                    # Agent core (LangGraph, tools, memory)
+│   ├── graph/              # LangGraph nodes, state, graph builders
+│   ├── memory/             # ConversationMemoryStore (SQLite)
+│   ├── observability/      # RunTracer (JSONL + Langfuse)
+│   └── main.py             # run_query() entry point (UI-agnostic)
+├── backend/                # FastAPI backend (HTTP layer)
+│   ├── main.py             # App factory
+│   ├── routers/            # health, query, threads, evals
+│   ├── models/             # Pydantic request/response models
+│   ├── services/           # agent_service, sse_service
+│   └── http_client.py      # HTTP client dùng bởi Streamlit
+├── mcp_server/             # FastMCP server (tool surface)
+├── evals/                  # Evaluation suite
+├── data/seeds/             # Database seed scripts
+├── docker/                 # Dockerfiles
+│   ├── backend.Dockerfile
+│   └── frontend.Dockerfile
+├── streamlit_app.py        # Thin Streamlit UI (HTTP calls only)
+├── docker-compose.yml      # Multi-service compose
+├── .env.docker             # Docker env template (copy & fill)
+└── pyproject.toml          # Dependencies (uv)
+```
+
+---
+
+## API Reference
+
+### `GET /health`
+```json
+{"status": "ok", "version": "1.0.0", "graph_version": "v2"}
+```
+
+### `POST /query`
 ```json
 {
-  "answer": "DAU trong 7 ngày gần đây có xu hướng giảm nhẹ...",
-  "evidence": ["DAU ngày 2026-03-25: 12,450", "DAU ngày 2026-03-31: 11,200"],
-  "confidence": "high",
-  "used_tools": ["get_schema", "generate_sql", "execute_sql", "analyze_result"],
-  "generated_sql": "SELECT date, dau FROM daily_metrics ORDER BY date DESC LIMIT 7",
-  "visualization": { "type": "line", "image_base64": "..." }
+  "query": "DAU 7 ngày gần đây?",
+  "thread_id": "optional-uuid",
+  "user_semantic_context": "optional",
+  "version": "v2"
 }
 ```
 
----
+### `GET /query/stream?q=...&thread_id=...`
+SSE streaming. Events:
+- `event: started` — ngay lập tức
+- `event: result` — full payload sau ~7-10s
+- `event: error` — khi lỗi
 
-## Tools
+### `POST /query/upload`
+Multipart form: `query`, `thread_id`, `files[]` (CSV)
 
-| Tool | Category | Description |
-|------|----------|-------------|
-| `get_schema` | Schema | DB schema overview — tables, columns, types |
-| `describe_table` | Schema | Single table schema |
-| `list_tables` | Schema | All table names in the DB |
-| `query_sql` | SQL | Execute validated SELECT query (max 200 rows) |
-| `validate_sql` | SQL | Deterministic safety validation |
-| `retrieve_metric_definition` | RAG | Semantic search over metric definitions |
-| `retrieve_business_context` | RAG | Semantic search over business docs |
-| `dataset_context` | RAG | Dataset-level context chunks |
-| `validate_csv` | File | Check encoding, delimiter, schema |
-| `profile_csv` | File | Column stats, type inference, row count |
-| `auto_register_csv` | File | Register CSV as SQLite table |
-| `check_table_exists` | Utility | Table existence check |
+### `GET /threads/{id}/history?limit=20`
+Lịch sử hội thoại theo thứ tự thời gian.
 
-**MCP-exposed** (via FastMCP at `:8000/mcp`): `get_schema`, `query_sql`, `validate_csv`, `profile_csv`, `auto_register_csv`, `retrieve_metric_definition`, `dataset_context`.
+### `DELETE /threads/{id}`
+Xóa conversation memory. Idempotent (204).
+
+### `POST /evals/run`
+Trigger eval suite chạy nền. Trả về ngay.
 
 ---
 
-## Observability
+## Troubleshooting
 
-Every run is traced to Langfuse with run-level and node-level spans:
-
-- **Run-level:** `run_id`, `intent`, `total_steps`, `total_latency_ms`, `total_token_usage`, `status`
-- **Node-level:** `node_name`, `latency_ms`, `input_summary`, `output_summary`, `error_class`
-
-**Failure taxonomy:** `ROUTING_ERROR` · `SQL_GENERATION_ERROR` · `SQL_VALIDATION_ERROR` · `SQL_EXECUTION_ERROR` · `RAG_RETRIEVAL_ERROR` · `SYNTHESIS_ERROR` · `CSV_PROCESSING_ERROR` · `VISUALIZATION_ERROR` · `STEP_LIMIT_REACHED`
-
----
-
-## Evaluation
-
+**Backend offline (Streamlit hiện dấu đỏ):**
 ```bash
-uv run python evals/runner.py
-uv run python evals/runner.py --suite spider_dev
+curl http://localhost:8001/health
+uv run uvicorn backend.main:app --port 8001 --reload
 ```
 
-| Metric | Gate |
-|--------|------|
-| `routing_accuracy` | ≥ 0.90 |
-| `sql_validity_rate` | ≥ 0.90 |
-| `tool_path_accuracy` | ≥ 0.95 |
-| `answer_format_validity` | 1.00 |
-| `groundedness_pass_rate` | ≥ 0.70 |
+**Docker: port đã bị dùng:**
+```bash
+lsof -i :8001
+# Override trong .env.docker.local:
+BACKEND_PORT=8002
+```
 
----
+**Docker: analytics.db chưa có (lần đầu):**
+- Backend tự động seed khi startup. Xem log: `docker compose logs backend`
 
-## License
-
-MIT
+**Xóa data và bắt đầu lại:**
+```bash
+docker compose down -v && docker compose --env-file .env.docker.local up --build
+```

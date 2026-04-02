@@ -6,7 +6,7 @@ from typing import Any
 import streamlit as st
 
 from app.logger import logger
-from app.main import run_query
+from backend.http_client import health_check, query_stream
 
 
 st.set_page_config(page_title="DA Agent Lab", page_icon="📊", layout="wide")
@@ -17,25 +17,46 @@ st.caption("LangGraph DA Agent chat with trace visibility")
 def run_agent(
     user_query: str,
     user_semantic_context: str | None = None,
-    uploaded_files: list[str] | None = None,
+    uploaded_files: list[str] | None = None,  # kept for API compat, unused (filenames go via data)
     uploaded_file_data: list[dict[str, Any]] | None = None,
     thread_id: str | None = None,
 ) -> dict:
-    logger.info("streamlit.run_agent start query_len={len}", len=len(user_query))
-    payload = run_query(
-        user_query=user_query,
-        recursion_limit=25,
-        user_semantic_context=user_semantic_context,
-        uploaded_files=uploaded_files,
-        uploaded_file_data=uploaded_file_data,
-        thread_id=thread_id,
+    """
+    Execute a query via the FastAPI backend using SSE streaming.
+
+    Returns the same payload dict shape as the old direct run_query() call,
+    so all downstream rendering code (_render_result, etc.) is unchanged.
+    """
+    effective_thread_id = thread_id or str(uuid.uuid4())
+    logger.info(
+        "streamlit.run_agent → backend thread={tid} query_len={qlen}",
+        tid=effective_thread_id[:8],
+        qlen=len(user_query),
     )
+
+    result: dict[str, Any] = {}
+    for event in query_stream(
+        query=user_query,
+        thread_id=effective_thread_id,
+        user_semantic_context=user_semantic_context,
+        uploaded_file_data=uploaded_file_data,
+    ):
+        event_type = event.get("event", "")
+        if event_type == "result":
+            result = event.get("data", {})
+        elif event_type == "error":
+            err_msg = event.get("data", {}).get("message", "Backend error")
+            raise RuntimeError(err_msg)
+
+    if not result:
+        raise RuntimeError("Backend returned no result. Is the backend running?")
+
     logger.info(
         "streamlit.run_agent done run_id={run_id} intent={intent}",
-        run_id=payload.get("run_id", "unknown"),
-        intent=payload.get("intent", "unknown"),
+        run_id=result.get("run_id", "unknown"),
+        intent=result.get("intent", "unknown"),
     )
-    return payload
+    return result
 
 
 def _init_state() -> None:
@@ -223,6 +244,15 @@ def _run_current_query_if_needed() -> None:
 _init_state()
 
 with st.sidebar:
+    # Backend connectivity indicator
+    import os
+    backend_url = os.getenv("BACKEND_URL", "http://localhost:8001")
+    if health_check():
+        st.success(f"✅ Backend: `{backend_url}`", icon=None)
+    else:
+        st.error(f"❌ Backend offline: `{backend_url}`")
+        st.info("Run: `uvicorn backend.main:app --port 8001`")
+
     st.subheader("Session")
     st.write(f"Thread ID: `{st.session_state.get('thread_id', 'N/A')[:8]}...`")
     st.write(f"Pending queue: `{len(st.session_state['pending_queries'])}`")

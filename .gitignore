@@ -71,6 +71,8 @@ vendor/
 
 # Local scratch / test files (may contain real credentials)
 curl_command.txt
+JD.txt
+project_for_cv.md
 
 # Graph export images (re-generated via export_graph.py)
 docs/thangquang09/langgraph_graph_v1.png
@@ -78,3 +80,8 @@ docs/thangquang09/langgraph_graph_v2.png
 docs/thangquang09/langgraph_graph_v1.mmd
 docs/thangquang09/langgraph_graph_v2.mmd
 docs/thangquang09/_render.html
+
+# Analysis and backup files (generated during development, not part of codebase)
+CODEBASE_ANALYSIS.md
+streamlit_app_original.py
+results.txt

@@ -529,6 +529,8 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "e2b-code-interpreter" },
+    { name = "fastapi" },
+    { name = "httpx" },
     { name = "langfuse" },
     { name = "langgraph" },
     { name = "loguru" },
@@ -536,9 +538,11 @@ dependencies = [
     { name = "nltk" },
     { name = "pillow" },
     { name = "python-dotenv" },
+    { name = "python-multipart" },
     { name = "qdrant-client" },
     { name = "sentence-transformers" },
     { name = "sqlparse" },
+    { name = "sse-starlette" },
     { name = "streamlit" },
     { name = "torchvision" },
     { name = "tqdm" },
@@ -554,6 +558,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "e2b-code-interpreter", specifier = ">=1.0.0" },
+    { name = "fastapi", specifier = ">=0.115.0" },
+    { name = "httpx", specifier = ">=0.27.0" },
     { name = "langfuse", specifier = ">=3.9.0" },
     { name = "langgraph", specifier = ">=1.1.3" },
     { name = "loguru", specifier = ">=0.7.3" },
@@ -561,9 +567,11 @@ requires-dist = [
     { name = "nltk", specifier = ">=3.9.4" },
     { name = "pillow", specifier = ">=10.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "qdrant-client", specifier = ">=1.17.1" },
     { name = "sentence-transformers", specifier = ">=5.3.0" },
     { name = "sqlparse", specifier = ">=0.5.5" },
+    { name = "sse-starlette", specifier = ">=2.1.0" },
     { name = "streamlit", specifier = ">=1.55.0" },
     { name = "torchvision", specifier = ">=0.26.0" },
     { name = "tqdm", specifier = ">=4.67.3" },
@@ -627,6 +635,22 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/cf/dd/f90b56d1597abfcdabdc018ac184fa714066be93d24b97edc2bf0671d483/e2b_code_interpreter-2.6.0.tar.gz", hash = "sha256:67e66531e5cf65c9df6e82aa0bdb1e73223a1ab205f10d47c027eb2ea09b73f9", size = 10683, upload-time = "2026-03-23T17:01:07.327Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/6b/79/f70d50604584df66064892f3fca7ab57b10ad40c826fd003be53a4cd5fa5/e2b_code_interpreter-2.6.0-py3-none-any.whl", hash = "sha256:a15f1d155566aef98cf2ccc0f8d9b07d15e07582d6cc8a128bc97de371bd617c", size = 13715, upload-time = "2026-03-23T17:01:06.111Z" },
+]
+
+[[package]]
+name = "fastapi"
+version = "0.135.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "annotated-doc" },
+    { name = "pydantic" },
+    { name = "starlette" },
+    { name = "typing-extensions" },
+    { name = "typing-inspection" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f7/e6/7adb4c5fa231e82c35b8f5741a9f2d055f520c29af5546fd70d3e8e1cd2e/fastapi-0.135.3.tar.gz", hash = "sha256:bd6d7caf1a2bdd8d676843cdcd2287729572a1ef524fc4d65c17ae002a1be654", size = 396524, upload-time = "2026-04-01T16:23:58.188Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/84/a4/5caa2de7f917a04ada20018eccf60d6cc6145b0199d55ca3711b0fc08312/fastapi-0.135.3-py3-none-any.whl", hash = "sha256:9b0f590c813acd13d0ab43dd8494138eb58e484bfac405db1f3187cfc5810d98", size = 117734, upload-time = "2026-04-01T16:23:59.328Z" },
 ]
 
 [[package]]

@@ -1,0 +1,116 @@
+# DA Agent — Docker Compose
+# Services: backend (FastAPI:8001) + frontend (Streamlit:8501) + mcp (FastMCP:8000)
+# All on isolated bridge network; SQLite data in named volumes.
+#
+# Usage:
+#   docker compose --env-file .env.docker up --build
+#   docker compose --env-file .env.docker down
+#   docker compose --env-file .env.docker logs -f backend
+
+services:
+
+  # ──────────────────────────────────────────────────────────────
+  # MCP Server  (FastMCP tool surface)
+  # Started first — no deps on other services
+  # ──────────────────────────────────────────────────────────────
+  mcp:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    # Override default CMD to run MCP server instead
+    command: ["uv", "run", "python", "-m", "mcp_server.server",
+              "--host", "0.0.0.0", "--port", "8000"]
+    container_name: da-agent-mcp
+    ports:
+      - "${MCP_PORT:-8000}:8000"
+    volumes:
+      - agent_data:/app/data/warehouse
+    environment:
+      LLM_API_URL: ${LLM_API_URL}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      SQLITE_DB_PATH: /app/data/warehouse/analytics.db
+      ENABLE_LANGFUSE: ${ENABLE_LANGFUSE:-false}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-}
+    restart: unless-stopped
+    networks:
+      - da-agent-net
+
+  # ──────────────────────────────────────────────────────────────
+  # Backend  (FastAPI + LangGraph agent)
+  # ──────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    container_name: da-agent-backend
+    ports:
+      - "${BACKEND_PORT:-8001}:8001"
+    volumes:
+      # analytics.db + conversation_memory.db (shared with mcp)
+      - agent_data:/app/data/warehouse
+      # traces.jsonl (backend only)
+      - agent_evals:/app/evals/reports
+    environment:
+      LLM_API_URL: ${LLM_API_URL}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      E2B_API_KEY: ${E2B_API_KEY:-}
+      SQLITE_DB_PATH: /app/data/warehouse/analytics.db
+      TRACE_JSONL_PATH: /app/evals/reports/traces.jsonl
+      # Connect to mcp service via Docker DNS
+      MCP_HTTP_URL: http://mcp:8000/mcp
+      ENABLE_MCP_TOOL_CLIENT: ${ENABLE_MCP_TOOL_CLIENT:-false}
+      BACKEND_PORT: "8001"
+      BACKEND_CORS_ORIGINS: "http://localhost:${FRONTEND_PORT:-8501},http://frontend:8501"
+      ENABLE_LANGFUSE: ${ENABLE_LANGFUSE:-false}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-}
+    depends_on:
+      - mcp
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    networks:
+      - da-agent-net
+
+  # ──────────────────────────────────────────────────────────────
+  # Frontend  (Streamlit thin client)
+  # Waits for backend to be healthy before starting
+  # ──────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    container_name: da-agent-frontend
+    ports:
+      - "${FRONTEND_PORT:-8501}:8501"
+    environment:
+      # Docker DNS: 'backend' resolves to the backend container
+      BACKEND_URL: http://backend:8001
+      BACKEND_QUERY_TIMEOUT: "120"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - da-agent-net
+
+# ── Volumes ─────────────────────────────────────────────────────
+volumes:
+  # Shared between backend + mcp: analytics.db, conversation_memory.db
+  agent_data:
+    driver: local
+  # Backend only: traces.jsonl, eval reports
+  agent_evals:
+    driver: local
+
+# ── Network ─────────────────────────────────────────────────────
+networks:
+  da-agent-net:
+    driver: bridge
