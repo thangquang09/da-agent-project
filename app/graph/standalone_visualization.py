@@ -101,10 +101,27 @@ def standalone_visualization_worker(task_state: TaskState) -> dict[str, Any]:
 
     except Exception as exc:
         logger.exception("Standalone visualization failed")
+        error_msg = str(exc)
+
+        # Provide user-friendly error messages for common issues
+        if "sandbox" in error_msg.lower() and (
+            "timeout" in error_msg.lower() or "not found" in error_msg.lower()
+        ):
+            user_error = (
+                "Visualization sandbox timed out while starting. "
+                "This may be due to high demand. Please try again later."
+            )
+        elif "api key" in error_msg.lower():
+            user_error = (
+                "Visualization service API key is invalid. Please contact support."
+            )
+        else:
+            user_error = f"Visualization failed: {error_msg}"
+
         return {
             "visualization": {
                 "success": False,
-                "error": str(exc),
+                "error": user_error,
             },
             "status": "failed",
         }

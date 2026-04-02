@@ -144,8 +144,13 @@ class PromptManager:
                 )
         return self._compile_local_messages(definition, variables)
 
-    def router_messages(self, query: str) -> list[dict[str, str]]:
-        return self._compile_prompt(ROUTER_PROMPT_DEFINITION, {"query": query})
+    def router_messages(
+        self, query: str, session_context: str = ""
+    ) -> list[dict[str, str]]:
+        return self._compile_prompt(
+            ROUTER_PROMPT_DEFINITION,
+            {"query": query, "session_context": session_context},
+        )
 
     def context_detection_messages(
         self,

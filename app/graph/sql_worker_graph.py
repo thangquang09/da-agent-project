@@ -53,6 +53,32 @@ def _format_sql_error(error_msg: str) -> str:
     return "An error occurred while executing the query. The data may not be available or the query needs adjustment."
 
 
+def _apply_parameter_changes(sql: str, parameter_changes: dict[str, Any]) -> str:
+    """
+    Apply parameter changes to inherited SQL.
+
+    This is a simple string-based approach for common patterns:
+    - Replace WHERE condition values
+    - Update column selections
+
+    For complex changes, the SQL should be regenerated.
+    """
+    if not parameter_changes:
+        return sql
+
+    modified_sql = sql
+
+    # Try to apply simple parameter replacements
+    # Example: {"addiction_level": "Medium"} → replace 'High' with 'Medium' in WHERE
+    for param_name, new_value in parameter_changes.items():
+        # Pattern: column = 'value' or column='value'
+        pattern = rf"({param_name}\s*=\s*)'[^']*'(?=\s|$|AND|OR|\))"
+        replacement = rf"\1'{new_value}'"
+        modified_sql = re.sub(pattern, replacement, modified_sql, flags=re.IGNORECASE)
+
+    return modified_sql
+
+
 def _task_get_schema(task_state: TaskState) -> dict[str, Any]:
     """Get schema for a specific task."""
     db_path = task_state.get("target_db_path")
@@ -73,10 +99,36 @@ def _task_get_schema(task_state: TaskState) -> dict[str, Any]:
 
 
 def _task_generate_sql(task_state: TaskState) -> dict[str, Any]:
-    """Generate SQL for a specific task."""
+    """Generate SQL for a specific task. Re-use inherited SQL if continuity is detected."""
     query = task_state.get("query", "")
     schema = task_state.get("schema_context", "")
+    session_context = task_state.get("session_context", "")
+    inherited_sql = task_state.get("inherited_sql")
+    parameter_changes = task_state.get("parameter_changes", {})
 
+    # If continuity detected and we have inherited SQL, re-use it
+    if inherited_sql:
+        logger.info(
+            "Using inherited SQL from continuity context (length={len_sql})",
+            len_sql=len(inherited_sql),
+        )
+
+        # Apply parameter changes if any
+        if parameter_changes:
+            sql = _apply_parameter_changes(inherited_sql, parameter_changes)
+            logger.info(
+                "Applied parameter changes to inherited SQL: {changes}",
+                changes=parameter_changes,
+            )
+        else:
+            sql = inherited_sql
+
+        return {
+            "generated_sql": sql,
+            "status": "running",
+        }
+
+    # Normal flow: generate SQL via LLM
     settings = load_settings()
     sql = ""
 
@@ -87,12 +139,18 @@ def _task_generate_sql(task_state: TaskState) -> dict[str, Any]:
 Use the provided schema. Only use SELECT and WITH statements.
 Respond with ONLY the SQL query, no explanations."""
 
+        user_content = f"Schema: {schema[:1500]}\n\nQuestion: {query}\n\nGenerate SQL:"
+        if session_context:
+            user_content = (
+                f"Previous conversation context:\n{session_context}\n\n{user_content}"
+            )
+
         response = client.chat_completion(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {
                     "role": "user",
-                    "content": f"Schema: {schema[:1500]}\n\nQuestion: {query}\n\nGenerate SQL:",
+                    "content": user_content,
                 },
             ],
             model=settings.model_sql_generation,
@@ -220,7 +278,7 @@ def _task_generate_visualization(task_state: TaskState) -> dict[str, Any]:
                 "success": False,
                 "error": "Visualization service not available (E2B not configured)",
             },
-            "status": "skipped",
+            "status": "success",  # Keep success so task results are not dropped
         }
 
     # Step 1: Generate Python visualization code using LLM (preferred)

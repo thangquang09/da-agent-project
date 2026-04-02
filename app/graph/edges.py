@@ -13,7 +13,7 @@ def route_after_context_detection(
 ) -> Literal["process_uploaded_files", "inject_session_context"]:
     """
     After context detection, check if there are uploaded files to process.
-    If yes, route to process_uploaded_files. Otherwise, go directly to inject_session_context.
+    If yes, route to process_uploaded_files. Otherwise, go to inject_session_context.
     """
     uploaded_file_data = state.get("uploaded_file_data", [])
     if uploaded_file_data:
@@ -23,7 +23,7 @@ def route_after_context_detection(
 
 def route_after_process_files(state: AgentState) -> Literal["inject_session_context"]:
     """
-    After processing uploaded files, always route to inject_session_context.
+    After processing uploaded files, route to inject_session_context.
     """
     return "inject_session_context"
 
@@ -192,6 +192,7 @@ def route_after_planning(
                 "schema_context": str(task.get("schema_context", "")),
                 "status": "pending",
                 "requires_visualization": requires_viz,
+                "session_context": str(task.get("session_context", "")),
             }
 
             sends.append(Send("sql_worker", send_state))

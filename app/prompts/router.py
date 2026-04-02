@@ -32,7 +32,9 @@ ROUTER_PROMPT_DEFINITION = PromptDefinition(
         },
         {
             "role": "user",
-            "content": ("User query:\n{{query}}\n\nRespond in JSON only."),
+            "content": (
+                "{{#if session_context}}Previous conversation:\n{{session_context}}\n\n{{/if}}User query:\n{{query}}\n\nRespond in JSON only."
+            ),
         },
     ],
 )

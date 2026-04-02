@@ -21,6 +21,7 @@ class TaskState(TypedDict, total=False):
     query: str
     target_db_path: str
     schema_context: str
+    session_context: str  # Conversation history for follow-up questions
     generated_sql: str
     validated_sql: str
     sql_result: dict[str, Any]
@@ -33,6 +34,8 @@ class TaskState(TypedDict, total=False):
     raw_data: list[
         dict[str, Any]
     ]  # For standalone visualization with user-provided data
+    inherited_sql: str  # SQL inherited from previous turn for continuity
+    parameter_changes: dict[str, Any]  # Parameter changes for inherited SQL
 
 
 class AnswerPayload(TypedDict, total=False):
@@ -97,6 +100,9 @@ class AgentState(TypedDict, total=False):
     thread_id: str  # Thread identifier for memory scoping
     session_context: str  # Injected context from conversation memory
     conversation_turn: int  # Current turn number in conversation
+    # Memory of Action - for implicit follow-up handling
+    last_action: dict[str, Any]  # Last completed action with SQL, parameters, etc.
+    continuity_context: dict[str, Any]  # Detected continuity info for follow-ups
 
 
 class GraphInputState(TypedDict, total=False):

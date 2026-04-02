@@ -45,11 +45,34 @@ def create_app() -> FastAPI:
     async def _startup() -> None:
         import asyncio
 
-        logger.info("DA Agent backend starting up (port={port})", port=os.getenv("BACKEND_PORT", "8001"))
+        logger.info(
+            "DA Agent backend starting up (port={port})",
+            port=os.getenv("BACKEND_PORT", "8001"),
+        )
 
         # Pre-warm ConversationMemoryStore singleton to avoid first-request latency
         from app.memory.conversation_store import get_conversation_memory_store
+
         get_conversation_memory_store()
+
+        # Pre-warm embedding model to avoid first-request cold start
+        # Model loading happens lazily on first embed_text() call, typically
+        # during compact_and_save_memory after synthesize_answer completes.
+        # Pre-warming here eliminates ~1-3s from the first query latency.
+        try:
+            from app.memory.qdrant_client import (
+                get_embedding_model,
+                is_qdrant_library_installed,
+            )
+
+            if is_qdrant_library_installed():
+                logger.info("Pre-warming embedding model...")
+                get_embedding_model()
+                logger.info("Embedding model ready")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Embedding model pre-warm failed (non-fatal): {err}", err=str(exc)
+            )
 
         # Auto-seed analytics DB if missing (e.g., fresh Docker volume)
         db_path = Path(os.getenv("SQLITE_DB_PATH", "data/warehouse/analytics.db"))
@@ -67,10 +90,12 @@ def _seed_db() -> None:
     """Run data/seeds/create_seed_db.py to populate analytics.db."""
     try:
         from data.seeds import create_seed_db  # type: ignore[import]
+
         if hasattr(create_seed_db, "main"):
             create_seed_db.main()
         else:
             import runpy
+
             runpy.run_module("data.seeds.create_seed_db", run_name="__main__")
     except Exception as exc:  # noqa: BLE001
         logger.warning("backend.startup seed failed (non-fatal): {err}", err=str(exc))

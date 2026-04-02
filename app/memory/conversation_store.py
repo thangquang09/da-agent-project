@@ -25,6 +25,7 @@ class ConversationTurn:
     result_summary: str | None
     entities: list[str]
     timestamp: str
+    last_action_json: str | None = None  # JSON-serialized last_action for continuity
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -64,6 +65,7 @@ class ConversationMemoryStore:
         result_summary TEXT,
         entities TEXT,
         timestamp TEXT NOT NULL,
+        last_action_json TEXT,
         UNIQUE(thread_id, turn_number)
     );
 
@@ -77,6 +79,10 @@ class ConversationMemoryStore:
         last_updated TEXT NOT NULL,
         key_entities TEXT
     );
+    """
+
+    MIGRATE_ADD_LAST_ACTION_SQL = """
+    ALTER TABLE conversation_memory ADD COLUMN last_action_json TEXT;
     """
 
     def __init__(self, db_path: str | Path | None = None):
@@ -99,7 +105,15 @@ class ConversationMemoryStore:
         # Set row_factory once at creation to avoid side-effects.
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(self.CREATE_TABLES_SQL)
-        self._conn.commit()
+
+        # Migration: Add last_action_json column if it doesn't exist
+        try:
+            self._conn.execute(self.MIGRATE_ADD_LAST_ACTION_SQL)
+            self._conn.commit()
+            logger.debug("Added last_action_json column to conversation_memory")
+        except sqlite3.OperationalError:
+            # Column already exists, ignore
+            pass
 
         label = ":memory:" if str(self.db_path) == ":memory:" else str(self.db_path)
         logger.info("Conversation memory store initialized at {path}", path=label)
@@ -136,8 +150,8 @@ class ConversationMemoryStore:
                 """
                 INSERT INTO conversation_memory (
                     thread_id, turn_number, role, content, intent,
-                    sql_generated, result_summary, entities, timestamp
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    sql_generated, result_summary, entities, timestamp, last_action_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     turn.thread_id,
@@ -149,6 +163,7 @@ class ConversationMemoryStore:
                     turn.result_summary,
                     json.dumps(turn.entities),
                     turn.timestamp,
+                    turn.last_action_json,
                 ),
             )
             conn.commit()
@@ -187,6 +202,9 @@ class ConversationMemoryStore:
                 result_summary=row["result_summary"],
                 entities=json.loads(row["entities"]) if row["entities"] else [],
                 timestamp=row["timestamp"],
+                last_action_json=row["last_action_json"]
+                if "last_action_json" in row.keys()
+                else None,
             )
             for row in reversed(rows)
         ]

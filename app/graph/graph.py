@@ -20,8 +20,10 @@ from app.graph.edges import (
 from app.graph.nodes import (
     aggregate_results,
     analyze_result,
+    capture_action_node,
     compact_and_save_memory,
     detect_context_type,
+    detect_continuity_node,
     execute_sql_node,
     generate_sql,
     get_schema,
@@ -74,6 +76,10 @@ def build_sql_v1_graph(checkpointer=None):
         _instrument_node("process_uploaded_files", process_uploaded_files, "tool"),
     )
     builder.add_node(
+        "detect_continuity_node",
+        _instrument_node("detect_continuity_node", detect_continuity_node, "memory"),
+    )
+    builder.add_node(
         "inject_session_context",
         _instrument_node("inject_session_context", inject_session_context, "memory"),
     )
@@ -108,10 +114,15 @@ def build_sql_v1_graph(checkpointer=None):
         _instrument_node("synthesize_answer", synthesize_answer, "generation"),
     )
     builder.add_node(
+        "capture_action_node",
+        _instrument_node("capture_action_node", capture_action_node, "memory"),
+    )
+    builder.add_node(
         "compact_and_save_memory",
         _instrument_node("compact_and_save_memory", compact_and_save_memory, "memory"),
     )
 
+    # Flow: START → detect_context_type → (process_uploaded_files OR inject_session_context)
     builder.add_edge(START, "detect_context_type")
     builder.add_conditional_edges(
         "detect_context_type",
@@ -122,7 +133,8 @@ def build_sql_v1_graph(checkpointer=None):
         },
     )
     builder.add_edge("process_uploaded_files", "inject_session_context")
-    builder.add_edge("inject_session_context", "route_intent")
+    builder.add_edge("inject_session_context", "detect_continuity_node")
+    builder.add_edge("detect_continuity_node", "route_intent")
     builder.add_conditional_edges(
         "route_intent",
         route_after_intent,
@@ -162,7 +174,8 @@ def build_sql_v1_graph(checkpointer=None):
         },
     )
     builder.add_edge("retrieve_context_node", "synthesize_answer")
-    builder.add_edge("synthesize_answer", "compact_and_save_memory")
+    builder.add_edge("synthesize_answer", "capture_action_node")
+    builder.add_edge("capture_action_node", "compact_and_save_memory")
     builder.add_edge("compact_and_save_memory", END)
 
     return builder.compile(checkpointer=checkpointer or InMemorySaver())
@@ -216,6 +229,10 @@ def build_sql_v2_graph(checkpointer=None):
         _instrument_node("process_uploaded_files", process_uploaded_files, "tool"),
     )
     builder.add_node(
+        "detect_continuity_node",
+        _instrument_node("detect_continuity_node", detect_continuity_node, "memory"),
+    )
+    builder.add_node(
         "inject_session_context",
         _instrument_node("inject_session_context", inject_session_context, "memory"),
     )
@@ -229,6 +246,10 @@ def build_sql_v2_graph(checkpointer=None):
     builder.add_node(
         "synthesize_answer",
         _instrument_node("synthesize_answer", synthesize_answer, "generation"),
+    )
+    builder.add_node(
+        "capture_action_node",
+        _instrument_node("capture_action_node", capture_action_node, "memory"),
     )
     builder.add_node(
         "compact_and_save_memory",
@@ -264,7 +285,8 @@ def build_sql_v2_graph(checkpointer=None):
         },
     )
     builder.add_edge("process_uploaded_files", "inject_session_context")
-    builder.add_edge("inject_session_context", "route_intent")
+    builder.add_edge("inject_session_context", "detect_continuity_node")
+    builder.add_edge("detect_continuity_node", "route_intent")
 
     # Intent routing with Plan-and-Execute
     builder.add_conditional_edges(
@@ -303,8 +325,9 @@ def build_sql_v2_graph(checkpointer=None):
     # RAG flow
     builder.add_edge("retrieve_context_node", "synthesize_answer")
 
-    # Final synthesis and memory save
-    builder.add_edge("synthesize_answer", "compact_and_save_memory")
+    # Final synthesis, action capture, and memory save
+    builder.add_edge("synthesize_answer", "capture_action_node")
+    builder.add_edge("capture_action_node", "compact_and_save_memory")
     builder.add_edge("compact_and_save_memory", END)
 
     return builder.compile(checkpointer=checkpointer or InMemorySaver())

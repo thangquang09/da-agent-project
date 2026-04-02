@@ -193,16 +193,19 @@ def _extract_first_json_object(text: str) -> dict[str, Any] | None:
 
 def route_intent(state: AgentState) -> AgentState:
     query = state["user_query"]
+    session_context = state.get("session_context", "")
     settings = load_settings()
     intent = "unknown"
     intent_reason = "llm_router"
     llm_usage: dict[str, int] | None = None
     llm_cost_usd: float | None = None
 
-    try:
+    messages = prompt_manager.router_messages(query, session_context=session_context)
+
+    def _do_route() -> tuple[str, str, dict | None, dict | None, str]:
         client = LLMClient.from_env()
         response = client.chat_completion(
-            messages=prompt_manager.router_messages(query),
+            messages=messages,
             model=settings.model_router,
             temperature=0.0,
             stream=False,
@@ -213,19 +216,27 @@ def route_intent(state: AgentState) -> AgentState:
             .get("content", "")
             .strip()
         )
-        llm_usage = response.get("_usage_normalized")
-        llm_cost_usd = response.get("_cost_usd_estimate")
+        usage = response.get("_usage_normalized")
+        cost = response.get("_cost_usd_estimate")
         parsed = _extract_first_json_object(content)
         candidate = str((parsed or {}).get("intent", "")).strip().lower()
         reason = str((parsed or {}).get("reason", "")).strip()
         if candidate in {"sql", "rag", "mixed", "unknown"}:
-            intent = candidate
-            intent_reason = reason or "llm_router"
+            return candidate, reason or "llm_router", usage, cost, ""
         else:
+            return "", f"llm_invalid_output:{candidate[:50]}", usage, cost, content
+
+    try:
+        intent, intent_reason, llm_usage, llm_cost_usd, raw_content = _do_route()
+        if not intent:
             logger.warning(
-                "Router LLM returned invalid intent: {candidate}", candidate=candidate
+                "Router LLM returned invalid intent, retrying: {candidate}",
+                candidate=raw_content[:100] if raw_content else "empty",
             )
-            intent_reason = "llm_invalid_output"
+            intent, intent_reason, llm_usage, llm_cost_usd, _ = _do_route()
+            if not intent:
+                intent = "unknown"
+                intent_reason = "llm_invalid_output_retry"
     except Exception as exc:  # noqa: BLE001
         logger.error("Router LLM failed: {error}", error=str(exc))
         intent_reason = f"llm_error:{type(exc).__name__}"
@@ -883,6 +894,21 @@ def synthesize_answer(state: AgentState) -> AgentState:
         and visualization.get("image_data")
     )
 
+    # Check if visualization was requested but failed
+    viz_unavailable_msg = ""
+    if (
+        visualization
+        and isinstance(visualization, dict)
+        and not visualization.get("success")
+    ):
+        viz_error = visualization.get("error", "")
+        if "E2B" in viz_error or "not available" in viz_error.lower():
+            viz_unavailable_msg = (
+                "\n\n**Lưu ý:** Không thể tạo biểu đồ vì dịch vụ visualization (E2B sandbox) "
+                "hiện không khả dụng. Vui lòng kiểm tra cấu hình E2B_API_KEY và thử lại sau. "
+                "Dưới đây là phân tích dữ liệu bằng văn bản."
+            )
+
     if intent == "sql":
         if errors:
             error_msg = errors[-1]["message"]
@@ -898,7 +924,7 @@ def synthesize_answer(state: AgentState) -> AgentState:
                 session_context=session_context,
                 has_visualization=has_visualization,
             )
-            answer = natural_answer
+            answer = natural_answer + viz_unavailable_msg
             synthesis_usage = syn_usage
             synthesis_cost = syn_cost
             if syn_usage:
@@ -965,6 +991,7 @@ def synthesize_answer(state: AgentState) -> AgentState:
             query=state.get("user_query", ""),
             intent=intent,
             errors=errors,
+            session_context=session_context,
         )
         confidence = "medium"
 
@@ -1015,20 +1042,30 @@ def synthesize_answer(state: AgentState) -> AgentState:
 
 
 def _llm_synthesize_fallback(
-    query: str, intent: str, errors: list[dict[str, Any]]
+    query: str,
+    intent: str,
+    errors: list[dict[str, Any]],
+    session_context: str = "",
 ) -> str:
     """
     Use LLM to synthesize a helpful response when intent is unknown or routing failed.
+
+    Includes session_context to maintain conversation continuity for follow-up questions.
     """
     system_prompt = """You are a helpful data analyst assistant. A user query could not be classified into SQL/RAG/Mixed intent.
 
 If the query asks about data analysis, metrics, KPIs, trends, or business definitions, politely explain what types of questions you can answer and suggest example questions.
 
-If the query is a greeting or conversational, respond friendly and briefly.
+If the query is a greeting or conversational, respond friendly and briefly. When responding conversationally, use any relevant information from the conversation history provided.
 
 Always be helpful and concise. Respond in the same language as the user's query."""
 
-    user_prompt = f"Query: {query}\nPredicted intent: {intent}\nErrors: {errors}\n\nProvide a helpful response."
+    # Include session context if available
+    context_section = ""
+    if session_context:
+        context_section = f"\n\nPrevious conversation context:\n{session_context}\n"
+
+    user_prompt = f"Query: {query}\nPredicted intent: {intent}\nErrors: {errors}{context_section}\n\nProvide a helpful response."
 
     try:
         settings = load_settings()
@@ -1060,6 +1097,8 @@ def task_planner(state: AgentState) -> AgentState:
     """
     Analyzes user query and decomposes into parallelizable sub-tasks.
 
+    Handles implicit follow-ups by re-using previous SQL when continuity is detected.
+
     Example:
     Input: "Compare DAU last week vs this week and show top 5 videos by views"
     Output: [
@@ -1071,6 +1110,51 @@ def task_planner(state: AgentState) -> AgentState:
     query = state["user_query"]
     schema = state.get("schema_context", "")
     target_db_path = state.get("target_db_path", "")
+    continuity_context = state.get("continuity_context", {})
+    last_action = state.get("last_action", {})
+
+    # Handle continuity - reuse previous SQL if detected
+    if continuity_context.get("is_continuation"):
+        inherited_action = continuity_context.get("inherited_action", {})
+        if inherited_action.get("needs_rerun"):
+            base_sql = inherited_action.get("base_sql", "")
+            add_visualization = inherited_action.get("add_visualization", False)
+            parameter_changes = continuity_context.get("parameter_changes", {})
+
+            logger.info(
+                "Continuity detected: re-running previous SQL with parameter changes: {changes}",
+                changes=parameter_changes,
+            )
+
+            # If there's base SQL from previous action, create a task to re-run it
+            if base_sql:
+                session_context = state.get("session_context", "")
+                return {
+                    "task_plan": [
+                        {
+                            "task_id": "1",
+                            "type": "sql_query",
+                            "query": query,  # User's current query for context
+                            "inherited_sql": base_sql,  # Re-use previous SQL
+                            "parameter_changes": parameter_changes,
+                            "target_db_path": target_db_path,
+                            "schema_context": schema,
+                            "session_context": session_context,
+                            "status": "pending",
+                            "requires_visualization": add_visualization,
+                        }
+                    ],
+                    "execution_mode": "linear",
+                    "tool_history": [
+                        {
+                            "tool": "task_planner",
+                            "status": "continuity_rerun",
+                            "base_sql_length": len(base_sql),
+                            "parameter_changes": parameter_changes,
+                        }
+                    ],
+                    "step_count": state.get("step_count", 0) + 1,
+                }
 
     planner_prompt = """You are a query decomposition expert. 
 Given a user question, break it down into independent sub-tasks that can be executed in parallel.
@@ -1140,9 +1224,11 @@ Output: {
         if parsed and "tasks" in parsed:
             tasks = parsed["tasks"]
             # Enrich tasks with context
+            session_context = state.get("session_context", "")
             for task in tasks:
                 task["target_db_path"] = target_db_path
                 task["schema_context"] = schema
+                task["session_context"] = session_context
                 task["status"] = "pending"
 
             execution_mode = "parallel" if len(tasks) > 1 else "linear"
@@ -1183,6 +1269,7 @@ def _fallback_task_plan(
     query: str, target_db_path: str, schema: str, state: AgentState
 ) -> AgentState:
     """Fallback when task planner fails."""
+    session_context = state.get("session_context", "")
     return {
         "task_plan": [
             {
@@ -1191,6 +1278,7 @@ def _fallback_task_plan(
                 "query": query,
                 "target_db_path": target_db_path,
                 "schema_context": schema,
+                "session_context": session_context,
                 "status": "pending",
             }
         ],
@@ -1233,8 +1321,10 @@ def aggregate_results(state: AgentState) -> AgentState:
             ],
         }
 
-    # Collect all SQL results
-    successful_results = [r for r in results if r.get("status") == "success"]
+    # Collect all SQL results - include "skipped" status for visualization failures
+    successful_results = [
+        r for r in results if r.get("status") in ("success", "skipped")
+    ]
     failed_results = [r for r in results if r.get("status") == "failed"]
 
     combined_data = {
@@ -1621,10 +1711,12 @@ def inject_session_context(state: AgentState) -> AgentState:
     - Recent conversation turns from SQLite
     - Conversation summary if exists
     - Semantically similar past queries from Qdrant (if available)
+    - last_action from most recent assistant turn for continuity
 
     Updates state with:
     - session_context: Formatted context for prompt injection
     - conversation_turn: Current turn number
+    - last_action: Previous action metadata for continuity detection
     """
     thread_id = state.get("thread_id")
     if not thread_id:
@@ -1651,6 +1743,7 @@ def inject_session_context(state: AgentState) -> AgentState:
         }
 
     context_parts: list[str] = []
+    last_action: dict[str, Any] | None = None
 
     # Add summary if exists
     if summary and summary.summary:
@@ -1671,6 +1764,19 @@ def inject_session_context(state: AgentState) -> AgentState:
                 content = turn.result_summary or turn.sql_generated or ""
                 if content:
                     turns_text.append(f"Assistant: {content[:300]}")
+                # Extract last_action from most recent assistant turn
+                if turn.last_action_json:
+                    try:
+                        last_action = json.loads(turn.last_action_json)
+                        logger.debug(
+                            "Loaded last_action from turn {turn}",
+                            turn=turn.turn_number,
+                        )
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            "Failed to parse last_action_json from turn {turn}",
+                            turn=turn.turn_number,
+                        )
 
         if turns_text:
             context_parts.append("[Recent Turns]\n" + "\n".join(turns_text))
@@ -1685,16 +1791,21 @@ def inject_session_context(state: AgentState) -> AgentState:
     session_context = "\n\n".join(context_parts)
 
     logger.info(
-        "Injected session context: {turns} turns, {summary_len} chars summary",
+        "Injected session context: {turns} turns, {summary_len} chars summary, has_last_action={has_action}",
         turns=len(recent_turns),
         summary_len=len(summary.summary) if summary else 0,
+        has_action=last_action is not None,
     )
 
-    return {
+    result: dict[str, Any] = {
         "session_context": session_context,
         "conversation_turn": turn_count // 2
         + 1,  # Divide by 2 (user+assistant pairs), +1 for current
     }
+    if last_action:
+        result["last_action"] = last_action
+
+    return result
 
 
 def _search_similar_queries(
@@ -1817,7 +1928,10 @@ def compact_and_save_memory(state: AgentState) -> AgentState:
     )
     conv_store.save_turn(user_turn)
 
-    # Save assistant turn
+    # Save assistant turn with last_action_json
+    last_action = state.get("last_action", {})
+    last_action_json = json.dumps(last_action) if last_action else None
+
     assistant_turn = ConversationTurn(
         thread_id=thread_id,
         turn_number=turn_number + 1,
@@ -1828,6 +1942,7 @@ def compact_and_save_memory(state: AgentState) -> AgentState:
         result_summary=result_summary,
         entities=entities,
         timestamp=datetime.now(timezone.utc).isoformat(),
+        last_action_json=last_action_json,
     )
     conv_store.save_turn(assistant_turn)
 
@@ -1955,7 +2070,9 @@ def _compact_conversation(
 
         # Keep last MAX_TURNS_BEFORE_SUMMARY turns, summarize the rest
         retention_window = MAX_TURNS_BEFORE_SUMMARY
-        turns_to_summarize = turns[:-retention_window] if len(turns) > retention_window else []
+        turns_to_summarize = (
+            turns[:-retention_window] if len(turns) > retention_window else []
+        )
 
         if not turns_to_summarize:
             return
@@ -2034,3 +2151,120 @@ def _compact_conversation(
 
     except Exception as exc:
         logger.warning("Failed to compact conversation: {error}", error=str(exc))
+
+
+# =============================================================================
+# Continuity Detection - Memory of Action
+# =============================================================================
+
+
+def detect_continuity_node(state: AgentState) -> AgentState:
+    """
+    Detect if current query is an implicit continuation of previous action.
+
+    This node runs BEFORE route_intent to provide context for follow-up handling.
+
+    Uses LLM to detect patterns like:
+    - "Now change it to Medium" → Parameter change
+    - "Draw a chart for result above" → Visualization request
+    - "What about Low addiction?" → Parameter refinement
+
+    Updates state with:
+    - continuity_context: Detection result with inherited parameters
+    """
+    from app.graph.continuity import detect_implicit_continuation
+
+    user_query = state.get("user_query", "")
+    last_action = state.get("last_action")
+
+    # Skip if no previous action
+    if not last_action:
+        logger.debug("No last_action, skipping continuity detection")
+        return {"continuity_context": {"is_continuation": False}}
+
+    # Skip for first conversation turn
+    conversation_turn = state.get("conversation_turn", 1)
+    if conversation_turn <= 1:
+        logger.debug("First conversation turn, skipping continuity detection")
+        return {"continuity_context": {"is_continuation": False}}
+
+    # Use LLM to detect continuity
+    continuity_result = detect_implicit_continuation(
+        current_query=user_query,
+        last_action=last_action,
+    )
+
+    if continuity_result.get("is_continuation"):
+        logger.info(
+            "Detected implicit continuation: type={type}, action={action}",
+            type=continuity_result.get("continuation_type"),
+            action=continuity_result.get("inherited_action", {}).get("action_type"),
+        )
+        return {"continuity_context": continuity_result}
+    else:
+        logger.debug("No continuation detected, treating as new query")
+        return {"continuity_context": {"is_continuation": False}}
+
+
+def capture_action_node(state: AgentState) -> AgentState:
+    """
+    Capture completed action for future continuity detection.
+
+    This node runs AFTER synthesize_answer to save action metadata.
+
+    Captures:
+    - action_type: sql/rag/mixed/unknown
+    - generated_sql: The SQL that was executed
+    - parameters: Extracted parameters from query
+    - result_summary: Lightweight summary (NOT raw data)
+
+    Does NOT capture:
+    - Raw SQL result rows (too large)
+    - Full conversation context (already in session memory)
+    """
+    from app.graph.continuity import (
+        extract_parameters_from_state,
+        summarize_result_for_context,
+    )
+
+    intent = state.get("intent", "unknown")
+    generated_sql = state.get("generated_sql", "") or state.get("validated_sql", "")
+    final_payload = state.get("final_payload", {})
+
+    # Only capture successful actions
+    confidence = state.get("confidence", "low")
+    if confidence not in ("high", "medium"):
+        logger.debug(
+            "Skipping action capture for low confidence: confidence={conf}",
+            conf=confidence,
+        )
+        return {"last_action": {}}
+
+    # Build last_action
+    last_action = {
+        "action_type": intent,
+        "intent": intent,
+        "generated_sql": generated_sql,
+        "parameters": extract_parameters_from_state(state),
+        "result_summary": summarize_result_for_context(state.get("sql_result", {})),
+        "has_visualization": bool(state.get("visualization")),
+    }
+
+    # Add visualization type if present
+    viz = state.get("visualization", {})
+    if viz and viz.get("success"):
+        last_action["visualization_type"] = "generated"
+
+    # Add answer snippet
+    answer = final_payload.get("answer", "")
+    if answer:
+        last_action["answer_snippet"] = answer[:300]
+
+    logger.info(
+        "Captured action: type={type}, has_sql={has_sql}, has_viz={has_viz}",
+        type=intent,
+        has_sql=bool(generated_sql),
+        has_viz=last_action.get("has_visualization", False),
+    )
+
+    return {"last_action": last_action}
