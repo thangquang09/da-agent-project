@@ -139,7 +139,8 @@ def _execute_create_table(
     cursor = conn.cursor()
 
     try:
-        cursor.execute(f"DROP TABLE IF EXISTS {profile.table_name}")
+        quoted_table = profile.table_name.replace('"', '""')
+        cursor.execute(f'DROP TABLE IF EXISTS "{quoted_table}"')
         cursor.execute(schema_sql)
 
         insert_sql = _generate_insert_sql(profile)
@@ -166,6 +167,7 @@ def _execute_create_table(
 
 def _generate_insert_sql(profile: CSVProfileResult) -> str:
     """Generate INSERT SQL statement."""
-    columns = ", ".join(col.name for col in profile.columns)
+    quoted_table = profile.table_name.replace('"', '""')
+    columns = ", ".join(f'"{col.name.replace(chr(34), chr(34)*2)}"' for col in profile.columns)
     placeholders = ", ".join("?" for _ in profile.columns)
-    return f"INSERT INTO {profile.table_name} ({columns}) VALUES ({placeholders})"
+    return f'INSERT INTO "{quoted_table}" ({columns}) VALUES ({placeholders})'
