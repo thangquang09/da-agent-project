@@ -313,3 +313,46 @@ uv run python -m evals.runner --suite spider --split dev --limit 10 --workers 4
 - 1h: tests/eval checks
 - 30m: update `docs/research/notes/research_notes_2026-03-29.md` or changelog with lessons/failures
 
+## SQL Pipeline Optimization (2026-04-03)
+### Problem
+Three core issues in the SQL query pipeline:
+1. **Missing tool history** — SQL worker subgraph nodes not appearing in `used_tools` traces
+2. **Unnecessary LLM calls** — `task_planner` and `aggregate_results` fired for every SQL query
+3. **Token bloat** — Full SQL result rows serialized into synthesis prompt
+
+### Changes Made
+- **Router `execution_mode`** — Router now returns `"direct"` or `"planned"` to skip `task_planner` for simple queries
+- **Bypass `aggregate_results`** — Single-task/direct queries skip aggregation, go straight to synthesis
+- **Tool history propagation** — All 4 subgraph nodes (get_schema, generate_sql, validate_sql, execute_sql) now record tool_history
+- **Result Store** — SQL results persisted in SQLite with hybrid storage (sample + stats inline, full data in external JSON for >100 rows)
+- **Token-efficient synthesis** — Synthesis prompt uses `sample_rows` (10) + `summary_stats` instead of full result set
+- **Safety LIMIT** — `app/tools/sql_safety.py` adds LIMIT to detail queries only, never to aggregations (AVG, COUNT, GROUP BY, window functions, DISTINCT)
+- **Schema reuse** — Worker subgraph reuses `schema_context` from task_planner if available
+
+### Reviewer Fixes Applied (python-reviewer agent)
+- **H-1**: Expired result rows now deleted on read in `get_result()`, not just lazily
+- **H-2**: Removed unused `import os` from `result_store.py`
+- **H-3**: DRY fix — `validate_sql.py` now delegates to `sql_safety.needs_safety_limit()` instead of duplicating logic
+- **M-1**: Thread-safe singleton with `threading.Lock` for `get_result_store()`
+- **M-2**: TOCTOU fix in `cleanup_expired()` — cutoff datetime captured once, reused in SELECT + DELETE
+- **M-3**: Type annotations added to `json_serializer.py` (`result_to_json`, `safe_json_dumps`, `safe_json_loads`)
+- **M-4**: Comment added in `graph.py` explaining intentional duck-typing on `task_id` key
+- **M-6**: `ExecutionMode` Literal documented with comment explaining two-layer decision system (router vs planner)
+- **L-4**: Added `result_ref` field to `TaskState` TypedDict for mypy
+
+### Files Created
+- `app/tools/sql_safety.py` — Safety LIMIT detection logic
+- `app/tools/result_store.py` — ResultStore class with hybrid storage
+- `app/utils/json_serializer.py` — Custom JSON serializer for SQL types
+- `data/migrations/001_create_result_store.py` — Migration for result_store table
+
+### Files Modified
+- `app/prompts/router.py`, `app/prompts/sql_worker.py`, `app/prompts/synthesis.py`, `app/prompts/manager.py`
+- `app/graph/nodes.py`, `app/graph/edges.py`, `app/graph/graph.py`, `app/graph/state.py`, `app/graph/sql_worker_graph.py`
+- `app/tools/validate_sql.py`
+- `.gitignore` (added exception for `data/migrations/`)
+
+### Test Status
+- All core tests pass: `test_sql_tools.py`, `test_prompt_manager.py`, `test_memory.py` (45 tests)
+- Pre-existing test failures in `test_graph_flow.py` and `test_plan_execute.py` (unrelated to these changes)
+

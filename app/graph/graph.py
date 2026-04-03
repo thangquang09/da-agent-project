@@ -198,6 +198,9 @@ def _sql_worker_wrapper(state: dict) -> dict:
     worker = get_sql_worker_graph()
 
     # Detect invocation mode
+    # Intentional duck-typing: Send API passes TaskState (has task_id),
+    # direct routing passes full AgentState (no task_id). This avoids
+    # coupling to a specific type check and works across both paths.
     if "task_id" in state:
         # Send API mode: already a TaskState
         task_state = state
@@ -230,29 +233,53 @@ def _sql_worker_wrapper(state: dict) -> dict:
     # Run the worker subgraph
     result = worker.invoke(task_state)
 
-    # Flatten SQL data for synthesize_answer compatibility (when aggregate_results is bypassed)
-    sql_result = result.get("sql_result", {})
-    validated_sql = result.get("validated_sql", "")
-    generated_sql = result.get("generated_sql", "")
-    visualization = result.get("visualization")
-    result_ref = result.get("result_ref")
-
     # Extract tool_history from subgraph nodes and merge into parent AgentState
     # Each subgraph node returns its own tool_history entry; they accumulate via operator.add
     subgraph_tool_history = result.get("tool_history", [])
 
+    # Flatten SQL data for synthesize_answer compatibility (when aggregate_results is bypassed)
+    # Only write root-level fields in direct mode (single worker).
+    # In parallel mode, data flows through task_results -> aggregate_results,
+    # so writing root fields here would cause INVALID_CONCURRENT_GRAPH_UPDATE.
+    is_direct_mode = "task_id" in state and state.get("task_id") == "direct"
+
     update: dict[str, Any] = {
         "task_results": [result],
-        "sql_result": sql_result,
-        "generated_sql": generated_sql,
-        "validated_sql": validated_sql,
-        "visualization": visualization,
         "tool_history": subgraph_tool_history,
     }
-    if result_ref:
-        update["result_ref"] = result_ref
+
+    if is_direct_mode:
+        # Direct mode: flatten everything to root state for synthesize_answer
+        sql_result = result.get("sql_result", {})
+        validated_sql = result.get("validated_sql", "")
+        generated_sql = result.get("generated_sql", "")
+        visualization = result.get("visualization")
+        result_ref = result.get("result_ref")
+
+        update["sql_result"] = sql_result
+        update["generated_sql"] = generated_sql
+        update["validated_sql"] = validated_sql
+        if visualization:
+            update["visualization"] = visualization
+        if result_ref:
+            update["result_ref"] = result_ref
+    # In parallel mode: only write Annotated fields (task_results, tool_history).
+    # aggregate_results will flatten sql_result, result_ref, visualization after all workers complete.
 
     return update
+
+
+def _standalone_viz_wrapper(state: dict) -> dict[str, Any]:
+    """Wrapper for standalone_visualization that accumulates results via task_results.
+
+    Prevents concurrent write conflicts when multiple workers run in parallel via Send API.
+    aggregate_results will extract visualization from task_results and write to root state.
+    """
+    result = standalone_visualization_worker(state)
+    return {
+        "task_results": [result],
+        "tool_history": result.get("tool_history", []),
+    }
 
 
 def build_sql_v2_graph(checkpointer=None):
@@ -322,7 +349,7 @@ def build_sql_v2_graph(checkpointer=None):
     )
     builder.add_node(
         "standalone_visualization",
-        standalone_visualization_worker,
+        _standalone_viz_wrapper,
     )
     builder.add_node(
         "aggregate_results",

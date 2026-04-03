@@ -10,8 +10,8 @@ Stores results in SQLite with:
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -107,23 +107,33 @@ class ResultStore:
         }
 
     def get_result(self, result_id: str) -> dict[str, Any] | None:
-        """Fetch a stored result by ID. Returns None if expired or not found."""
+        """Fetch a stored result by ID. Returns None if expired or not found.
+
+        Deletes expired rows on read to prevent stale data accumulation.
+        """
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
         try:
             row = conn.execute(
                 "SELECT * FROM result_store WHERE result_id = ?", (result_id,)
             ).fetchone()
+
+            if not row:
+                return None
+
+            if row["expires_at"]:
+                expires = datetime.fromisoformat(row["expires_at"])
+                if expires < datetime.now(timezone.utc):
+                    conn.execute(
+                        "DELETE FROM result_store WHERE result_id = ?", (result_id,)
+                    )
+                    conn.commit()
+                    logger.info(
+                        "Deleted expired result on read: id={id}", id=result_id[:8]
+                    )
+                    return None
         finally:
             conn.close()
-
-        if not row:
-            return None
-
-        if row["expires_at"]:
-            expires = datetime.fromisoformat(row["expires_at"])
-            if expires < datetime.now(timezone.utc):
-                return None
 
         result = {
             "result_id": row["result_id"],
@@ -180,6 +190,7 @@ class ResultStore:
 
     def cleanup_expired(self) -> int:
         """Remove expired entries and their full data files. Returns count deleted."""
+        cutoff = datetime.now(timezone.utc).isoformat()
         conn = sqlite3.connect(str(self.db_path))
         try:
             rows = conn.execute(
@@ -187,7 +198,7 @@ class ResultStore:
                 SELECT result_id, full_data_path FROM result_store
                 WHERE expires_at IS NOT NULL AND expires_at < ?
                 """,
-                (datetime.now(timezone.utc).isoformat(),),
+                (cutoff,),
             ).fetchall()
 
             for row in rows:
@@ -201,7 +212,7 @@ class ResultStore:
 
             cursor = conn.execute(
                 "DELETE FROM result_store WHERE expires_at IS NOT NULL AND expires_at < ?",
-                (datetime.now(timezone.utc).isoformat(),),
+                (cutoff,),
             )
             conn.commit()
             deleted = cursor.rowcount
@@ -261,10 +272,13 @@ class ResultStore:
 
 
 _instance: ResultStore | None = None
+_lock = threading.Lock()
 
 
 def get_result_store(db_path: str | Path | None = None) -> ResultStore:
     global _instance
     if _instance is None:
-        _instance = ResultStore(db_path=db_path)
+        with _lock:
+            if _instance is None:
+                _instance = ResultStore(db_path=db_path)
     return _instance

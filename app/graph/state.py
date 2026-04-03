@@ -10,6 +10,9 @@ ContextType = Literal["user_provided", "csv_auto", "mixed", "default"]
 TaskType = Literal[
     "sql_query", "data_analysis", "context_lookup", "standalone_visualization"
 ]
+# Router sets "direct" or "planned" (whether to invoke task_planner).
+# Task planner sets "single", "parallel", or "linear" (how the plan is executed).
+# Both layers are active; future refactor could split into RouterMode | PlannerMode.
 ExecutionMode = Literal["single", "parallel", "linear", "direct", "planned"]
 
 
@@ -38,6 +41,7 @@ class TaskState(TypedDict, total=False):
     parameter_changes: dict[str, Any]  # Parameter changes for inherited SQL
     xml_database_context: str  # XML block injected into SQL agent system prompt
     tool_history: list[dict[str, Any]]  # Propagate tool usage from subgraph nodes
+    result_ref: dict[str, Any]  # Result store reference from task execution
 
 
 class AnswerPayload(TypedDict, total=False):

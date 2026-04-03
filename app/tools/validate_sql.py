@@ -8,6 +8,7 @@ from typing import Any
 
 from app.config import load_settings
 from app.logger import logger
+from app.tools.sql_safety import needs_safety_limit
 
 
 FORBIDDEN_SQL_PATTERNS = [
@@ -106,42 +107,9 @@ def _has_limit_clause(sql: str) -> bool:
 def _is_bounded_query(sql: str) -> bool:
     """Check if the query is naturally bounded and should NOT get a safety LIMIT.
 
-    Returns True for:
-    - Aggregate functions (COUNT, AVG, SUM, MIN, MAX, STDDEV, etc.)
-    - GROUP BY queries (bounded by distinct groups)
-    - Window functions (RANK, ROW_NUMBER, OVER, etc.)
-    - SELECT DISTINCT (bounded by cardinality)
-
-    These queries need the full dataset to produce correct results.
+    Delegates to sql_safety.needs_safety_limit to avoid drift.
     """
-    sql_upper = sql.upper()
-
-    # Check aggregate functions in the final SELECT (handles CTEs)
-    if re.search(
-        r"\b(COUNT|AVG|SUM|MIN|MAX|STDDEV|VARIANCE|MEDIAN|GROUP_CONCAT)\s*\(",
-        sql_upper,
-    ):
-        return True
-
-    # GROUP BY bounds results by distinct groups
-    if re.search(r"\bGROUP\s+BY\b", sql_upper):
-        return True
-
-    # Window functions need full dataset
-    if re.search(
-        r"\b(RANK|DENSE_RANK|ROW_NUMBER|NTILE|LAG|LEAD|FIRST_VALUE|LAST_VALUE|NTH_VALUE)\s*\(",
-        sql_upper,
-    ):
-        return True
-
-    if re.search(r"\bOVER\s*\(", sql_upper):
-        return True
-
-    # DISTINCT bounds by cardinality
-    if re.search(r"\bSELECT\s+DISTINCT\b", sql_upper):
-        return True
-
-    return False
+    return not needs_safety_limit(sql)
 
 
 def validate_sql(
