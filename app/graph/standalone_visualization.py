@@ -8,6 +8,7 @@ from typing import Any
 from app.graph.state import TaskState
 from app.llm import LLMClient
 from app.logger import logger
+from app.prompts import prompt_manager
 from app.tools.visualization import (
     get_visualization_service,
     is_visualization_available,
@@ -141,49 +142,17 @@ def _generate_standalone_visualization_code(
     for i, row in enumerate(raw_data[:5]):
         schema_desc += f"  Row {i + 1}: {row}\n"
 
-    system_prompt = """You are a Python data visualization expert. Write code using pandas, seaborn, and matplotlib.
-
-CRITICAL REQUIREMENTS:
-1. Read data from '/home/user/query_data.csv' using pandas
-2. Choose the EXACT chart type the user requested (bar chart, line chart, scatter plot, pie chart, histogram)
-3. Use seaborn for the visualization (sns.barplot, sns.lineplot, sns.scatterplot, etc.)
-4. Make the chart visually appealing with proper styling
-5. Set appropriate figure size (12x6 or similar)
-6. Add title, labels, and rotate x-axis labels if needed
-7. END your code with plt.show() to display the chart
-8. Do NOT include any explanations, markdown, or comments - only the Python code
-9. The code must be self-contained and runnable
-
-Available libraries: pandas, seaborn, matplotlib, numpy
-
-IMPORTANT: If the user explicitly mentions a chart type (e.g., "bar chart", "line chart"), use that exact type. Do not default to scatter plot."""
-
-    user_prompt = f"""Create visualization for this data based on the user's request.
-
-User Query: {query}
-
-Data Schema:
-{schema_desc}
-
-Write Python code that:
-1. Reads the CSV file from '/home/user/query_data.csv'
-2. Creates the appropriate chart type as requested by the user
-3. Makes it visually appealing
-4. Ends with plt.show()
-
-Return ONLY the Python code, no markdown or explanations."""
-
     try:
         from app.config import load_settings
 
         settings = load_settings()
         client = LLMClient.from_env()
-
+        messages = prompt_manager.visualization_messages(
+            query=query,
+            schema_desc=schema_desc,
+        )
         response = client.chat_completion(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=messages,
             model=settings.model_synthesis,
             temperature=0.2,
         )

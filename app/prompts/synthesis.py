@@ -1,14 +1,8 @@
-from dataclasses import dataclass
+from __future__ import annotations
 
+from app.prompts.base import PromptDefinition
 
-@dataclass
-class _PromptDefinition:
-    name: str
-    prompt_type: str
-    messages: list[dict[str, str]]
-
-
-SYNTHESIS_PROMPT_DEFINITION = _PromptDefinition(
+SYNTHESIS_PROMPT_DEFINITION = PromptDefinition(
     name="da-agent-synthesis",
     prompt_type="messages",
     messages=[

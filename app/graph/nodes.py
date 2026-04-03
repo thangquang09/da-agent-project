@@ -16,10 +16,13 @@ from app.memory.context_store import get_context_memory_store
 from app.prompts import (
     ANALYSIS_PROMPT_DEFINITION,
     CONTEXT_DETECTION_PROMPT_DEFINITION,
+    FALLBACK_ASSISTANT_PROMPT,
     prompt_manager,
+    RETRIEVAL_TYPE_CLASSIFIER_PROMPT,
     ROUTER_PROMPT_DEFINITION,
     SQL_PROMPT_DEFINITION,
     SYNTHESIS_PROMPT_DEFINITION,
+    TASK_DECOMPOSITION_PROMPT,
 )
 from app.tools import (
     dataset_context,
@@ -328,21 +331,12 @@ def _llm_decide_retrieval_type(query: str) -> str:
     Use LLM to decide whether to retrieve metric definition or business context.
     Returns 'metric_definition' or 'business_context'.
     """
-    system_prompt = """You are a query classifier for a data analyst agent.
-Given a user query, decide whether it asks for:
-1. 'metric_definition' - if the user is asking for the definition, formula, or meaning of a metric/KPI (e.g., "What is DAU?", "Retention D1 là gì?", "How is revenue calculated?")
-2. 'business_context' - if the user is asking for business rules, caveats, data quality notes, or general business context (e.g., "What caveats apply?", "Any data quality notes?", "Business rules for this metric?")
-
-Respond with ONLY a JSON object: {"retrieval_type": "metric_definition" or "business_context", "reason": "brief reason"}"""
-
     try:
         settings = load_settings()
         client = LLMClient.from_env()
+        messages = prompt_manager.retrieval_type_classifier_messages(query=query)
         response = client.chat_completion(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": query},
-            ],
+            messages=messages,
             model=settings.model_fallback,  # Use fallback model (mini) for simple classification
             temperature=0.0,
             stream=False,
@@ -1052,29 +1046,17 @@ def _llm_synthesize_fallback(
 
     Includes session_context to maintain conversation continuity for follow-up questions.
     """
-    system_prompt = """You are a helpful data analyst assistant. A user query could not be classified into SQL/RAG/Mixed intent.
-
-If the query asks about data analysis, metrics, KPIs, trends, or business definitions, politely explain what types of questions you can answer and suggest example questions.
-
-If the query is a greeting or conversational, respond friendly and briefly. When responding conversationally, use any relevant information from the conversation history provided.
-
-Always be helpful and concise. Respond in the same language as the user's query."""
-
-    # Include session context if available
-    context_section = ""
-    if session_context:
-        context_section = f"\n\nPrevious conversation context:\n{session_context}\n"
-
-    user_prompt = f"Query: {query}\nPredicted intent: {intent}\nErrors: {errors}{context_section}\n\nProvide a helpful response."
-
     try:
         settings = load_settings()
         client = LLMClient.from_env()
+        messages = prompt_manager.fallback_assistant_messages(
+            query=query,
+            intent=intent,
+            errors=errors,
+            session_context=session_context,
+        )
         response = client.chat_completion(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=messages,
             model=settings.model_fallback,  # Use fallback model (mini) for simple fallback
             temperature=0.7,
             stream=False,
@@ -1156,57 +1138,15 @@ def task_planner(state: AgentState) -> AgentState:
                     "step_count": state.get("step_count", 0) + 1,
                 }
 
-    planner_prompt = """You are a query decomposition expert. 
-Given a user question, break it down into independent sub-tasks that can be executed in parallel.
-
-Rules:
-- Each sub-task should be self-contained and answerable with a single SQL query or direct action
-- Prefer parallel execution when tasks are independent
-- Use "sql_query" type for ALL data retrieval tasks from the database
-- IMPORTANT: Do NOT create separate "visualize" tasks. If the user asks for a chart or graph with database data, add "requires_visualization": true to the relevant SQL task instead
-- CRITICAL: If the user provides raw data values directly in their query (e.g., "vẽ biểu đồ với giá trị 10, 20, 30", "create chart with values 10, 20, 30"), use type "standalone_visualization" with "raw_data" field containing the parsed values
-- If the query is simple and requires only one query, output a single task
-- If the query asks for multiple unrelated facts, split into separate tasks
-
-Respond with ONLY a JSON object in this format:
-{
-    "tasks": [
-        {"task_id": "1", "type": "sql_query", "query": "description of what to query"},
-        {"task_id": "2", "type": "sql_query", "query": "description of what to query", "requires_visualization": true},
-        {"task_id": "3", "type": "standalone_visualization", "query": "create bar chart", "raw_data": [{"label": "A", "value": 10}, {"label": "B", "value": 20}]}
-    ]
-}
-
-Examples:
-Input: "What was the revenue yesterday?"
-Output: {"tasks": [{"task_id": "1", "type": "sql_query", "query": "Get revenue for yesterday"}]}
-
-Input: "Show DAU trend for the last 7 days as a line chart"
-Output: {"tasks": [{"task_id": "1", "type": "sql_query", "query": "Get DAU for last 7 days", "requires_visualization": true}]}
-
-Input: "Giúp tôi vẽ biểu đồ với các giá trị sau: 10, 20, 30"
-Output: {"tasks": [{"task_id": "1", "type": "standalone_visualization", "query": "Create bar chart with values 10, 20, 30", "raw_data": [{"label": "Item 1", "value": 10}, {"label": "Item 2", "value": 20}, {"label": "Item 3", "value": 30}]}]}
-
-Input: "Compare DAU last week vs this week and show top 5 videos as a bar chart"
-Output: {
-    "tasks": [
-        {"task_id": "1", "type": "sql_query", "query": "Get DAU for last week"},
-        {"task_id": "2", "type": "sql_query", "query": "Get DAU for this week"},
-        {"task_id": "3", "type": "sql_query", "query": "Get top 5 videos by views", "requires_visualization": true}
-    ]
-}"""
-
     try:
         client = LLMClient.from_env()
         settings = load_settings()
+        messages = prompt_manager.task_decomposition_messages(
+            query=query,
+            schema=schema[:1000],
+        )
         response = client.chat_completion(
-            messages=[
-                {"role": "system", "content": planner_prompt},
-                {
-                    "role": "user",
-                    "content": f"Schema: {schema[:1000]}\n\nQuery: {query}",
-                },
-            ],
+            messages=messages,
             model=settings.model_task_planner,
             temperature=0.0,
         )

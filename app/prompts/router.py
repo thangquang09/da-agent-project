@@ -1,15 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
-
-
-@dataclass(frozen=True)
-class PromptDefinition:
-    name: str
-    prompt_type: Literal["chat", "text"]
-    messages: list[dict[str, str]]
-
+from app.prompts.base import PromptDefinition
 
 ROUTER_PROMPT_DEFINITION = PromptDefinition(
     name="da-agent-router",

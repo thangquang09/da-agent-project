@@ -11,6 +11,7 @@ from app.config import load_settings
 from app.graph.state import TaskState
 from app.llm import LLMClient
 from app.logger import logger
+from app.prompts import prompt_manager
 from app.tools import query_sql, validate_sql
 from app.tools.visualization import (
     get_visualization_service,
@@ -134,25 +135,13 @@ def _task_generate_sql(task_state: TaskState) -> dict[str, Any]:
 
     try:
         client = LLMClient.from_env()
-
-        system_prompt = """You are a SQL expert. Generate a read-only SQL query to answer the user's question.
-Use the provided schema. Only use SELECT and WITH statements.
-Respond with ONLY the SQL query, no explanations."""
-
-        user_content = f"Schema: {schema[:1500]}\n\nQuestion: {query}\n\nGenerate SQL:"
-        if session_context:
-            user_content = (
-                f"Previous conversation context:\n{session_context}\n\n{user_content}"
-            )
-
+        messages = prompt_manager.sql_worker_messages(
+            query=query,
+            schema=schema[:1500],
+            session_context=session_context,
+        )
         response = client.chat_completion(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": user_content,
-                },
-            ],
+            messages=messages,
             model=settings.model_sql_generation,
             temperature=0.0,
         )
@@ -372,48 +361,17 @@ def _generate_visualization_code_llm(query: str, data_rows: list[dict]) -> str |
     for i, row in enumerate(data_rows[:3]):
         schema_desc += f"  Row {i + 1}: {row}\n"
 
-    system_prompt = """You are a Python data visualization expert. Write code using pandas, seaborn, and matplotlib.
-
-CRITICAL REQUIREMENTS:
-1. Read data from '/home/user/query_data.csv' using pandas (df = pd.read_csv('/home/user/query_data.csv'))
-2. Choose the EXACT chart type the user requested (bar chart, line chart, scatter plot, pie chart, histogram)
-3. Use seaborn for the visualization (sns.barplot, sns.lineplot, sns.scatterplot, sns.histplot, etc.)
-4. Make the chart visually appealing with proper styling
-5. Set appropriate figure size (12x6 or similar)
-6. Add title, labels, and rotate x-axis labels if needed
-7. END your code with plt.show() to display the chart
-8. Do NOT include any explanations, markdown, or comments - only the Python code
-9. The code must be self-contained and runnable
-
-Available libraries: pandas, seaborn, matplotlib, numpy
-
-IMPORTANT: If the user explicitly mentions a chart type (e.g., "bar chart", "biểu đồ cột"), use that exact type. Do not default to scatter plot."""
-
-    user_prompt = f"""Create visualization for this data based on the user's request.
-
-User Query: {query}
-
-Data Schema:
-{schema_desc}
-
-Write Python code that:
-1. Reads the CSV file from '/home/user/query_data.csv'
-2. Creates the appropriate chart type as requested by the user
-3. Makes it visually appealing
-4. Ends with plt.show()
-
-Return ONLY the Python code, no markdown or explanations."""
-
     try:
         settings = load_settings()
         client = LLMClient.from_env()
+        messages = prompt_manager.visualization_messages(
+            query=query,
+            schema_desc=schema_desc,
+        )
 
         # Use model_sql_generation as requested
         response = client.chat_completion(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=messages,
             model=settings.model_sql_generation,
             temperature=0.2,
         )

@@ -9,9 +9,17 @@ from typing import Any, Literal
 from app.config import load_settings
 from app.logger import logger
 from app.prompts.analysis import ANALYSIS_PROMPT_DEFINITION
+from app.prompts.classifier import RETRIEVAL_TYPE_CLASSIFIER_PROMPT
 from app.prompts.context_detection import CONTEXT_DETECTION_PROMPT_DEFINITION
+from app.prompts.continuity import CONTINUITY_DETECTION_PROMPT_DEFINITION
+from app.prompts.decomposition import TASK_DECOMPOSITION_PROMPT
+from app.prompts.evaluation import GROUNDEDNESS_EVALUATION_PROMPT
+from app.prompts.fallback import FALLBACK_ASSISTANT_PROMPT
 from app.prompts.router import ROUTER_PROMPT_DEFINITION
 from app.prompts.sql import SQL_PROMPT_DEFINITION
+from app.prompts.sql_worker import SQL_WORKER_GENERATION_PROMPT
+from app.prompts.synthesis import SYNTHESIS_PROMPT_DEFINITION
+from app.prompts.visualization import VISUALIZATION_CODE_GENERATION_PROMPT
 
 
 @dataclass
@@ -247,6 +255,106 @@ class PromptManager:
                 "results": results_json,
                 "row_count": row_count,
                 "session_context": session_context or "",
+            },
+        )
+
+    def retrieval_type_classifier_messages(self, query: str) -> list[dict[str, str]]:
+        return self._compile_prompt(
+            RETRIEVAL_TYPE_CLASSIFIER_PROMPT,
+            {"query": query},
+        )
+
+    def fallback_assistant_messages(
+        self,
+        query: str,
+        intent: str,
+        errors: list[dict[str, Any]],
+        session_context: str = "",
+    ) -> list[dict[str, str]]:
+        import json
+
+        errors_json = json.dumps(errors, ensure_ascii=False) if errors else "[]"
+        return self._compile_prompt(
+            FALLBACK_ASSISTANT_PROMPT,
+            {
+                "query": query,
+                "intent": intent,
+                "errors": errors_json,
+                "session_context": session_context or "",
+            },
+        )
+
+    def task_decomposition_messages(
+        self, query: str, schema: str
+    ) -> list[dict[str, str]]:
+        return self._compile_prompt(
+            TASK_DECOMPOSITION_PROMPT,
+            {"query": query, "schema": schema},
+        )
+
+    def sql_worker_messages(
+        self,
+        query: str,
+        schema: str,
+        session_context: str = "",
+    ) -> list[dict[str, str]]:
+        return self._compile_prompt(
+            SQL_WORKER_GENERATION_PROMPT,
+            {
+                "query": query,
+                "schema": schema,
+                "session_context": session_context or "",
+            },
+        )
+
+    def visualization_messages(
+        self,
+        query: str,
+        schema_desc: str,
+        chart_type: str = "",
+    ) -> list[dict[str, str]]:
+        return self._compile_prompt(
+            VISUALIZATION_CODE_GENERATION_PROMPT,
+            {"query": query, "schema_desc": schema_desc, "chart_type": chart_type},
+        )
+
+    def continuity_detection_messages(
+        self,
+        action_type: str,
+        intent: str,
+        sql: str,
+        result_summary: str,
+        parameters: str,
+        current_query: str,
+    ) -> list[dict[str, str]]:
+        return self._compile_prompt(
+            CONTINUITY_DETECTION_PROMPT_DEFINITION,
+            {
+                "action_type": action_type,
+                "intent": intent,
+                "sql": sql,
+                "result_summary": result_summary,
+                "parameters": parameters,
+                "current_query": current_query,
+            },
+        )
+
+    def groundedness_evaluation_messages(
+        self,
+        evidence: list[str],
+        answer: str,
+        expected_keywords: list[str] | None = None,
+    ) -> list[dict[str, str]]:
+        evidence_text = "\n".join(f"- {item}" for item in evidence)
+        keywords_str = (
+            ", ".join(expected_keywords) if expected_keywords else "none specified"
+        )
+        return self._compile_prompt(
+            GROUNDEDNESS_EVALUATION_PROMPT,
+            {
+                "evidence_text": evidence_text,
+                "answer": answer,
+                "keywords_text": keywords_str,
             },
         )
 

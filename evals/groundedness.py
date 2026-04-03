@@ -7,6 +7,7 @@ from typing import Any
 
 from app.llm import LLMClient
 from app.logger import logger
+from app.prompts import prompt_manager
 
 
 @dataclass
@@ -53,45 +54,15 @@ def _llm_evaluate_groundedness(
     Use LLM to evaluate if the answer is grounded in the evidence.
     This is a semantic evaluation that doesn't rely on exact keyword matching.
     """
-    system_prompt = """You are an evaluation assistant for a data analyst agent.
-
-Your task is to evaluate whether the final ANSWER is grounded in and supported by the EVIDENCE provided.
-
-Evaluation criteria:
-1. Are the factual claims in the ANSWER supported by the EVIDENCE?
-2. Are the numbers/values in the ANSWER consistent with the EVIDENCE?
-3. Does the ANSWER correctly interpret the EVIDENCE?
-
-Respond with ONLY a JSON object:
-{
-  "score": <float 0.0 to 1.0, where 1.0 = fully grounded>,
-  "passed": <boolean, true if score >= 0.7>,
-  "reason": "<brief explanation of your evaluation>"
-}"""
-
-    evidence_text = "\n".join(f"- {item}" for item in evidence)
-    keywords_text = (
-        ", ".join(expected_keywords) if expected_keywords else "none specified"
-    )
-
-    user_prompt = f"""EVIDENCE:
-{evidence_text}
-
-ANSWER:
-{answer}
-
-EXPECTED KEYWORDS (for reference, not required to match exactly):
-{keywords_text}
-
-Evaluate groundedness:"""
-
     try:
         client = LLMClient.from_env()
+        messages = prompt_manager.groundedness_evaluation_messages(
+            evidence=evidence,
+            answer=answer,
+            expected_keywords=expected_keywords,
+        )
         response = client.chat_completion(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=messages,
             model="gh/gpt-4o-mini",
             temperature=0.0,
             stream=False,
