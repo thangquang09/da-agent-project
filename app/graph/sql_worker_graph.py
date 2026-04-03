@@ -284,10 +284,29 @@ def _task_execute_sql(task_state: TaskState) -> dict[str, Any]:
     try:
         result = query_sql(sql, db_path=Path(db_path) if db_path else None)
 
+        # Persist to result_store
+        result_ref = None
+        try:
+            from app.tools.result_store import get_result_store
+
+            store = get_result_store()
+            result_ref = store.save_result(
+                sql=sql,
+                sql_result=result,
+                run_id=task_state.get("run_id"),
+                thread_id=task_state.get("thread_id"),
+                db_path=str(db_path) if db_path else None,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to save result to result_store: {error}", error=str(exc)
+            )
+
         return {
             "sql_result": result,
             "status": "success",
             "execution_time_ms": result.get("latency_ms", 0),
+            "result_ref": result_ref,
             "tool_history": [
                 {
                     "tool": "execute_sql",

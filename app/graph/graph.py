@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from typing import Any
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -234,12 +235,13 @@ def _sql_worker_wrapper(state: dict) -> dict:
     validated_sql = result.get("validated_sql", "")
     generated_sql = result.get("generated_sql", "")
     visualization = result.get("visualization")
+    result_ref = result.get("result_ref")
 
     # Extract tool_history from subgraph nodes and merge into parent AgentState
     # Each subgraph node returns its own tool_history entry; they accumulate via operator.add
     subgraph_tool_history = result.get("tool_history", [])
 
-    return {
+    update: dict[str, Any] = {
         "task_results": [result],
         "sql_result": sql_result,
         "generated_sql": generated_sql,
@@ -247,6 +249,10 @@ def _sql_worker_wrapper(state: dict) -> dict:
         "visualization": visualization,
         "tool_history": subgraph_tool_history,
     }
+    if result_ref:
+        update["result_ref"] = result_ref
+
+    return update
 
 
 def build_sql_v2_graph(checkpointer=None):

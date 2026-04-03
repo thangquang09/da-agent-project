@@ -840,6 +840,7 @@ def _generate_natural_response(
     row_count: int,
     session_context: str = "",
     has_visualization: bool = False,
+    summary_stats: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, int] | None, float | None]:
     """Use LLM to generate a natural language response from SQL results."""
     if not sql_rows:
@@ -855,6 +856,7 @@ def _generate_natural_response(
         results=sql_rows,
         row_count=row_count,
         session_context=session_context,
+        summary_stats=summary_stats,
     )
 
     # Inject meta-instruction if visualization was successfully generated
@@ -951,12 +953,23 @@ def synthesize_answer(state: AgentState) -> AgentState:
         else:
             # Generate natural language response using LLM
             row_count = state.get("sql_result", {}).get("row_count", 0)
+            result_ref = state.get("result_ref")
+
+            # Use result_ref sample + stats if available, otherwise fall back to full rows
+            if result_ref and result_ref.get("sample"):
+                synthesis_rows = result_ref["sample"]
+                synthesis_stats = result_ref.get("stats")
+            else:
+                synthesis_rows = sql_rows
+                synthesis_stats = None
+
             natural_answer, syn_usage, syn_cost = _generate_natural_response(
                 state.get("user_query", ""),
-                sql_rows,
+                synthesis_rows,
                 row_count,
                 session_context=session_context,
                 has_visualization=has_visualization,
+                summary_stats=synthesis_stats,
             )
             answer = natural_answer + viz_unavailable_msg
             synthesis_usage = syn_usage
@@ -1048,6 +1061,17 @@ def synthesize_answer(state: AgentState) -> AgentState:
     # Include visualization if present
     visualization = state.get("visualization")
 
+    # Include result metadata for frontend (download button, etc.)
+    result_ref = state.get("result_ref")
+    result_metadata = None
+    if result_ref:
+        result_metadata = {
+            "result_id": result_ref.get("result_id"),
+            "row_count": result_ref.get("row_count", 0),
+            "has_full_data": result_ref.get("has_full_data", False),
+            "full_data_path": result_ref.get("full_data_path"),
+        }
+
     payload = {
         "answer": answer,
         "evidence": evidence,
@@ -1063,6 +1087,7 @@ def synthesize_answer(state: AgentState) -> AgentState:
         "sql_rows": sql_rows,
         "sql_row_count": sql_row_count,
         "visualization": visualization,
+        "result_metadata": result_metadata,
     }
     return {
         "final_answer": answer,
@@ -1502,6 +1527,10 @@ Provide a unified analysis that:
         "visualization": task_visualizations[0] if task_visualizations else None,
         # Original aggregate analysis
         "aggregate_analysis": analysis,
+        # Pass through result_ref from first task (for result_store integration)
+        "result_ref": successful_results[0].get("result_ref")
+        if len(successful_results) == 1
+        else None,
         "tool_history": [
             {
                 "tool": "aggregate_results",

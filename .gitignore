@@ -38,6 +38,8 @@ data/*
 !data/seeds/**
 !data/warehouse/
 !data/warehouse/.gitkeep
+!data/migrations/
+!data/migrations/**
 data/seeds/**/__pycache__/
 data/seeds/**/*.py[cod]
 

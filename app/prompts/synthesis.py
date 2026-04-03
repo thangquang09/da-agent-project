@@ -39,10 +39,13 @@ Previous conversation context (for follow-up questions):
 {{/if}}
 Original Question: {{query}}
 
-SQL Query Results:
-{{results}}
+{{#if summary_stats}}
+Summary Statistics ({{row_count}} total rows, sample shown below):
+{{summary_stats}}
 
-Total rows: {{row_count}}
+{{/if}}
+SQL Query Results ({{row_count}} total rows, sample shown):
+{{results}}
 
 Provide a natural, conversational answer to the user's question based on this data.""",
         },

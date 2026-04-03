@@ -182,6 +182,7 @@ class PromptManager:
         dataset_context: str = "",
         semantic_context: str = "",
         session_context: str = "",
+        xml_database_context: str = "",
         previous_sql: str | None = None,
         error_message: str | None = None,
     ) -> list[dict[str, str]]:
@@ -197,6 +198,7 @@ class PromptManager:
                     "dataset_context": dataset_context or "",
                     "semantic_context": semantic_context or "",
                     "session_context": session_context or "",
+                    "xml_database_context": xml_database_context or "",
                     "previous_sql": previous_sql,
                     "error_message": error_message,
                 },
@@ -211,6 +213,7 @@ class PromptManager:
                 "dataset_context": dataset_context or "",
                 "semantic_context": semantic_context or "",
                 "session_context": session_context or "",
+                "xml_database_context": xml_database_context or "",
             },
         )
 
@@ -241,13 +244,17 @@ class PromptManager:
         results: list[dict[str, Any]],
         row_count: int,
         session_context: str = "",
+        summary_stats: dict[str, Any] | None = None,
     ) -> list[dict[str, str]]:
         """Generate messages for natural language synthesis from SQL results."""
         import json
 
+        from app.utils.json_serializer import safe_json_dumps
+
         from app.prompts.synthesis import SYNTHESIS_PROMPT_DEFINITION
 
-        results_json = json.dumps(results, ensure_ascii=False, indent=2)
+        results_json = safe_json_dumps(results, indent=2)
+        stats_json = safe_json_dumps(summary_stats, indent=2) if summary_stats else ""
         return self._compile_prompt(
             SYNTHESIS_PROMPT_DEFINITION,
             {
@@ -255,6 +262,7 @@ class PromptManager:
                 "results": results_json,
                 "row_count": row_count,
                 "session_context": session_context or "",
+                "summary_stats": stats_json,
             },
         )
 
@@ -297,6 +305,7 @@ class PromptManager:
         query: str,
         schema: str,
         session_context: str = "",
+        xml_database_context: str = "",
     ) -> list[dict[str, str]]:
         return self._compile_prompt(
             SQL_WORKER_GENERATION_PROMPT,
@@ -304,6 +313,7 @@ class PromptManager:
                 "query": query,
                 "schema": schema,
                 "session_context": session_context or "",
+                "xml_database_context": xml_database_context or "",
             },
         )
 

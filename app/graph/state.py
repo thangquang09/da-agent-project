@@ -55,6 +55,7 @@ class AnswerPayload(TypedDict, total=False):
     sql_rows: list[dict[str, Any]]
     sql_row_count: int
     visualization: dict[str, Any] | None
+    result_metadata: dict[str, Any] | None  # Result store metadata for frontend
 
 
 class AgentState(TypedDict, total=False):
@@ -109,6 +110,10 @@ class AgentState(TypedDict, total=False):
     # Memory of Action - for implicit follow-up handling
     last_action: dict[str, Any]  # Last completed action with SQL, parameters, etc.
     continuity_context: dict[str, Any]  # Detected continuity info for follow-ups
+    # Result store reference - lightweight metadata instead of full rows
+    result_ref: dict[
+        str, Any
+    ]  # {result_id, row_count, columns, sample, stats, has_full_data, full_data_path}
 
 
 class GraphInputState(TypedDict, total=False):
