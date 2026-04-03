@@ -241,7 +241,10 @@ def _sql_worker_wrapper(state: dict) -> dict:
     # Only write root-level fields in direct mode (single worker).
     # In parallel mode, data flows through task_results -> aggregate_results,
     # so writing root fields here would cause INVALID_CONCURRENT_GRAPH_UPDATE.
-    is_direct_mode = "task_id" in state and state.get("task_id") == "direct"
+    #
+    # Detection logic: Send API passes TaskState (has task_id), direct routing passes AgentState (no task_id).
+    # Direct mode: AgentState has no task_id at root, so "task_id" not in state means direct.
+    is_direct_mode = "task_id" not in state
 
     update: dict[str, Any] = {
         "task_results": [result],
