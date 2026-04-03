@@ -17,8 +17,11 @@ ROUTER_PROMPT_DEFINITION = PromptDefinition(
                 "- unknown: capability questions, help requests, or casual conversation that doesn't require data or definitions.\n\n"
                 "IMPORTANT: If the user asks to draw/create/plot a chart, graph, or visualization (even with raw data values provided), classify as 'sql'.\n\n"
                 "Return JSON only with shape:\n"
-                '{{"intent":"sql|rag|mixed|unknown","reason":"short reason"}}\n'
-                "No markdown. No extra keys."
+                '{{"intent":"sql|rag|mixed|unknown","execution_mode":"direct|planned","reason":"short reason"}}\n'
+                "No markdown. No extra keys.\n\n"
+                "execution_mode rules:\n"
+                '- "direct": single table, simple aggregation/filter, no cross-table joins, no complex multi-step comparisons\n'
+                '- "planned": multi-table joins, multi-step queries, complex comparisons across dimensions, needs decomposition'
             ),
         },
         {

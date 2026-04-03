@@ -10,7 +10,7 @@ ContextType = Literal["user_provided", "csv_auto", "mixed", "default"]
 TaskType = Literal[
     "sql_query", "data_analysis", "context_lookup", "standalone_visualization"
 ]
-ExecutionMode = Literal["single", "parallel", "linear"]
+ExecutionMode = Literal["single", "parallel", "linear", "direct", "planned"]
 
 
 class TaskState(TypedDict, total=False):
@@ -37,6 +37,7 @@ class TaskState(TypedDict, total=False):
     inherited_sql: str  # SQL inherited from previous turn for continuity
     parameter_changes: dict[str, Any]  # Parameter changes for inherited SQL
     xml_database_context: str  # XML block injected into SQL agent system prompt
+    tool_history: list[dict[str, Any]]  # Propagate tool usage from subgraph nodes
 
 
 class AnswerPayload(TypedDict, total=False):

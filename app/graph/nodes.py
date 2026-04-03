@@ -202,7 +202,7 @@ def route_intent(state: AgentState) -> AgentState:
 
     messages = prompt_manager.router_messages(query, session_context=session_context)
 
-    def _do_route() -> tuple[str, str, dict | None, dict | None, str]:
+    def _do_route() -> tuple[str, str, str, dict | None, dict | None, str]:
         client = LLMClient.from_env()
         response = client.chat_completion(
             messages=messages,
@@ -221,36 +221,53 @@ def route_intent(state: AgentState) -> AgentState:
         parsed = _extract_first_json_object(content)
         candidate = str((parsed or {}).get("intent", "")).strip().lower()
         reason = str((parsed or {}).get("reason", "")).strip()
+        exec_mode = str((parsed or {}).get("execution_mode", "planned")).strip().lower()
+        if exec_mode not in {"direct", "planned"}:
+            exec_mode = "planned"
         if candidate in {"sql", "rag", "mixed", "unknown"}:
-            return candidate, reason or "llm_router", usage, cost, ""
+            return candidate, reason or "llm_router", exec_mode, usage, cost, ""
         else:
-            return "", f"llm_invalid_output:{candidate[:50]}", usage, cost, content
+            return (
+                "",
+                f"llm_invalid_output:{candidate[:50]}",
+                "planned",
+                usage,
+                cost,
+                content,
+            )
 
     try:
-        intent, intent_reason, llm_usage, llm_cost_usd, raw_content = _do_route()
+        intent, intent_reason, execution_mode, llm_usage, llm_cost_usd, raw_content = (
+            _do_route()
+        )
         if not intent:
             logger.warning(
                 "Router LLM returned invalid intent, retrying: {candidate}",
                 candidate=raw_content[:100] if raw_content else "empty",
             )
-            intent, intent_reason, llm_usage, llm_cost_usd, _ = _do_route()
+            intent, intent_reason, execution_mode, llm_usage, llm_cost_usd, _ = (
+                _do_route()
+            )
             if not intent:
                 intent = "unknown"
                 intent_reason = "llm_invalid_output_retry"
     except Exception as exc:  # noqa: BLE001
         logger.error("Router LLM failed: {error}", error=str(exc))
         intent_reason = f"llm_error:{type(exc).__name__}"
+        execution_mode = "planned"
 
     logger.info("Routed intent={intent} for query={query}", intent=intent, query=query)
     return {
         "intent": intent,
         "intent_reason": intent_reason,
+        "execution_mode": execution_mode,
         "tool_history": [
             {
                 "tool": "route_intent",
                 "status": "ok",
                 "intent": intent,
                 "reason": intent_reason,
+                "execution_mode": execution_mode,
                 "prompt_name": ROUTER_PROMPT_DEFINITION.name,
                 "token_usage": llm_usage,
                 "cost_usd": llm_cost_usd,

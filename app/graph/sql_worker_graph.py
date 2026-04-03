@@ -81,21 +81,43 @@ def _apply_parameter_changes(sql: str, parameter_changes: dict[str, Any]) -> str
 
 
 def _task_get_schema(task_state: TaskState) -> dict[str, Any]:
-    """Get schema for a specific task."""
+    """Get schema for a specific task. Reuse schema_context from task_planner if available."""
+    existing_schema = task_state.get("schema_context", "")
+    if existing_schema:
+        return {
+            "schema_context": existing_schema,
+            "status": "running",
+            "tool_history": [
+                {
+                    "tool": "get_schema",
+                    "status": "reused",
+                    "source": "task_planner",
+                }
+            ],
+        }
+
     db_path = task_state.get("target_db_path")
     from app.tools import get_schema_overview
 
     try:
         overview = get_schema_overview(db_path=Path(db_path) if db_path else None)
         schema = str(overview)
+        table_count = len(overview.get("tables", []))
     except Exception as exc:
         logger.warning("Failed to get schema in worker: {error}", error=str(exc))
-        schema = task_state.get("schema_context", "")
+        schema = ""
+        table_count = 0
 
-    # Only return fields that need to be updated
     return {
         "schema_context": schema,
         "status": "running",
+        "tool_history": [
+            {
+                "tool": "get_schema",
+                "status": "ok",
+                "table_count": table_count,
+            }
+        ],
     }
 
 
@@ -127,11 +149,20 @@ def _task_generate_sql(task_state: TaskState) -> dict[str, Any]:
         return {
             "generated_sql": sql,
             "status": "running",
+            "tool_history": [
+                {
+                    "tool": "generate_sql",
+                    "status": "inherited",
+                    "source": "continuity",
+                }
+            ],
         }
 
     # Normal flow: generate SQL via LLM
     settings = load_settings()
     sql = ""
+    llm_usage = None
+    llm_cost_usd = None
 
     try:
         client = LLMClient.from_env()
@@ -139,6 +170,7 @@ def _task_generate_sql(task_state: TaskState) -> dict[str, Any]:
             query=query,
             schema=schema[:1500],
             session_context=session_context,
+            xml_database_context=task_state.get("xml_database_context", ""),
         )
         response = client.chat_completion(
             messages=messages,
@@ -152,6 +184,8 @@ def _task_generate_sql(task_state: TaskState) -> dict[str, Any]:
             .get("content", "")
             .strip()
         )
+        llm_usage = response.get("_usage_normalized")
+        llm_cost_usd = response.get("_cost_usd_estimate")
 
         # Extract SQL from markdown if present
         fenced_match = re.search(
@@ -173,7 +207,19 @@ def _task_generate_sql(task_state: TaskState) -> dict[str, Any]:
         logger.error("SQL generation failed in worker: {error}", error=str(exc))
         sql = ""
 
-    return {"generated_sql": sql}
+    return {
+        "generated_sql": sql,
+        "status": "ok" if sql else "failed",
+        "tool_history": [
+            {
+                "tool": "generate_sql",
+                "status": "ok" if sql else "failed",
+                "sql_length": len(sql),
+                "token_usage": llm_usage,
+                "cost_usd": llm_cost_usd,
+            }
+        ],
+    }
 
 
 def _task_validate_sql(task_state: TaskState) -> dict[str, Any]:
@@ -185,6 +231,13 @@ def _task_validate_sql(task_state: TaskState) -> dict[str, Any]:
         return {
             "status": "failed",
             "error": "No SQL generated",
+            "tool_history": [
+                {
+                    "tool": "validate_sql",
+                    "status": "failed",
+                    "reason": "no_sql",
+                }
+            ],
         }
 
     result = validate_sql(
@@ -196,9 +249,24 @@ def _task_validate_sql(task_state: TaskState) -> dict[str, Any]:
             "status": "failed",
             "error": "; ".join(result.reasons),
             "validated_sql": result.sanitized_sql,
+            "tool_history": [
+                {
+                    "tool": "validate_sql",
+                    "status": "failed",
+                    "reasons": result.reasons,
+                }
+            ],
         }
 
-    return {"validated_sql": result.sanitized_sql}
+    return {
+        "validated_sql": result.sanitized_sql,
+        "tool_history": [
+            {
+                "tool": "validate_sql",
+                "status": "ok",
+            }
+        ],
+    }
 
 
 def _task_execute_sql(task_state: TaskState) -> dict[str, Any]:
@@ -220,6 +288,14 @@ def _task_execute_sql(task_state: TaskState) -> dict[str, Any]:
             "sql_result": result,
             "status": "success",
             "execution_time_ms": result.get("latency_ms", 0),
+            "tool_history": [
+                {
+                    "tool": "execute_sql",
+                    "status": "ok",
+                    "row_count": result.get("row_count", 0),
+                    "latency_ms": result.get("latency_ms", 0),
+                }
+            ],
         }
     except Exception as exc:
         # Log error without full stack trace to avoid leaking internal details
@@ -235,6 +311,13 @@ def _task_execute_sql(task_state: TaskState) -> dict[str, Any]:
             "status": "failed",
             "error": user_friendly_error,
             "sql_result": {"error": user_friendly_error, "rows": [], "row_count": 0},
+            "tool_history": [
+                {
+                    "tool": "execute_sql",
+                    "status": "failed",
+                    "error": user_friendly_error,
+                }
+            ],
         }
 
 

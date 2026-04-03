@@ -181,23 +181,72 @@ def build_sql_v1_graph(checkpointer=None):
     return builder.compile(checkpointer=checkpointer or InMemorySaver())
 
 
-def _sql_worker_wrapper(task_state: dict) -> dict:
+def _sql_worker_wrapper(state: dict) -> dict:
     """
     Wrapper node that runs SQL worker and returns result for accumulation.
 
-    This wrapper properly isolates the worker subgraph execution and returns
-    only the task result to be added to task_results via operator.add.
+    Handles two invocation modes:
+    1. Via Send API (from route_after_planning): receives TaskState dict with task_id, query, etc.
+    2. Direct routing (from route_to_execution_mode): receives full AgentState, needs to build TaskState.
+
+    Also flattens sql_result, generated_sql, validated_sql into root state fields
+    so synthesize_answer can access them when aggregate_results is bypassed.
     """
     from app.graph.sql_worker_graph import get_sql_worker_graph
 
     worker = get_sql_worker_graph()
 
+    # Detect invocation mode
+    if "task_id" in state:
+        # Send API mode: already a TaskState
+        task_state = state
+    else:
+        # Direct mode: build TaskState from AgentState
+        task_state = {
+            "task_id": "direct",
+            "task_type": "sql_query",
+            "query": state.get("user_query", ""),
+            "target_db_path": state.get("target_db_path", ""),
+            "schema_context": state.get("schema_context", ""),
+            "session_context": state.get("session_context", ""),
+            "xml_database_context": state.get("xml_database_context", ""),
+            "status": "pending",
+            "requires_visualization": False,
+        }
+        # Handle continuity
+        continuity_ctx = state.get("continuity_context", {})
+        if continuity_ctx.get("is_continuation"):
+            inherited = continuity_ctx.get("inherited_action", {})
+            if inherited.get("base_sql"):
+                task_state["inherited_sql"] = inherited["base_sql"]
+                task_state["parameter_changes"] = continuity_ctx.get(
+                    "parameter_changes", {}
+                )
+                task_state["requires_visualization"] = inherited.get(
+                    "add_visualization", False
+                )
+
     # Run the worker subgraph
     result = worker.invoke(task_state)
 
-    # Return the task result wrapped for accumulation
-    # The task_results field uses Annotated[list, operator.add]
-    return {"task_results": [result]}
+    # Flatten SQL data for synthesize_answer compatibility (when aggregate_results is bypassed)
+    sql_result = result.get("sql_result", {})
+    validated_sql = result.get("validated_sql", "")
+    generated_sql = result.get("generated_sql", "")
+    visualization = result.get("visualization")
+
+    # Extract tool_history from subgraph nodes and merge into parent AgentState
+    # Each subgraph node returns its own tool_history entry; they accumulate via operator.add
+    subgraph_tool_history = result.get("tool_history", [])
+
+    return {
+        "task_results": [result],
+        "sql_result": sql_result,
+        "generated_sql": generated_sql,
+        "validated_sql": validated_sql,
+        "visualization": visualization,
+        "tool_history": subgraph_tool_history,
+    }
 
 
 def build_sql_v2_graph(checkpointer=None):
@@ -293,7 +342,8 @@ def build_sql_v2_graph(checkpointer=None):
         "route_intent",
         route_to_execution_mode,
         {
-            "task_planner": "task_planner",  # SQL/mixed -> task planner
+            "task_planner": "task_planner",  # SQL/mixed -> task planner (planned mode)
+            "sql_worker": "sql_worker",  # SQL/mixed -> direct worker (direct mode)
             "retrieve_context_node": "retrieve_context_node",  # RAG -> retrieval
             "synthesize_answer": "synthesize_answer",  # unknown -> synthesis
         },

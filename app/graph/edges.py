@@ -111,19 +111,30 @@ def route_after_sql_execution(
 def route_to_execution_mode(
     state: AgentState,
 ) -> Literal[
-    "task_planner", "get_schema", "retrieve_context_node", "synthesize_answer"
+    "task_planner",
+    "sql_worker",
+    "get_schema",
+    "retrieve_context_node",
+    "synthesize_answer",
 ]:
     """
     Router after intent detection that decides execution strategy.
 
-    For SQL/mixed queries, route to task_planner to potentially parallelize.
-    For RAG queries, route directly to retrieval.
-    For unknown, go to synthesis.
+    For SQL/mixed queries with execution_mode="direct": skip task_planner, go straight to sql_worker.
+    For SQL/mixed queries with execution_mode="planned": route to task_planner for decomposition.
+    For RAG queries: route directly to retrieval.
+    For unknown: go to synthesis.
     """
     intent = state.get("intent", "unknown")
+    execution_mode = state.get("execution_mode", "planned")
 
     if intent in {"sql", "mixed"}:
-        # Route to task_planner which will decide single vs parallel
+        if execution_mode == "direct":
+            logger.info(
+                "Direct execution mode: skipping task_planner for query={query}",
+                query=state.get("user_query", "")[:100],
+            )
+            return "sql_worker"
         return "task_planner"
     if intent == "rag":
         return "retrieve_context_node"
@@ -219,13 +230,22 @@ def route_after_worker_execution(
     """
     Route after parallel worker execution.
 
-    Always go to aggregation to combine results, even for single tasks
-    (provides consistent handling).
+    For direct execution mode or single-task results: skip aggregation, go straight to synthesis.
+    For multi-task parallel results: go to aggregation for unified analysis.
     """
     task_results = state.get("task_results", [])
+    execution_mode = state.get("execution_mode", "planned")
 
-    if task_results:
-        return "aggregate_results"
+    if not task_results:
+        return "synthesize_answer"
 
-    # No results - something went wrong
-    return "synthesize_answer"
+    # Direct queries or single task -> skip unnecessary LLM aggregation
+    if execution_mode == "direct" or len(task_results) == 1:
+        logger.info(
+            "Skipping aggregate_results: execution_mode={mode}, task_count={count}",
+            mode=execution_mode,
+            count=len(task_results),
+        )
+        return "synthesize_answer"
+
+    return "aggregate_results"
