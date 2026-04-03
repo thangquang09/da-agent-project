@@ -16,13 +16,10 @@ from app.memory.context_store import get_context_memory_store
 from app.prompts import (
     ANALYSIS_PROMPT_DEFINITION,
     CONTEXT_DETECTION_PROMPT_DEFINITION,
-    FALLBACK_ASSISTANT_PROMPT,
     prompt_manager,
-    RETRIEVAL_TYPE_CLASSIFIER_PROMPT,
     ROUTER_PROMPT_DEFINITION,
     SQL_PROMPT_DEFINITION,
     SYNTHESIS_PROMPT_DEFINITION,
-    TASK_DECOMPOSITION_PROMPT,
 )
 from app.tools import (
     dataset_context,

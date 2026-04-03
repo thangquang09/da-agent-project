@@ -76,6 +76,7 @@ def detect_implicit_continuation(
             messages=messages,
             model=settings.model_fallback,  # Use fast/cheap model
             temperature=0.0,
+            response_format={"type": "json_object"},
         )
 
         content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
