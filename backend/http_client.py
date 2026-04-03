@@ -45,11 +45,18 @@ def query_stream(
         # Files must go via multipart — wrap response as SSE-style events
         yield {"event": "started", "data": {"query": query}}
         try:
-            result = _query_with_files(query, thread_id, user_semantic_context, uploaded_file_data)
+            result = _query_with_files(
+                query, thread_id, user_semantic_context, uploaded_file_data
+            )
             yield {"event": "result", "data": result}
         except Exception as exc:  # noqa: BLE001
-            logger.exception("http_client._query_with_files failed: {err}", err=str(exc))
-            yield {"event": "error", "data": {"message": str(exc), "category": "CLIENT_ERROR"}}
+            logger.exception(
+                "http_client._query_with_files failed: {err}", err=str(exc)
+            )
+            yield {
+                "event": "error",
+                "data": {"message": str(exc), "category": "CLIENT_ERROR"},
+            }
         return
 
     # Normal SSE path
@@ -60,7 +67,9 @@ def query_stream(
     logger.debug("http_client.query_stream → {url}/query/stream", url=BACKEND_URL)
     try:
         with httpx.Client(timeout=_QUERY_TIMEOUT) as client:
-            with client.stream("GET", f"{BACKEND_URL}/query/stream", params=params) as resp:
+            with client.stream(
+                "GET", f"{BACKEND_URL}/query/stream", params=params
+            ) as resp:
                 resp.raise_for_status()
                 for line in resp.iter_lines():
                     if not line or not line.startswith("data: "):
@@ -72,10 +81,16 @@ def query_stream(
                         event = json.loads(raw)
                         yield event
                     except json.JSONDecodeError:
-                        logger.warning("http_client: could not parse SSE line: {line}", line=raw[:100])
+                        logger.warning(
+                            "http_client: could not parse SSE line: {line}",
+                            line=raw[:100],
+                        )
     except httpx.HTTPStatusError as exc:
         logger.error("http_client.query_stream HTTP error: {err}", err=str(exc))
-        yield {"event": "error", "data": {"message": str(exc), "category": "HTTP_ERROR"}}
+        yield {
+            "event": "error",
+            "data": {"message": str(exc), "category": "HTTP_ERROR"},
+        }
     except httpx.RequestError as exc:
         logger.error("http_client.query_stream connection error: {err}", err=str(exc))
         yield {
@@ -94,15 +109,27 @@ def _query_with_files(
     uploaded_file_data: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """POST /query/upload with multipart form data."""
-    form_data = {
+    form_data: dict[str, Any] = {
         "query": query,
         "thread_id": thread_id,
     }
     if user_semantic_context:
         form_data["user_semantic_context"] = user_semantic_context
 
+    # Serialize per-file business contexts as JSON form field
+    contexts_dict = {f["name"]: f.get("context", "") for f in uploaded_file_data}
+    if any(contexts_dict.values()):
+        form_data["contexts_json"] = json.dumps(contexts_dict, ensure_ascii=False)
+
     files = [
-        ("files", (f["name"], f["data"] if isinstance(f["data"], bytes) else f["data"].encode(), "text/csv"))
+        (
+            "files",
+            (
+                f["name"],
+                f["data"] if isinstance(f["data"], bytes) else f["data"].encode(),
+                "text/csv",
+            ),
+        )
         for f in uploaded_file_data
     ]
 
@@ -150,3 +177,22 @@ def health_check() -> bool:
             return client.get(f"{BACKEND_URL}/health").status_code == 200
     except Exception:  # noqa: BLE001
         return False
+
+
+# ---------------------------------------------------------------------------
+# Traces
+# ---------------------------------------------------------------------------
+
+
+def get_trace(run_id: str) -> dict[str, Any] | None:
+    """Get full trace data for a specific run_id. Returns None if not found."""
+    try:
+        with httpx.Client(timeout=_SHORT_TIMEOUT) as client:
+            resp = client.get(f"{BACKEND_URL}/traces/{run_id}")
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.RequestError as exc:
+        logger.warning("http_client.get_trace failed: {err}", err=str(exc))
+        return None

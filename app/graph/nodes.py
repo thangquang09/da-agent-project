@@ -288,9 +288,34 @@ def get_schema(state: AgentState) -> AgentState:
 
     schema_context = json.dumps(overview, ensure_ascii=False)
 
+    # Build XML database context when user has provided per-table business context
+    table_contexts = state.get("table_contexts") or {}
+    xml_database_context = ""
+    if table_contexts:
+        from app.tools.table_context import (
+            TableEntry,
+            build_full_xml_context,
+            format_schema_columns,
+        )
+
+        entries = [
+            TableEntry(
+                table_name=t["table_name"],
+                schema=format_schema_columns(t["columns"]),
+                business_context=table_contexts.get(t["table_name"], ""),
+            )
+            for t in overview.get("tables", [])
+        ]
+        xml_database_context = build_full_xml_context(entries)
+        logger.info(
+            "Built XML database context for {n} tables",
+            n=len(entries),
+        )
+
     update: AgentState = {
         "schema_context": schema_context,
         "dataset_context": json.dumps(dataset_ctx, ensure_ascii=False),
+        "xml_database_context": xml_database_context,
         "tool_history": [
             {
                 "tool": "get_schema",
@@ -482,6 +507,7 @@ def generate_sql(state: AgentState) -> AgentState:
                 state.get("dataset_context", ""),
                 semantic_context,
                 session_context=state.get("session_context", ""),
+                xml_database_context=state.get("xml_database_context", ""),
                 previous_sql=previous_sql,
                 error_message=last_error,
             ),
@@ -1029,6 +1055,7 @@ def synthesize_answer(state: AgentState) -> AgentState:
         "errors": errors,
         "confidence": confidence,
         "step_count": state.get("step_count", 0) + 1,
+        "tool_history": tool_history,
     }
 
 
@@ -1092,6 +1119,40 @@ def task_planner(state: AgentState) -> AgentState:
     continuity_context = state.get("continuity_context", {})
     last_action = state.get("last_action", {})
 
+    # Build XML database context for v2 (no standalone get_schema node runs before task_planner)
+    xml_database_context = state.get("xml_database_context", "")
+    table_contexts = state.get("table_contexts") or {}
+    if table_contexts and not xml_database_context:
+        try:
+            from pathlib import Path as _Path
+
+            from app.tools.get_schema import get_schema_overview as _get_schema_overview
+            from app.tools.table_context import (
+                TableEntry,
+                build_full_xml_context,
+                format_schema_columns,
+            )
+
+            _db = _Path(target_db_path) if target_db_path else None
+            _overview = _get_schema_overview(db_path=_db)
+            _entries = [
+                TableEntry(
+                    table_name=t["table_name"],
+                    schema=format_schema_columns(t["columns"]),
+                    business_context=table_contexts.get(t["table_name"], ""),
+                )
+                for t in _overview.get("tables", [])
+            ]
+            xml_database_context = build_full_xml_context(_entries)
+            logger.info(
+                "task_planner: built XML context for {n} tables",
+                n=len(_entries),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "task_planner: failed to build XML context: {err}", err=str(exc)
+            )
+
     # Handle continuity - reuse previous SQL if detected
     if continuity_context.get("is_continuation"):
         inherited_action = continuity_context.get("inherited_action", {})
@@ -1119,6 +1180,7 @@ def task_planner(state: AgentState) -> AgentState:
                             "target_db_path": target_db_path,
                             "schema_context": schema,
                             "session_context": session_context,
+                            "xml_database_context": xml_database_context,
                             "status": "pending",
                             "requires_visualization": add_visualization,
                         }
@@ -1166,6 +1228,7 @@ def task_planner(state: AgentState) -> AgentState:
                 task["target_db_path"] = target_db_path
                 task["schema_context"] = schema
                 task["session_context"] = session_context
+                task["xml_database_context"] = xml_database_context
                 task["status"] = "pending"
 
             execution_mode = "parallel" if len(tasks) > 1 else "linear"
@@ -1207,6 +1270,7 @@ def _fallback_task_plan(
 ) -> AgentState:
     """Fallback when task planner fails."""
     session_context = state.get("session_context", "")
+    xml_database_context = state.get("xml_database_context", "")
     return {
         "task_plan": [
             {
@@ -1216,6 +1280,7 @@ def _fallback_task_plan(
                 "target_db_path": target_db_path,
                 "schema_context": schema,
                 "session_context": session_context,
+                "xml_database_context": xml_database_context,
                 "status": "pending",
             }
         ],
@@ -1462,6 +1527,7 @@ def process_uploaded_files(state: AgentState) -> AgentState:
         return {
             "registered_tables": [],
             "skipped_tables": [],
+            "table_contexts": {},
             "file_cache": file_cache,
             "step_count": state.get("step_count", 0) + 1,
             "tool_history": [
@@ -1478,12 +1544,14 @@ def process_uploaded_files(state: AgentState) -> AgentState:
     )
     registered_tables: list[str] = []
     skipped_tables: list[str] = []
+    table_contexts: dict[str, str] = {}  # table_name → user-provided context
     tool_history_entries: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
 
     for file_info in uploaded_file_data:
         filename = file_info.get("name", "unknown.csv")
         file_bytes = file_info.get("data")
+        file_context = file_info.get("context") or ""  # user-provided business context
         if not file_bytes:
             errors.append(
                 {
@@ -1508,6 +1576,7 @@ def process_uploaded_files(state: AgentState) -> AgentState:
             )
             registered_tables.append(table_name)
             skipped_tables.append(table_name)
+            table_contexts[table_name] = file_context  # always update context
             tool_history_entries.append(
                 {
                     "tool": "auto_register_csv",
@@ -1533,6 +1602,7 @@ def process_uploaded_files(state: AgentState) -> AgentState:
                 "source": "db_check",
             }
             registered_tables.append(table_name)
+            table_contexts[table_name] = file_context  # preserve user context
             skipped_tables.append(table_name)
             tool_history_entries.append(
                 {
@@ -1577,6 +1647,7 @@ def process_uploaded_files(state: AgentState) -> AgentState:
                 )
             else:
                 registered_tables.append(result.table_name)
+                table_contexts[result.table_name] = file_context  # store user context
                 # Add to cache
                 file_cache[cache_key] = {
                     "table_name": result.table_name,
@@ -1623,6 +1694,7 @@ def process_uploaded_files(state: AgentState) -> AgentState:
         "registered_tables": registered_tables,
         "file_cache": file_cache,
         "skipped_tables": skipped_tables,
+        "table_contexts": table_contexts,
         "errors": errors,
         "step_count": state.get("step_count", 0) + 1,
         "tool_history": tool_history_entries,

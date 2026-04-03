@@ -6,7 +6,7 @@ from typing import Any
 import streamlit as st
 
 from app.logger import logger
-from backend.http_client import health_check, query_stream
+from backend.http_client import get_trace, health_check, query_stream
 
 
 st.set_page_config(page_title="DA Agent Lab", page_icon="📊", layout="wide")
@@ -17,7 +17,8 @@ st.caption("LangGraph DA Agent chat with trace visibility")
 def run_agent(
     user_query: str,
     user_semantic_context: str | None = None,
-    uploaded_files: list[str] | None = None,  # kept for API compat, unused (filenames go via data)
+    uploaded_files: list[str]
+    | None = None,  # kept for API compat, unused (filenames go via data)
     uploaded_file_data: list[dict[str, Any]] | None = None,
     thread_id: str | None = None,
 ) -> dict:
@@ -66,6 +67,8 @@ def _init_state() -> None:
     st.session_state.setdefault("current_assistant_index", None)
     st.session_state.setdefault("user_semantic_context", "")
     st.session_state.setdefault("uploaded_csv_files", [])
+    st.session_state.setdefault("csv_pairs", [])  # pair-based upload store
+    st.session_state.setdefault("uploader_key", 0)  # increment to reset file widget
     # Session memory: thread_id persists for conversation memory
     st.session_state.setdefault("thread_id", str(uuid.uuid4()))
 
@@ -112,14 +115,149 @@ def _render_result(result: dict) -> None:
             st.error(f"Failed to render visualization: {e}")
 
     with st.expander("Agent Logs", expanded=False):
-        tabs = st.tabs(["SQL", "Trace", "Errors", "Raw"])
+        tabs = st.tabs(["SQL", "Trace Timeline", "Trace Raw JSON", "Errors", "Raw"])
         with tabs[0]:
             st.code(result.get("generated_sql", ""), language="sql")
+
         with tabs[1]:
-            st.json(result.get("tool_history", []))
+            # Fetch and display full trace
+            run_id = result.get("run_id", "")
+            trace_data = get_trace(run_id) if run_id else None
+
+            # Check if trace data exists (either found=True or has execution_flow/nodes)
+            has_trace = trace_data and (
+                trace_data.get("found")
+                or trace_data.get("execution_flow")
+                or trace_data.get("nodes")
+            )
+
+            if has_trace:
+                run_info = trace_data.get("run", {})
+                execution_flow = trace_data.get("execution_flow", [])
+                stats = trace_data.get("stats", {})
+
+                # Summary metrics
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Total Nodes", stats.get("total_nodes", 0))
+                col2.metric("Errors", stats.get("error_nodes", 0))
+                col3.metric(
+                    "Total Latency", f"{stats.get('total_latency_ms', 0):.0f}ms"
+                )
+                col4.metric(
+                    "Status",
+                    "✅ Success"
+                    if run_info.get("status") == "success"
+                    else "❌ Failed",
+                )
+
+                st.divider()
+
+                # Execution timeline
+                st.subheader("📊 Execution Timeline")
+
+                if execution_flow:
+                    # Create a visual timeline
+                    total_time = stats.get("total_latency_ms", 1)
+
+                    for i, node in enumerate(execution_flow):
+                        node_name = node.get("node", "unknown")
+                        latency = node.get("latency_ms", 0)
+                        status = node.get("status", "unknown")
+                        obs_type = node.get("observation_type", "span")
+                        error_cat = node.get("error_category")
+
+                        # Calculate bar width percentage
+                        width_pct = (
+                            min(100, max(5, (latency / total_time) * 100))
+                            if total_time > 0
+                            else 10
+                        )
+
+                        # Status icon
+                        status_icon = (
+                            "✅"
+                            if status == "ok"
+                            else "❌"
+                            if status == "error"
+                            else "⏳"
+                        )
+
+                        # Observation type emoji
+                        type_emoji = {
+                            "classifier": "🔍",
+                            "agent": "🤖",
+                            "retriever": "📚",
+                            "generation": "✨",
+                            "tool": "🔧",
+                            "guardrail": "🛡️",
+                            "planner": "📋",
+                            "aggregator": "🔀",
+                            "chain": "⛓️",
+                            "memory": "🧠",
+                        }.get(obs_type, "📍")
+
+                        # Create columns for the timeline row
+                        cols = st.columns([2, 1, 6, 2])
+
+                        with cols[0]:
+                            st.write(f"{type_emoji} **{node_name}**")
+
+                        with cols[1]:
+                            st.write(f"{status_icon}")
+
+                        with cols[2]:
+                            # Visual bar representing latency
+                            bar_color = (
+                                "#28a745"
+                                if status == "ok"
+                                else "#dc3545"
+                                if status == "error"
+                                else "#ffc107"
+                            )
+                            st.markdown(
+                                f"""
+                                <div style="
+                                    width: {width_pct}%; 
+                                    height: 20px; 
+                                    background-color: {bar_color}; 
+                                    border-radius: 3px;
+                                    display: flex;
+                                    align-items: center;
+                                    justify-content: flex-end;
+                                    padding-right: 5px;
+                                    font-size: 11px;
+                                    color: white;
+                                ">
+                                    {latency:.1f}ms
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                            )
+
+                        with cols[3]:
+                            if error_cat:
+                                st.caption(f"⚠️ {error_cat}")
+
+                        st.caption(f"Attempt #{node.get('attempt', 1)}")
+                else:
+                    st.info("No execution flow data available")
+            else:
+                st.info("Trace data not found. Run ID: " + str(run_id))
+
         with tabs[2]:
-            st.json(result.get("errors", []))
+            # Raw Trace JSON
+            run_id = result.get("run_id", "")
+            trace_data = get_trace(run_id) if run_id else None
+
+            if trace_data:
+                st.json(trace_data)
+            else:
+                st.info("Trace data not found. Run ID: " + str(run_id))
+
         with tabs[3]:
+            st.json(result.get("errors", []))
+
+        with tabs[4]:
             st.json(result)
 
 
@@ -191,13 +329,13 @@ def _run_current_query_if_needed() -> None:
         return
 
     user_ctx = st.session_state.get("user_semantic_context", "") or None
-    uploaded_files_raw = st.session_state.get("uploaded_csv_files", [])
-    uploaded_filenames: list[str] = [f["name"] for f in uploaded_files_raw]
+    # Build file data from pair-based store: each pair has name, data, context
     uploaded_file_data: list[dict[str, Any]] = [
-        {"name": f["name"], "data": f["data"]}
-        for f in uploaded_files_raw
-        if f.get("data")
+        {"name": p["name"], "data": p["data"], "context": p.get("context", "")}
+        for p in st.session_state.get("csv_pairs", [])
+        if p.get("data")
     ]
+    uploaded_filenames: list[str] = [p["name"] for p in uploaded_file_data]
 
     with st.chat_message("assistant"):
         with st.status("Thinking...", expanded=True) as status:
@@ -246,6 +384,7 @@ _init_state()
 with st.sidebar:
     # Backend connectivity indicator
     import os
+
     backend_url = os.getenv("BACKEND_URL", "http://localhost:8001")
     if health_check():
         st.success(f"✅ Backend: `{backend_url}`", icon=None)
@@ -283,30 +422,66 @@ with st.sidebar:
     user_ctx = st.text_area(
         "Semantic Context",
         value=st.session_state.get("user_semantic_context", ""),
-        placeholder="Nhập ngữ cảnh nghiệp vụ (vd: 'Doanh số tháng này đã giảm do...')",
+        placeholder="Nhập ngữ cảnh nghiệp vụ chung (vd: 'Doanh số tháng này đã giảm do...')",
         height=80,
-        help="Ngữ cảnh 추가 giúp agent hiểu rõ hơn câu hỏi của bạn",
+        help="Ngữ cảnh chung giúp agent hiểu rõ hơn câu hỏi của bạn",
     )
     st.session_state["user_semantic_context"] = user_ctx
 
-    uploaded_files = st.file_uploader(
-        "Upload CSV files",
-        type=["csv"],
-        accept_multiple_files=True,
-        help="Upload CSV files để agent tự động sinh bảng và ngữ cảnh",
-    )
-    if uploaded_files:
-        st.session_state["uploaded_csv_files"] = [
-            {"name": f.name, "data": f.getvalue()} for f in uploaded_files
-        ]
-        for f in uploaded_files:
-            st.write(f"📄 {f.name}")
-    else:
-        st.session_state["uploaded_csv_files"] = []
+    st.divider()
+    st.subheader("📁 Data Files")
 
-    if st.button("Clear Context", use_container_width=True):
-        st.session_state["user_semantic_context"] = ""
-        st.session_state["uploaded_csv_files"] = []
+    # ── Display existing pairs ───────────────────────────────────────────
+    pairs = st.session_state["csv_pairs"]
+    for i, pair in enumerate(pairs):
+        col_name, col_remove = st.columns([4, 1])
+        with col_name:
+            st.markdown(f"📄 `{pair['name']}`")
+        with col_remove:
+            if st.button("✕", key=f"remove_{pair['id']}", help="Remove this file"):
+                st.session_state["csv_pairs"].pop(i)
+                st.rerun()
+        new_ctx = st.text_area(
+            "context",
+            value=pair["context"],
+            key=f"ctx_{pair['id']}",
+            placeholder="Mô tả nghiệp vụ cho file này (optional)...",
+            height=60,
+            label_visibility="collapsed",
+        )
+        st.session_state["csv_pairs"][i]["context"] = new_ctx
+        st.divider()
+
+    # ── New file upload ──────────────────────────────────────────────────
+    new_file = st.file_uploader(
+        "Thêm CSV file",
+        type=["csv"],
+        accept_multiple_files=False,
+        key=f"uploader_{st.session_state['uploader_key']}",
+        help="Upload từng file một, kèm ngữ cảnh nghiệp vụ tương ứng",
+    )
+    new_ctx_input = st.text_area(
+        "Mô tả nghiệp vụ (optional)",
+        key=f"new_ctx_{st.session_state['uploader_key']}",
+        placeholder="Ví dụ: 'Bảng đơn hàng B2C. amount là GMV chưa trừ hoàn.'",
+        height=60,
+    )
+    if new_file is not None:
+        if st.button("➕ Thêm vào danh sách", use_container_width=True):
+            st.session_state["csv_pairs"].append(
+                {
+                    "id": str(uuid.uuid4())[:8],
+                    "name": new_file.name,
+                    "data": new_file.getvalue(),
+                    "context": new_ctx_input.strip(),
+                }
+            )
+            st.session_state["uploader_key"] += 1  # reset the uploader widget
+            st.rerun()
+
+    if pairs and st.button("🗑 Xoá tất cả files", use_container_width=True):
+        st.session_state["csv_pairs"] = []
+        st.session_state["uploader_key"] += 1
         st.rerun()
 
     st.divider()

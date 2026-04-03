@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.logger import logger
-from backend.routers import evals, health, query, threads
+from backend.routers import evals, health, query, threads, traces
 
 
 def create_app() -> FastAPI:
@@ -40,6 +40,7 @@ def create_app() -> FastAPI:
     app.include_router(query.router)
     app.include_router(threads.router)
     app.include_router(evals.router)
+    app.include_router(traces.router)
 
     @app.on_event("startup")
     async def _startup() -> None:

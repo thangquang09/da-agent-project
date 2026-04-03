@@ -36,6 +36,7 @@ class TaskState(TypedDict, total=False):
     ]  # For standalone visualization with user-provided data
     inherited_sql: str  # SQL inherited from previous turn for continuity
     parameter_changes: dict[str, Any]  # Parameter changes for inherited SQL
+    xml_database_context: str  # XML block injected into SQL agent system prompt
 
 
 class AnswerPayload(TypedDict, total=False):
@@ -88,6 +89,10 @@ class AgentState(TypedDict, total=False):
     expected_keywords: list[str]
     file_cache: dict[str, Any]  # Session-level CSV cache: hash_key -> metadata
     skipped_tables: list[str]  # Tables skipped due to caching
+    table_contexts: dict[
+        str, str
+    ]  # table_name → user-provided business context (from pair upload)
+    xml_database_context: str  # Full <database_context> XML block for SQL agent
     sql_retry_count: int  # SQL self-correction retry counter (0-2)
     sql_last_error: str | None  # Error message from last SQL failure
     # Plan-and-Execute additions
@@ -127,3 +132,4 @@ class GraphOutputState(TypedDict, total=False):
     task_plan: list[TaskState]
     execution_mode: ExecutionMode
     aggregate_analysis: dict[str, Any]
+    tool_history: list[dict[str, Any]]
