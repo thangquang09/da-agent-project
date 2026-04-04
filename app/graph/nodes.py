@@ -776,6 +776,28 @@ def _summarize_tool_result(tool_name: str, result: dict[str, Any]) -> str:
             ensure_ascii=False,
             indent=2,
         )
+    elif tool_name == "create_visualization":
+        # Filter out bytes data that can't be JSON serialized
+        viz = result.get("visualization", {})
+        return json.dumps(
+            {
+                "status": result.get("status"),
+                "viz_success": viz.get("success"),
+                "viz_error": viz.get("error"),
+                "image_size": len(viz.get("image_data", b"")) if isinstance(viz.get("image_data"), bytes) else 0,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    elif tool_name == "retrieve_rag_answer":
+        return json.dumps(
+            {
+                "context_chunks": len(result.get("context", [])),
+                "answer_preview": str(result.get("answer", ""))[:300],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
     return json.dumps(result, ensure_ascii=False, indent=2)[:1500]
 
 
@@ -1376,6 +1398,16 @@ def leader_agent(state: AgentState) -> AgentState:
                     ),
                     observation_type="tool",
                 )
+            # Map visualization result to sql_artifacts format for final answer
+            sql_artifacts = {
+                "visualization": tool_result.get("visualization"),
+                "tool_history": [
+                    {
+                        "tool": "create_visualization",
+                        "status": tool_result.get("status"),
+                    }
+                ],
+            }
             inferred_intent = "sql" if inferred_intent == "unknown" else inferred_intent
         else:
             break
