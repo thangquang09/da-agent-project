@@ -17,7 +17,6 @@ from app.prompts.evaluation import GROUNDEDNESS_EVALUATION_PROMPT
 from app.prompts.fallback import FALLBACK_ASSISTANT_PROMPT
 from app.prompts.leader import LEADER_AGENT_PROMPT_DEFINITION
 from app.prompts.router import ROUTER_PROMPT_DEFINITION
-from app.prompts.sql import SQL_PROMPT_DEFINITION
 from app.prompts.sql_worker import SQL_WORKER_GENERATION_PROMPT
 from app.prompts.synthesis import SYNTHESIS_PROMPT_DEFINITION
 from app.prompts.visualization import VISUALIZATION_CODE_GENERATION_PROMPT
@@ -95,9 +94,6 @@ class PromptManager:
             )
             return None
 
-    def _clean_template(self, template: str) -> str:
-        return template.replace("{{", "{").replace("}}", "}")
-
     def _apply_variables(self, template: str, variables: dict[str, Any]) -> str:
         content = template
 
@@ -159,63 +155,6 @@ class PromptManager:
         return self._compile_prompt(
             ROUTER_PROMPT_DEFINITION,
             {"query": query, "session_context": session_context},
-        )
-
-    def context_detection_messages(
-        self,
-        query: str,
-        user_semantic_context: str | None = None,
-        uploaded_files: list[str] | None = None,
-    ) -> list[dict[str, str]]:
-        return self._compile_prompt(
-            CONTEXT_DETECTION_PROMPT_DEFINITION,
-            {
-                "query": query,
-                "user_semantic_context": user_semantic_context or "",
-                "uploaded_files": uploaded_files or [],
-            },
-        )
-
-    def sql_messages(
-        self,
-        query: str,
-        schema_context: str,
-        dataset_context: str = "",
-        semantic_context: str = "",
-        session_context: str = "",
-        xml_database_context: str = "",
-        previous_sql: str | None = None,
-        error_message: str | None = None,
-    ) -> list[dict[str, str]]:
-        # Use self-correction prompt if we have an error context
-        if previous_sql and error_message:
-            from app.prompts.sql import SQL_SELF_CORRECTION_PROMPT_DEFINITION
-
-            return self._compile_prompt(
-                SQL_SELF_CORRECTION_PROMPT_DEFINITION,
-                {
-                    "query": query,
-                    "schema_context": schema_context or "",
-                    "dataset_context": dataset_context or "",
-                    "semantic_context": semantic_context or "",
-                    "session_context": session_context or "",
-                    "xml_database_context": xml_database_context or "",
-                    "previous_sql": previous_sql,
-                    "error_message": error_message,
-                },
-            )
-
-        # Otherwise use standard prompt
-        return self._compile_prompt(
-            SQL_PROMPT_DEFINITION,
-            {
-                "query": query,
-                "schema_context": schema_context or "",
-                "dataset_context": dataset_context or "",
-                "semantic_context": semantic_context or "",
-                "session_context": session_context or "",
-                "xml_database_context": xml_database_context or "",
-            },
         )
 
     def analysis_messages(
@@ -317,15 +256,28 @@ class PromptManager:
     def sql_worker_messages(
         self,
         query: str,
-        schema: str,
         session_context: str = "",
         xml_database_context: str = "",
+        previous_sql: str | None = None,
+        error_message: str | None = None,
     ) -> list[dict[str, str]]:
+        if previous_sql and error_message:
+            from app.prompts.sql_worker import SQL_WORKER_SELF_CORRECTION_PROMPT_DEFINITION
+            return self._compile_prompt(
+                SQL_WORKER_SELF_CORRECTION_PROMPT_DEFINITION,
+                {
+                    "query": query,
+                    "session_context": session_context or "",
+                    "xml_database_context": xml_database_context or "",
+                    "previous_sql": previous_sql,
+                    "error_message": error_message,
+                },
+            )
+
         return self._compile_prompt(
             SQL_WORKER_GENERATION_PROMPT,
             {
                 "query": query,
-                "schema": schema,
                 "session_context": session_context or "",
                 "xml_database_context": xml_database_context or "",
             },

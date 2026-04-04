@@ -9,7 +9,6 @@ from app.prompts.fallback import FALLBACK_ASSISTANT_PROMPT
 from app.prompts.leader import LEADER_AGENT_PROMPT_DEFINITION
 from app.prompts.manager import PromptManager, prompt_manager
 from app.prompts.router import ROUTER_PROMPT_DEFINITION
-from app.prompts.sql import SQL_PROMPT_DEFINITION
 from app.prompts.sql_worker import SQL_WORKER_GENERATION_PROMPT
 from app.prompts.synthesis import SYNTHESIS_PROMPT_DEFINITION
 from app.prompts.visualization import VISUALIZATION_CODE_GENERATION_PROMPT
@@ -19,7 +18,6 @@ __all__ = [
     "PromptManager",
     "prompt_manager",
     "ROUTER_PROMPT_DEFINITION",
-    "SQL_PROMPT_DEFINITION",
     "SQL_WORKER_GENERATION_PROMPT",
     "ANALYSIS_PROMPT_DEFINITION",
     "CONTEXT_DETECTION_PROMPT_DEFINITION",

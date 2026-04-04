@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import re
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import psycopg
+
 from app.config import load_settings
 from app.logger import logger
+from app.tools.get_schema import list_tables
 from app.tools.sql_safety import needs_safety_limit
 
 
@@ -45,31 +47,6 @@ class SQLValidationResult:
     sanitized_sql: str
     reasons: list[str]
     detected_tables: list[str]
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "is_valid": self.is_valid,
-            "sanitized_sql": self.sanitized_sql,
-            "reasons": self.reasons,
-            "detected_tables": self.detected_tables,
-        }
-
-
-def _default_db_path() -> Path:
-    return Path(load_settings().sqlite_db_path)
-
-
-def _list_tables(db_path: Path) -> set[str]:
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT name
-            FROM sqlite_master
-            WHERE type='table'
-              AND name NOT LIKE 'sqlite_%'
-            """
-        ).fetchall()
-    return {row[0].lower() for row in rows}
 
 
 def _sanitize_sql(sql: str) -> str:
@@ -115,10 +92,38 @@ def _is_bounded_query(sql: str) -> bool:
 def validate_sql(
     sql: str, db_path: Path | None = None, *, max_limit: int | None = None
 ) -> SQLValidationResult:
-    path = db_path or _default_db_path()
+    """Validate SQL query for safety and correctness.
+
+    Args:
+        sql: SQL query string to validate
+        db_path: Optional database path (SQLite for Spider eval, None for PostgreSQL)
+        max_limit: Optional maximum LIMIT to add for unbounded queries
+
+    Returns:
+        SQLValidationResult with validation status, sanitized SQL, and reasons.
+    """
     reasons: list[str] = []
     sanitized_sql = _sanitize_sql(sql)
-    table_names = _list_tables(path)
+
+    # List tables from appropriate database
+    if db_path:
+        # Spider evaluation: use SQLite database
+        import sqlite3
+
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type='table'
+                  AND name NOT LIKE 'sqlite_%'
+                """
+            ).fetchall()
+            table_names = {row[0].lower() for row in rows}
+    else:
+        # Main application: use PostgreSQL
+        table_names = {tbl.lower() for tbl in list_tables()}
+
     detected_tables = [
         name.lower() for name in TABLE_TOKEN_PATTERN.findall(sanitized_sql)
     ]

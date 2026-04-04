@@ -28,7 +28,7 @@ services:
     environment:
       LLM_API_URL: ${LLM_API_URL}
       LLM_API_KEY: ${LLM_API_KEY:-}
-      SQLITE_DB_PATH: /app/data/warehouse/analytics.db
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
       ENABLE_LANGFUSE: ${ENABLE_LANGFUSE:-false}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
@@ -56,7 +56,7 @@ services:
       LLM_API_URL: ${LLM_API_URL}
       LLM_API_KEY: ${LLM_API_KEY:-}
       E2B_API_KEY: ${E2B_API_KEY:-}
-      SQLITE_DB_PATH: /app/data/warehouse/analytics.db
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
       TRACE_JSONL_PATH: /app/evals/reports/traces.jsonl
       # Connect to mcp service via Docker DNS
       MCP_HTTP_URL: http://mcp:8000/mcp
@@ -97,6 +97,24 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - da-agent-net
+
+  # ──────────────────────────────────────────────────────────────
+  # Postgres
+  # ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: da-agent-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
     networks:
       - da-agent-net

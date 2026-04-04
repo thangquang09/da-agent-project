@@ -16,8 +16,8 @@ Streamlit UI :8501   ──HTTP/SSE──►  FastAPI Backend :8001
                                           │
                                     ┌─────┴──────┐
                                     │            │
-                                SQLite DB    ConvMemory
-                                (warehouse)  (SQLite)
+                              PostgreSQL    ConvMemory
+                              (main data)   (SQLite)
 
 FastMCP Server :8000  (tool surface, independent)
 ```
@@ -34,20 +34,23 @@ FastMCP Server :8000  (tool surface, independent)
 # 1. Cài dependencies
 uv sync
 
-# 2. Seed database (lần đầu)
-uv run python data/seeds/create_seed_db.py
+# 2. Start PostgreSQL database
+docker compose up -d postgres
 
-# 3. Terminal 1 — Backend (FastAPI)
+# 3. Seed database (lần đầu)
+PYTHONPATH=. python data/seeds/create_seed_db.py
+
+# 4. Terminal 1 — Backend (FastAPI)
 uv run uvicorn backend.main:app --port 8001 --reload
 
-# 4. Terminal 2 — Frontend (Streamlit)
+# 5. Terminal 2 — Frontend (Streamlit)
 BACKEND_URL=http://localhost:8001 uv run streamlit run streamlit_app.py
 
-# 5. (Optional) Terminal 3 — MCP Server
+# 6. (Optional) Terminal 3 — MCP Server
 uv run python -m mcp_server.server
 
-# 6. (Optional) Terminal 4 — CLI trực tiếp
-uv run python -m app.main "DAU 7 ngày gần đây?"
+# 7. (Optional) Terminal 4 — CLI trực tiếp
+uv run python -m app.main "Top 5 sản phẩm bán chạy nhất?"
 ```
 
 **Truy cập:**
@@ -126,7 +129,9 @@ uv run pytest --cov=app --cov-report=term-missing   # Coverage
 uv run python evals/runner.py                       # Full eval suite
 
 # Database
-uv run python data/seeds/create_seed_db.py          # Re-seed database
+docker compose up -d postgres                        # Start PostgreSQL
+PYTHONPATH=. python data/seeds/create_seed_db.py     # Re-seed database
+docker exec da-agent-postgres psql -U postgres -c "\dt"  # List tables
 
 # API smoke tests (backend phải đang chạy)
 curl http://localhost:8001/health
@@ -147,11 +152,11 @@ curl http://localhost:8001/threads/test-001/history
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
+| `DATABASE_URL` | ✅ | `postgresql://postgres:postgres@localhost:5432/postgres` | PostgreSQL connection string |
 | `LLM_API_URL` | ✅ | — | LLM API endpoint |
 | `LLM_API_KEY` | ✅ | — | API key |
 | `E2B_API_KEY` | ❌ | — | E2B sandbox (visualization) |
 | `BACKEND_URL` | ❌ | `http://localhost:8001` | Backend URL (Streamlit) |
-| `SQLITE_DB_PATH` | ❌ | `data/warehouse/analytics.db` | Database path |
 | `TRACE_JSONL_PATH` | ❌ | `evals/reports/traces.jsonl` | Trace output |
 | `ENABLE_LANGFUSE` | ❌ | `false` | Langfuse tracing |
 | `ENABLE_MCP_TOOL_CLIENT` | ❌ | `false` | Use MCP tools |
