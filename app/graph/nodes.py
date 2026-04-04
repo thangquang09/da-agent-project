@@ -1334,6 +1334,49 @@ def leader_agent(state: AgentState) -> AgentState:
                 observation_type="retriever",
             )
             inferred_intent = "rag" if inferred_intent == "unknown" else "mixed"
+        elif tool_name == "create_visualization":
+            from app.graph.standalone_visualization import standalone_visualization_worker
+
+            raw_data = tool_args.get("raw_data", [])
+            # If raw_data is not provided, try to extract from query
+            if not raw_data:
+                # Simple extraction: find numbers in query
+                import re
+
+                numbers = re.findall(r"\b\d+\.?\d*\b", tool_query)
+                if numbers and any(kw in tool_query.lower() for kw in ["vẽ", "biểu đồ", "chart", "plot", "graph", "đồ thị"]):
+                    # Convert to list of dict format for standalone visualization
+                    try:
+                        # Format as [{"value": 10}, {"value": 20}, {"value": 30}]
+                        # or [{"label": "A", "value": 10}, ...] if labels are provided
+                        raw_data = [{"value": float(n)} for n in numbers]
+                    except ValueError:
+                        raw_data = []
+
+            if not raw_data:
+                # No data found, return error
+                tool_result = {
+                    "visualization": {
+                        "success": False,
+                        "error": "No data provided for visualization. Please provide data values.",
+                    },
+                    "status": "failed",
+                }
+            else:
+                # Create task state for standalone visualization
+                viz_task_state = {
+                    "query": tool_query,
+                    "raw_data": raw_data if isinstance(raw_data, list) else [raw_data],
+                }
+                tool_result = _run_traced_substep(
+                    "leader_tool_create_visualization",
+                    {"user_query": tool_query, "step_count": state.get("step_count", 0)},
+                    lambda viz_task_state=viz_task_state: standalone_visualization_worker(
+                        viz_task_state
+                    ),
+                    observation_type="tool",
+                )
+            inferred_intent = "sql" if inferred_intent == "unknown" else inferred_intent
         else:
             break
 
