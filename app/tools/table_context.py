@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 from dataclasses import dataclass
 
 DEFAULT_CONTEXT = "No business context provided."
@@ -38,10 +39,12 @@ def format_schema_columns(columns: list[dict]) -> str:
 
 def build_xml_entry(entry: TableEntry) -> str:
     """Render a single TableEntry as an XML block."""
-    ctx = entry.business_context.strip() or DEFAULT_CONTEXT
+    ctx = html.escape(entry.business_context.strip() or DEFAULT_CONTEXT)
+    table_name = html.escape(entry.table_name, quote=True)
+    schema = html.escape(entry.schema)
     return (
-        f'<table name="{entry.table_name}">\n'
-        f"  <schema>{entry.schema}</schema>\n"
+        f'<table name="{table_name}">\n'
+        f"  <schema>{schema}</schema>\n"
         f"  <business_context>{ctx}</business_context>\n"
         f"</table>"
     )

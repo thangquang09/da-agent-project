@@ -5,7 +5,7 @@ import re
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from app.config import load_settings
 from app.graph.state import AgentState, ContextType
@@ -15,11 +15,9 @@ from app.memory.context_store import get_context_memory_store
 from app.observability import get_current_tracer
 from app.prompts import (
     ANALYSIS_PROMPT_DEFINITION,
-    CONTEXT_DETECTION_PROMPT_DEFINITION,
     prompt_manager,
     ROUTER_PROMPT_DEFINITION,
     SQL_PROMPT_DEFINITION,
-    SYNTHESIS_PROMPT_DEFINITION,
 )
 from app.tools import (
     dataset_context,
@@ -1862,11 +1860,11 @@ def _dispatch_parallel_sql_tasks(tasks: list[dict[str, str]], runner) -> list[di
 def _run_traced_substep(
     node_name: str,
     state: dict[str, Any],
-    fn,
-    observation_type: str = "tool",  # noqa: ANN001
-    tracer_override=None,  # noqa: ANN001
+    fn: Callable[[], Any],
+    observation_type: str = "tool",
+    tracer_override: Any | None = None,
     update_for_trace: dict[str, Any] | None = None,
-):
+) -> Any:
     tracer = tracer_override or get_current_tracer()
     if tracer is None:
         return fn()
@@ -2220,7 +2218,8 @@ def leader_agent(state: AgentState) -> AgentState:
             parsed = _extract_first_json_object(content)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "V3 leader agent failed, falling back to SQL analyst: {error}",
+                "V3 leader agent failed, falling back to SQL analyst: {error_type}: {error}",
+                error_type=type(exc).__name__,
                 error=str(exc),
             )
             parsed = None
@@ -2289,7 +2288,7 @@ def leader_agent(state: AgentState) -> AgentState:
             tool_result = _run_traced_substep(
                 "leader_tool_ask_sql_analyst",
                 {"user_query": tool_query, "step_count": state.get("step_count", 0)},
-                lambda: ask_sql_analyst_tool(state, tool_query),
+                lambda tool_query=tool_query: ask_sql_analyst_tool(state, tool_query),
                 observation_type="tool",
             )
             sql_artifacts = tool_result
@@ -2304,7 +2303,9 @@ def leader_agent(state: AgentState) -> AgentState:
                     "execution_mode": "parallel",
                     "task_results": normalized_tasks,
                 },
-                lambda: ask_sql_analyst_parallel_tool(state, normalized_tasks, query),
+                lambda normalized_tasks=normalized_tasks, query=query: ask_sql_analyst_parallel_tool(
+                    state, normalized_tasks, query
+                ),
                 observation_type="tool",
             )
             sql_artifacts = tool_result
@@ -2315,7 +2316,7 @@ def leader_agent(state: AgentState) -> AgentState:
             tool_result = _run_traced_substep(
                 "leader_tool_retrieve_rag_answer",
                 {"user_query": tool_query, "step_count": state.get("step_count", 0)},
-                lambda: retrieve_rag_answer(
+                lambda tool_query=tool_query: retrieve_rag_answer(
                     query=tool_query,
                     top_k=int(tool_args.get("top_k", 4) or 4),
                 ),
@@ -2611,6 +2612,8 @@ def _compact_conversation(
 ) -> None:
     """Use LLM to summarize old turns, update summary, and prune old turns."""
     try:
+        from app.memory.conversation_store import ConversationSummary
+
         # Get all turns — the caller already verified total_turns > threshold
         turns = conv_store.get_recent_turns(thread_id, limit=50)
         if not turns:

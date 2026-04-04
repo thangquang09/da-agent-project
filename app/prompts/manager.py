@@ -248,11 +248,7 @@ class PromptManager:
         summary_stats: dict[str, Any] | None = None,
     ) -> list[dict[str, str]]:
         """Generate messages for natural language synthesis from SQL results."""
-        import json
-
         from app.utils.json_serializer import safe_json_dumps
-
-        from app.prompts.synthesis import SYNTHESIS_PROMPT_DEFINITION
 
         results_json = safe_json_dumps(results, indent=2)
         stats_json = safe_json_dumps(summary_stats, indent=2) if summary_stats else ""

@@ -8,8 +8,6 @@ Stores results in SQLite with:
 """
 
 from __future__ import annotations
-
-import json
 import sqlite3
 import threading
 import uuid

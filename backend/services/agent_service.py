@@ -44,7 +44,7 @@ async def run_query_async(
                 "context": f.get("context") or "",
             })
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     payload: dict[str, Any] = await loop.run_in_executor(
         None,
         lambda: run_query(

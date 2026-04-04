@@ -51,7 +51,7 @@ async def stream_query_events(
             decoded_file_data.append({"name": f["name"], "data": raw})
 
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         payload: dict[str, Any] = await loop.run_in_executor(
             None,
             lambda: run_query(

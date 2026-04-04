@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from sse_starlette.sse import EventSourceResponse
 
 from app.logger import logger
@@ -105,7 +105,7 @@ async def query_stream(
     thread_id: str | None = None,
     user_semantic_context: str | None = None,
     recursion_limit: int = 25,
-    version: str = "v3",
+    version: Annotated[str, Query(pattern="^v3$")] = "v3",
 ) -> EventSourceResponse:
     """
     SSE streaming endpoint.
