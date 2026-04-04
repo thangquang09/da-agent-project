@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,17 @@ from app.graph import (
 )
 from app.logger import logger
 from app.observability import RunTracer, reset_current_tracer, set_current_tracer
+
+
+def _make_serializable(obj: Any) -> Any:
+    """Convert bytes to base64-encoded str for JSON serialization."""
+    if isinstance(obj, bytes):
+        return base64.b64encode(obj).decode()
+    if isinstance(obj, dict):
+        return {k: _make_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_make_serializable(i) for i in obj]
+    return obj
 
 def _extract_numeric_evidence(payload: dict, key: str) -> int | None:
     for item in payload.get("evidence", []):
@@ -143,7 +155,9 @@ def main() -> None:
         "Query completed with confidence={confidence}",
         confidence=result.get("confidence"),
     )
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    # Convert bytes (e.g., PNG image_data) to base64 for JSON serialization
+    serializable_result = _make_serializable(result)
+    print(json.dumps(serializable_result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
