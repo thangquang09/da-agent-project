@@ -334,7 +334,7 @@ class RunTracer:
             ended_at=ended_at,
             latency_ms=latency_ms,
             query=self.query,
-            routed_intent=str(payload.get("intent", "unknown")),
+            intent=str(payload.get("intent", "unknown")),
             status="failed" if status == "failed" else "success",
             total_steps=int(payload.get("step_count", 0) or 0),
             used_tools=used_tools,
@@ -354,7 +354,7 @@ class RunTracer:
             run_id=self.run_id,
             status=run_record.status,
             latency=latency_ms,
-            intent=run_record.routed_intent,
+            intent=run_record.intent,
         )
 
     def _append_jsonl(self, record: dict[str, Any]) -> None:

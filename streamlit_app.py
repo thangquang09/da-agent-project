@@ -22,7 +22,7 @@ def run_agent(
     | None = None,  # kept for API compat, unused (filenames go via data)
     uploaded_file_data: list[dict[str, Any]] | None = None,
     thread_id: str | None = None,
-    version: str = "v2",
+    version: str = "v3",
 ) -> dict:
     """
     Execute a query via the FastAPI backend using SSE streaming.
@@ -76,7 +76,7 @@ def _init_state() -> None:
     st.session_state.setdefault("thread_id", str(uuid.uuid4()))
     st.session_state.setdefault("trace_cache", {})
     st.session_state.setdefault("health_cache", {"checked_at": 0.0, "ok": False})
-    st.session_state.setdefault("graph_version", "v2")
+    st.session_state.setdefault("graph_version", "v3")
 
 
 def _get_backend_health(ttl_seconds: float = 10.0) -> bool:
@@ -394,7 +394,7 @@ def _run_current_query_if_needed() -> None:
                     if uploaded_file_data
                     else None,
                     thread_id=st.session_state.get("thread_id"),
-                    version=st.session_state.get("graph_version", "v2"),
+                    version="v3",
                 )
                 pending_item["status"] = "done"
                 pending_item["content"] = result.get("answer", "No answer")
@@ -438,12 +438,7 @@ with st.sidebar:
         st.info("Run: `uvicorn backend.main:app --port 8001`")
 
     st.subheader("Session")
-    selected_version = st.selectbox(
-        "Graph Version",
-        options=["v1", "v2", "v3"],
-        index=["v1", "v2", "v3"].index(st.session_state.get("graph_version", "v2")),
-    )
-    st.session_state["graph_version"] = selected_version
+    st.write("Graph Version: `v3`")
     st.write(f"Thread ID: `{st.session_state.get('thread_id', 'N/A')[:8]}...`")
     st.write(f"Pending queue: `{len(st.session_state['pending_queries'])}`")
     if st.session_state["is_processing"]:

@@ -50,7 +50,7 @@ async def query_with_upload(
     query: str = Form(...),
     thread_id: str | None = Form(None),
     user_semantic_context: str | None = Form(None),
-    version: str = Form("v2"),
+    version: str = Form("v3"),
     recursion_limit: int = Form(25),
     contexts_json: str | None = Form(None),  # JSON: {"filename.csv": "context text"}
     files: list[UploadFile] = File(default=[]),
@@ -105,7 +105,7 @@ async def query_stream(
     thread_id: str | None = None,
     user_semantic_context: str | None = None,
     recursion_limit: int = 25,
-    version: str = "v2",
+    version: str = "v3",
 ) -> EventSourceResponse:
     """
     SSE streaming endpoint.

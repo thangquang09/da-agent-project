@@ -297,7 +297,6 @@ class PromptManager:
         self,
         query: str,
         session_context: str = "",
-        continuity_context: str = "",
         xml_database_context: str = "",
         scratchpad: str = "",
     ) -> list[dict[str, str]]:
@@ -306,7 +305,6 @@ class PromptManager:
             {
                 "query": query,
                 "session_context": session_context or "",
-                "continuity_context": continuity_context or "",
                 "xml_database_context": xml_database_context or "",
                 "scratchpad": scratchpad or "",
             },

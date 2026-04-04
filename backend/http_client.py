@@ -26,7 +26,7 @@ def query_stream(
     thread_id: str,
     user_semantic_context: str | None = None,
     uploaded_file_data: list[dict[str, Any]] | None = None,
-    version: str = "v2",
+    version: str = "v3",
 ) -> Generator[dict[str, Any], None, None]:
     """
     Execute a query via the backend, yielding SSE event dicts.

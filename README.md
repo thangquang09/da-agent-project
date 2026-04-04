@@ -194,7 +194,7 @@ da-agent-project/
 
 ### `GET /health`
 ```json
-{"status": "ok", "version": "1.0.0", "graph_version": "v2"}
+{"status": "ok", "version": "1.0.0", "graph_version": "v3"}
 ```
 
 ### `POST /query`
@@ -203,7 +203,7 @@ da-agent-project/
   "query": "DAU 7 ngày gần đây?",
   "thread_id": "optional-uuid",
   "user_semantic_context": "optional",
-  "version": "v2"
+  "version": "v3"
 }
 ```
 

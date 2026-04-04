@@ -113,9 +113,7 @@ class AgentState(TypedDict, total=False):
     thread_id: str  # Thread identifier for memory scoping
     session_context: str  # Injected context from conversation memory
     conversation_turn: int  # Current turn number in conversation
-    # Memory of Action - for implicit follow-up handling
     last_action: dict[str, Any]  # Last completed action with SQL, parameters, etc.
-    continuity_context: dict[str, Any]  # Detected continuity info for follow-ups
     # Result store reference - lightweight metadata instead of full rows
     result_ref: dict[
         str, Any

@@ -2,6 +2,13 @@
 Date: 2026-03-31
 
 ## Recent Updates (2026-04-04)
+### V3 Finalization
+- `feat/migration` checkpointed at commit `603ac85` before the V3-only cleanup.
+- New branch `feat/v3-finalization` makes `V3` the only public runtime path in API/UI/CLI.
+- Removed `detect_continuity_node` from the `V3` graph path and simplified memory to `recent turns + summary + last_action`.
+- Dropped semantic/Qdrant recall from the default V3 memory path.
+- Replaced the legacy test suite with V3-focused tests derived from `test_cases.md`.
+
 ### V3 Leader Trace Clarity
 - Added V3 substep trace nodes inside `leader_agent` for clearer debugging:
   - `leader_llm_step_*`

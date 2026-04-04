@@ -1,6 +1,6 @@
 # System Design - DA Agent Lab
 
-**Updated:** 2026-04-02
+**Updated:** 2026-04-04
 
 Mục tiêu của tài liệu này là mô tả chi tiết, kỹ thuật luồng end-to-end của DA Agent Lab — từ lúc user gửi query đến khi nhận được câu trả lời có truy vết.
 
@@ -8,13 +8,13 @@ Mục tiêu của tài liệu này là mô tả chi tiết, kỹ thuật luồng
 
 ## 1. Tổng quan kiến trúc
 
-DA Agent Lab là một **constrained agent** dùng LangGraph để điều phối, kết hợp:
+DA Agent Lab hiện là một **leader-first constrained agent** dùng LangGraph để điều phối, kết hợp:
 
-- **LLM** cho các quyết định fuzzy (routing, SQL generation, synthesis)
-- **Deterministic code** cho các thành phần có quy tắc rõ ràng (validation, execution, RAG retrieval)
+- **Leader LLM** cho orchestration và high-level tool calling
+- **Deterministic code + SQL worker subgraph** cho validation, execution, aggregation
 - **SQLite** làm local data warehouse
 - **Vector search đơn giản** (cosine similarity trên token counter) cho RAG docs
-- **Memory system** với Qdrant vector store cho conversation continuity
+- **Session memory tối giản** với recent turns, summary, và `last_action`
 - **Visualization infrastructure** với E2B sandbox cho data visualization
 - **Observability** multi-layer: JSONL traces + Langfuse adapter
 - **FastAPI backend** với streaming SSE cho real-time feedback
@@ -31,30 +31,22 @@ User (CLI / Streamlit / HTTP API)
         +-- run_query_async (thread pool)  
         |
         v
-  build_sql_v2_graph()   [LangGraph StateGraph - Plan-and-Execute]
+  build_sql_v3_graph()   [LangGraph StateGraph - Leader Agent]
         |
-        +-- detect_context_type  [phân loại context: user_provided | csv_auto | mixed | default]
+        +-- process_uploaded_files
         |
-        +-- detect_continuity    [check for implicit follow-ups in conversation memory]
+        +-- inject_session_context
         |
-        +-- route_intent         [LLM quyết định: sql | rag | mixed | unknown]
+        +-- leader_agent
         |         |
-        |         +---> sql/mixed  ----> task_planner (decompose query into subtasks)
-        |         |                           |
-        |         |                           v
-        |         |                    [parallel sql_workers for each subtask]
-        |         |                           |
-        |         |                           v
-        |         |                    aggregate_results
-        |         |                           |
-        |         +---> rag  ----> retrieve_context_node
-        |         |                        |
-        |         +---> unknown ---> synthesize_answer (LLM fallback)
+        |         +---> ask_sql_analyst
+        |         +---> ask_sql_analyst_parallel
+        |         +---> retrieve_rag_answer
         |         |
-        |         +---> visualize ---> standalone_visualization (E2B sandbox)
+        |         +---> [parallel sql task fan-out / aggregate]
         |
         v
-  synthesize_answer     [tong hop ket qua cuoi cung]
+  final_payload
         |
         v
   capture_action_node   [save to conversation memory]
@@ -65,6 +57,8 @@ User (CLI / Streamlit / HTTP API)
         v
   Trace JSONL + Langfuse
 ```
+
+> Ghi chú: các section sâu hơn của tài liệu này còn chứa mô tả lịch sử `V1/V2`. Source of truth runtime hiện tại là flow `V3` ở phần trên.
 
 ---
 

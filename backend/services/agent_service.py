@@ -16,7 +16,7 @@ async def run_query_async(
     user_semantic_context: str | None = None,
     uploaded_file_data: list[dict[str, Any]] | None = None,
     recursion_limit: int = 25,
-    version: str = "v2",
+    version: str = "v3",
 ) -> QueryResponse:
     """
     Async wrapper around the synchronous run_query().
@@ -28,7 +28,7 @@ async def run_query_async(
     Thread-safety notes:
     - RunTracer uses ContextVar → isolated per executor thread.
     - ConversationMemoryStore singleton uses check_same_thread=False SQLite.
-    - build_sql_v2_graph() creates a fresh graph per call → no cross-request state.
+    - build_sql_v3_graph() creates a fresh graph per call → no cross-request state.
     """
     # Decode base64 file data coming from JSON body uploads
     decoded_file_data: list[dict[str, Any]] | None = None

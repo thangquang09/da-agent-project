@@ -23,7 +23,6 @@ from app.graph.nodes import (
     capture_action_node,
     compact_and_save_memory,
     detect_context_type,
-    detect_continuity_node,
     execute_sql_node,
     generate_sql,
     get_schema,
@@ -426,12 +425,12 @@ def build_sql_v3_graph(checkpointer=None):
     V3 removes router-first control flow from the main path:
     - no detect_context_type
     - no route_intent
+    - no detect_continuity_node
     - no retrieve_context_node as a top-level branch
 
     Instead, a leader/supervisor agent decides when to call high-level tools like:
     - ask_sql_analyst
     - retrieve_rag_answer
-    - create_execution_plan
     """
     builder = StateGraph(
         AgentState,
@@ -448,10 +447,6 @@ def build_sql_v3_graph(checkpointer=None):
         _instrument_node("inject_session_context", inject_session_context, "memory"),
     )
     builder.add_node(
-        "detect_continuity_node",
-        _instrument_node("detect_continuity_node", detect_continuity_node, "memory"),
-    )
-    builder.add_node(
         "leader_agent",
         _instrument_node("leader_agent", leader_agent, "agent"),
     )
@@ -466,8 +461,7 @@ def build_sql_v3_graph(checkpointer=None):
 
     builder.add_edge(START, "process_uploaded_files")
     builder.add_edge("process_uploaded_files", "inject_session_context")
-    builder.add_edge("inject_session_context", "detect_continuity_node")
-    builder.add_edge("detect_continuity_node", "leader_agent")
+    builder.add_edge("inject_session_context", "leader_agent")
     builder.add_edge("leader_agent", "capture_action_node")
     builder.add_edge("capture_action_node", "compact_and_save_memory")
     builder.add_edge("compact_and_save_memory", END)

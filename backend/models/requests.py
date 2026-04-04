@@ -19,4 +19,4 @@ class QueryRequest(BaseModel):
     user_semantic_context: str | None = None
     uploaded_file_data: list[FileUpload] | None = None
     recursion_limit: int = Field(default=25, ge=1, le=50)
-    version: str = Field(default="v2", pattern="^(v1|v2|v3)$")
+    version: str = Field(default="v3", pattern="^v3$")

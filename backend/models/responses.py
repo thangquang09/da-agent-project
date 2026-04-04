@@ -71,7 +71,7 @@ class ConversationTurnResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = "1.0.0"
-    graph_version: str = "v2"
+    graph_version: str = "v3"
 
 
 class EvalRunResponse(BaseModel):

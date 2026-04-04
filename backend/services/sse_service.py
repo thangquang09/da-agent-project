@@ -18,7 +18,7 @@ async def stream_query_events(
     user_semantic_context: str | None = None,
     uploaded_file_data: list[dict[str, Any]] | None = None,
     recursion_limit: int = 25,
-    version: str = "v2",
+    version: str = "v3",
 ) -> AsyncGenerator[ServerSentEvent, None]:
     """
     Yields SSE events for a query execution.

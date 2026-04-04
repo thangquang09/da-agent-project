@@ -37,7 +37,6 @@ LEADER_AGENT_PROMPT_DEFINITION = PromptDefinition(
             "content": (
                 "User query:\n{{query}}\n\n"
                 "{{#if session_context}}Session context:\n{{session_context}}\n\n{{/if}}"
-                "{{#if continuity_context}}Continuity context:\n{{continuity_context}}\n\n{{/if}}"
                 "{{#if xml_database_context}}Database context (XML):\n{{xml_database_context}}\n\n{{/if}}"
                 "{{#if scratchpad}}Tool history:\n{{scratchpad}}\n\n{{/if}}"
                 "Return JSON only."

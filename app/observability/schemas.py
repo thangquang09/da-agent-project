@@ -51,7 +51,7 @@ class RunTraceRecord:
     ended_at: str
     latency_ms: float
     query: str
-    routed_intent: str
+    intent: str
     status: Literal["success", "failed"]
     total_steps: int
     used_tools: list[str]

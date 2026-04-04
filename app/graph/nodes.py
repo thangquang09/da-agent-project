@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import unicodedata
@@ -1753,15 +1752,6 @@ def process_uploaded_files(state: AgentState) -> AgentState:
 # =============================================================================
 
 
-def _format_continuity_context(continuity_context: dict[str, Any] | None) -> str:
-    if not continuity_context:
-        return ""
-    try:
-        return json.dumps(continuity_context, ensure_ascii=False, indent=2)[:1200]
-    except Exception:  # noqa: BLE001
-        return str(continuity_context)[:1200]
-
-
 def _summarize_tool_result(tool_name: str, result: dict[str, Any]) -> str:
     if tool_name in {"ask_sql_analyst", "ask_sql_analyst_parallel"}:
         return json.dumps(
@@ -1813,11 +1803,7 @@ def _ensure_v3_schema_context(state: AgentState) -> AgentState:
     return enriched_state
 
 
-def _should_decompose_sql_query(
-    query: str, continuity_context: dict[str, Any] | None = None
-) -> bool:
-    if continuity_context and continuity_context.get("is_continuation"):
-        return True
+def _should_decompose_sql_query(query: str) -> bool:
     normalized = query.strip().lower()
     if not normalized:
         return False
@@ -1920,7 +1906,6 @@ def ask_sql_analyst_tool(
         "session_context": enriched_state.get("session_context", ""),
         "xml_database_context": enriched_state.get("xml_database_context", ""),
         "table_contexts": enriched_state.get("table_contexts", {}),
-        "continuity_context": enriched_state.get("continuity_context", {}),
         "last_action": enriched_state.get("last_action", {}),
         "thread_id": enriched_state.get("thread_id", ""),
         "run_id": enriched_state.get("run_id", ""),
@@ -1928,9 +1913,7 @@ def ask_sql_analyst_tool(
         "tool_history": [],
     }
     plan_update: AgentState = {"tool_history": []}
-    should_decompose = allow_decomposition and _should_decompose_sql_query(
-        query, enriched_state.get("continuity_context", {})
-    )
+    should_decompose = allow_decomposition and _should_decompose_sql_query(query)
     if should_decompose:
         plan_update = _run_traced_substep(
             "sql_analyst_task_planner",
@@ -2186,7 +2169,6 @@ def leader_agent(state: AgentState) -> AgentState:
     state = _ensure_v3_schema_context(state)
     query = state.get("user_query", "")
     session_context = state.get("session_context", "")
-    continuity_context = _format_continuity_context(state.get("continuity_context"))
     xml_database_context = state.get("xml_database_context", "")
     settings = load_settings()
 
@@ -2202,7 +2184,6 @@ def leader_agent(state: AgentState) -> AgentState:
         messages = prompt_manager.leader_agent_messages(
             query=query,
             session_context=session_context,
-            continuity_context=continuity_context,
             xml_database_context=xml_database_context,
             scratchpad="\n\n".join(scratchpad_entries),
         )
@@ -2418,13 +2399,12 @@ def inject_session_context(state: AgentState) -> AgentState:
     Retrieves:
     - Recent conversation turns from SQLite
     - Conversation summary if exists
-    - Semantically similar past queries from Qdrant (if available)
-    - last_action from most recent assistant turn for continuity
+    - last_action from most recent assistant turn
 
     Updates state with:
     - session_context: Formatted context for prompt injection
     - conversation_turn: Current turn number
-    - last_action: Previous action metadata for continuity detection
+    - last_action: Previous action metadata for leader follow-up handling
     """
     thread_id = state.get("thread_id")
     if not thread_id:
@@ -2489,13 +2469,6 @@ def inject_session_context(state: AgentState) -> AgentState:
         if turns_text:
             context_parts.append("[Recent Turns]\n" + "\n".join(turns_text))
 
-    # Qdrant semantic search — find similar past queries across all threads
-    user_query = state.get("user_query", "")
-    if user_query:
-        similar_context = _search_similar_queries(user_query, thread_id)
-        if similar_context:
-            context_parts.append(similar_context)
-
     session_context = "\n\n".join(context_parts)
 
     logger.info(
@@ -2516,73 +2489,6 @@ def inject_session_context(state: AgentState) -> AgentState:
     return result
 
 
-def _search_similar_queries(
-    query: str,
-    current_thread_id: str,
-    limit: int = 3,
-) -> str | None:
-    """Search Qdrant for semantically similar past queries.
-
-    Returns formatted context string or None if Qdrant is unavailable
-    or no relevant results found.
-    """
-    try:
-        from app.memory.qdrant_client import (
-            COLLECTION_NAME,
-            embed_text,
-            get_qdrant_client,
-            is_qdrant_available,
-        )
-
-        if not is_qdrant_available():
-            return None
-
-        query_vector = embed_text(query)
-        client = get_qdrant_client()
-
-        results = client.search(
-            collection_name=COLLECTION_NAME,
-            query_vector=query_vector,
-            limit=limit + 2,  # Fetch a few extra to filter current thread
-            score_threshold=0.65,  # Only include reasonably similar results
-        )
-
-        if not results:
-            return None
-
-        similar_items = []
-        for hit in results:
-            payload = hit.payload or {}
-            # Skip results from the current thread (already in recent turns)
-            if payload.get("thread_id") == current_thread_id:
-                continue
-            past_query = payload.get("query", "")
-            past_summary = payload.get("result_summary", "")
-            if past_query:
-                entry = f"- Q: {past_query[:200]}"
-                if past_summary:
-                    entry += f"\n  A: {past_summary[:200]}"
-                similar_items.append(entry)
-            if len(similar_items) >= limit:
-                break
-
-        if not similar_items:
-            return None
-
-        logger.debug(
-            "Found {count} similar past queries from Qdrant",
-            count=len(similar_items),
-        )
-        return "[Similar Past Queries]\n" + "\n".join(similar_items)
-
-    except Exception as exc:
-        logger.warning(
-            "Qdrant semantic search failed (degrading gracefully): {error}",
-            error=str(exc),
-        )
-        return None
-
-
 def compact_and_save_memory(state: AgentState) -> AgentState:
     """
     Save conversation turn and compact if needed.
@@ -2590,7 +2496,6 @@ def compact_and_save_memory(state: AgentState) -> AgentState:
     This node runs at the END of the graph, after synthesize_answer.
 
     - Saves current turn to SQLite
-    - Embeds and saves to Qdrant for semantic search
     - Generates/updates summary if turn_count > threshold
     """
     thread_id = state.get("thread_id")
@@ -2654,9 +2559,6 @@ def compact_and_save_memory(state: AgentState) -> AgentState:
     )
     conv_store.save_turn(assistant_turn)
 
-    # Embed and save to Qdrant
-    _save_to_qdrant(thread_id, user_query, result_summary, entities, turn_number)
-
     # Compact if needed
     total_turns = turn_number + 1
     if total_turns > MAX_TURNS_BEFORE_SUMMARY * 2:
@@ -2701,68 +2603,6 @@ def _extract_entities_from_state(state: AgentState) -> list[str]:
                 break
 
     return unique_entities
-
-
-def _save_to_qdrant(
-    thread_id: str,
-    query: str,
-    result_summary: str | None,
-    entities: list[str],
-    turn_number: int,
-) -> None:
-    """Save turn to Qdrant for semantic search."""
-    try:
-        from app.memory.qdrant_client import (
-            COLLECTION_NAME,
-            get_qdrant_client,
-            embed_text,
-            is_qdrant_available,
-        )
-
-        if not is_qdrant_available():
-            logger.debug("Qdrant not available, skipping vector save")
-            return
-
-        from qdrant_client.models import PointStruct
-
-        client = get_qdrant_client()
-
-        # Embed query + summary
-        text_to_embed = f"{query}"
-        if result_summary:
-            text_to_embed += f"\n{result_summary}"
-
-        vector = embed_text(text_to_embed)
-
-        # Stable ID based on thread and turn (deterministic across processes)
-        point_id = int(
-            hashlib.sha256(f"{thread_id}_{turn_number}".encode()).hexdigest(), 16
-        ) % (2**63)
-
-        client.upsert(
-            collection_name=COLLECTION_NAME,
-            points=[
-                PointStruct(
-                    id=point_id,
-                    vector=vector,
-                    payload={
-                        "thread_id": thread_id,
-                        "turn_number": turn_number,
-                        "query": query,
-                        "result_summary": result_summary,
-                        "entities": entities,
-                    },
-                )
-            ],
-        )
-        logger.debug(
-            "Saved turn to Qdrant: thread={thread}, turn={turn}",
-            thread=thread_id,
-            turn=turn_number,
-        )
-
-    except Exception as exc:
-        logger.warning("Failed to save to Qdrant: {error}", error=str(exc))
 
 
 def _compact_conversation(
