@@ -56,6 +56,7 @@ class Settings:
     mcp_stdio_command: str
     mcp_stdio_args: tuple[str, ...]
     # Node-specific model configuration (for future flexibility)
+    model_leader: str
     model_router: str
     model_synthesis: str
     model_sql_generation: str
@@ -92,6 +93,7 @@ def load_settings() -> Settings:
     default_synthesis_model = os.getenv("DEFAULT_SYNTHESIS_MODEL", default_model)
 
     # Node-specific models (can be overridden via env vars for flexibility)
+    model_leader = os.getenv("MODEL_LEADER", default_model)
     model_router = os.getenv("MODEL_ROUTER", default_router_model)
     model_synthesis = os.getenv("MODEL_SYNTHESIS", default_synthesis_model)
     model_sql_generation = os.getenv("MODEL_SQL_GENERATION", default_model)
@@ -142,6 +144,7 @@ def load_settings() -> Settings:
         langfuse_org_id=os.getenv("LANGFUSE_ORG_ID", ""),
         langfuse_cloud_region=os.getenv("LANGFUSE_CLOUD_REGION", "EU"),
         # Node-specific model configuration
+        model_leader=model_leader,
         model_router=model_router,
         model_synthesis=model_synthesis,
         model_sql_generation=model_sql_generation,

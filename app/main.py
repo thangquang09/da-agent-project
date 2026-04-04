@@ -8,6 +8,7 @@ from typing import Any, Callable
 from app.graph import (
     build_sql_v1_graph,
     build_sql_v2_graph,
+    build_sql_v3_graph,
     new_run_config,
     to_langgraph_config,
 )
@@ -18,6 +19,7 @@ from app.observability import RunTracer, reset_current_tracer, set_current_trace
 GRAPH_REGISTRY: dict[str, Callable] = {
     "v1": build_sql_v1_graph,
     "v2": build_sql_v2_graph,
+    "v3": build_sql_v3_graph,
 }
 
 
@@ -54,6 +56,7 @@ def run_query(
     )
     tracer_token = set_current_tracer(tracer)
     graph_input: dict[str, Any] = {"user_query": user_query}
+    graph_input["run_id"] = run_cfg.run_id
     if db_path:
         graph_input["target_db_path"] = str(Path(db_path))
     if user_semantic_context:
@@ -131,7 +134,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--version",
-        choices=["v1", "v2"],
+        choices=["v1", "v2", "v3"],
         default="v2",
         help="Graph version to use (v1=linear, v2=plan-and-execute)",
     )

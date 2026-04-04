@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -32,7 +33,7 @@ async def query(request: QueryRequest) -> QueryResponse:
 
     file_data: list[dict[str, Any]] | None = None
     if request.uploaded_file_data:
-        file_data = [{"name": f.name, "data": f.data} for f in request.uploaded_file_data]
+        file_data = [{"name": f.name, "data": f.data, "context": f.context} for f in request.uploaded_file_data]
 
     return await run_query_async(
         query=request.query,
@@ -51,6 +52,7 @@ async def query_with_upload(
     user_semantic_context: str | None = Form(None),
     version: str = Form("v2"),
     recursion_limit: int = Form(25),
+    contexts_json: str | None = Form(None),  # JSON: {"filename.csv": "context text"}
     files: list[UploadFile] = File(default=[]),
 ) -> QueryResponse:
     """
@@ -58,6 +60,7 @@ async def query_with_upload(
 
     Used by Streamlit when user uploads CSV files. Files are raw bytes
     read from the upload and passed directly to run_query().
+    contexts_json is a JSON-encoded dict mapping filename → business context.
     """
     effective_thread_id = thread_id or str(uuid.uuid4())
     logger.info(
@@ -66,12 +69,25 @@ async def query_with_upload(
         n=len(files),
     )
 
+    # Parse per-file contexts
+    contexts_map: dict[str, str] = {}
+    if contexts_json:
+        try:
+            contexts_map = json.loads(contexts_json)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("backend.query /upload: invalid contexts_json, ignoring")
+
     file_data: list[dict[str, Any]] | None = None
     if files:
         file_data = []
         for f in files:
             content = await f.read()
-            file_data.append({"name": f.filename or "upload.csv", "data": content})
+            fname = f.filename or "upload.csv"
+            file_data.append({
+                "name": fname,
+                "data": content,
+                "context": contexts_map.get(fname, ""),
+            })
 
     return await run_query_async(
         query=query,
@@ -89,6 +105,7 @@ async def query_stream(
     thread_id: str | None = None,
     user_semantic_context: str | None = None,
     recursion_limit: int = 25,
+    version: str = "v2",
 ) -> EventSourceResponse:
     """
     SSE streaming endpoint.
@@ -114,6 +131,7 @@ async def query_stream(
             thread_id=effective_thread_id,
             user_semantic_context=user_semantic_context,
             recursion_limit=recursion_limit,
+            version=version,
         ),
         media_type="text/event-stream",
     )

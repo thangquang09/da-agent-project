@@ -15,6 +15,7 @@ from app.prompts.continuity import CONTINUITY_DETECTION_PROMPT_DEFINITION
 from app.prompts.decomposition import TASK_DECOMPOSITION_PROMPT
 from app.prompts.evaluation import GROUNDEDNESS_EVALUATION_PROMPT
 from app.prompts.fallback import FALLBACK_ASSISTANT_PROMPT
+from app.prompts.leader import LEADER_AGENT_PROMPT_DEFINITION
 from app.prompts.router import ROUTER_PROMPT_DEFINITION
 from app.prompts.sql import SQL_PROMPT_DEFINITION
 from app.prompts.sql_worker import SQL_WORKER_GENERATION_PROMPT
@@ -289,6 +290,25 @@ class PromptManager:
                 "intent": intent,
                 "errors": errors_json,
                 "session_context": session_context or "",
+            },
+        )
+
+    def leader_agent_messages(
+        self,
+        query: str,
+        session_context: str = "",
+        continuity_context: str = "",
+        xml_database_context: str = "",
+        scratchpad: str = "",
+    ) -> list[dict[str, str]]:
+        return self._compile_prompt(
+            LEADER_AGENT_PROMPT_DEFINITION,
+            {
+                "query": query,
+                "session_context": session_context or "",
+                "continuity_context": continuity_context or "",
+                "xml_database_context": xml_database_context or "",
+                "scratchpad": scratchpad or "",
             },
         )
 

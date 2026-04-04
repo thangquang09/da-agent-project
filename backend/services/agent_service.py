@@ -38,7 +38,11 @@ async def run_query_async(
             raw = f.get("data", b"")
             if isinstance(raw, str):
                 raw = base64.b64decode(raw)
-            decoded_file_data.append({"name": f["name"], "data": raw})
+            decoded_file_data.append({
+                "name": f["name"],
+                "data": raw,
+                "context": f.get("context") or "",
+            })
 
     loop = asyncio.get_event_loop()
     payload: dict[str, Any] = await loop.run_in_executor(

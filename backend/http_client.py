@@ -26,6 +26,7 @@ def query_stream(
     thread_id: str,
     user_semantic_context: str | None = None,
     uploaded_file_data: list[dict[str, Any]] | None = None,
+    version: str = "v2",
 ) -> Generator[dict[str, Any], None, None]:
     """
     Execute a query via the backend, yielding SSE event dicts.
@@ -46,7 +47,7 @@ def query_stream(
         yield {"event": "started", "data": {"query": query}}
         try:
             result = _query_with_files(
-                query, thread_id, user_semantic_context, uploaded_file_data
+                query, thread_id, user_semantic_context, uploaded_file_data, version
             )
             yield {"event": "result", "data": result}
         except Exception as exc:  # noqa: BLE001
@@ -60,7 +61,7 @@ def query_stream(
         return
 
     # Normal SSE path
-    params: dict[str, Any] = {"q": query, "thread_id": thread_id}
+    params: dict[str, Any] = {"q": query, "thread_id": thread_id, "version": version}
     if user_semantic_context:
         params["user_semantic_context"] = user_semantic_context
 
@@ -107,11 +108,13 @@ def _query_with_files(
     thread_id: str,
     user_semantic_context: str | None,
     uploaded_file_data: list[dict[str, Any]],
+    version: str,
 ) -> dict[str, Any]:
     """POST /query/upload with multipart form data."""
     form_data: dict[str, Any] = {
         "query": query,
         "thread_id": thread_id,
+        "version": version,
     }
     if user_semantic_context:
         form_data["user_semantic_context"] = user_semantic_context

@@ -42,6 +42,8 @@ class TaskState(TypedDict, total=False):
     xml_database_context: str  # XML block injected into SQL agent system prompt
     tool_history: list[dict[str, Any]]  # Propagate tool usage from subgraph nodes
     result_ref: dict[str, Any]  # Result store reference from task execution
+    run_id: str
+    thread_id: str
 
 
 class AnswerPayload(TypedDict, total=False):

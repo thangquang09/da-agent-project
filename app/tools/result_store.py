@@ -23,6 +23,7 @@ from app.utils.json_serializer import safe_json_dumps, safe_json_loads
 FULL_DATA_THRESHOLD = 100
 DEFAULT_TTL_HOURS = 24
 RESULTS_DIR = Path(__file__).parent.parent.parent / "data" / "results"
+SQLITE_TIMEOUT_SECONDS = 5.0
 
 
 class ResultStore:
@@ -62,8 +63,9 @@ class ResultStore:
         if row_count > FULL_DATA_THRESHOLD:
             full_data_path = self._save_full_data(result_id, rows)
 
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=SQLITE_TIMEOUT_SECONDS)
         try:
+            conn.execute("PRAGMA busy_timeout = 5000")
             conn.execute(
                 """
                 INSERT INTO result_store
@@ -111,9 +113,10 @@ class ResultStore:
 
         Deletes expired rows on read to prevent stale data accumulation.
         """
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=SQLITE_TIMEOUT_SECONDS)
         conn.row_factory = sqlite3.Row
         try:
+            conn.execute("PRAGMA busy_timeout = 5000")
             row = conn.execute(
                 "SELECT * FROM result_store WHERE result_id = ?", (result_id,)
             ).fetchone()
@@ -157,9 +160,10 @@ class ResultStore:
 
     def get_last_result(self, thread_id: str) -> dict[str, Any] | None:
         """Get the most recent non-expired result for a thread."""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=SQLITE_TIMEOUT_SECONDS)
         conn.row_factory = sqlite3.Row
         try:
+            conn.execute("PRAGMA busy_timeout = 5000")
             row = conn.execute(
                 """
                 SELECT * FROM result_store
@@ -191,8 +195,9 @@ class ResultStore:
     def cleanup_expired(self) -> int:
         """Remove expired entries and their full data files. Returns count deleted."""
         cutoff = datetime.now(timezone.utc).isoformat()
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=SQLITE_TIMEOUT_SECONDS)
         try:
+            conn.execute("PRAGMA busy_timeout = 5000")
             rows = conn.execute(
                 """
                 SELECT result_id, full_data_path FROM result_store

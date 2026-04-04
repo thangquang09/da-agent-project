@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any
 
@@ -21,6 +22,7 @@ def run_agent(
     | None = None,  # kept for API compat, unused (filenames go via data)
     uploaded_file_data: list[dict[str, Any]] | None = None,
     thread_id: str | None = None,
+    version: str = "v2",
 ) -> dict:
     """
     Execute a query via the FastAPI backend using SSE streaming.
@@ -41,6 +43,7 @@ def run_agent(
         thread_id=effective_thread_id,
         user_semantic_context=user_semantic_context,
         uploaded_file_data=uploaded_file_data,
+        version=version,
     ):
         event_type = event.get("event", "")
         if event_type == "result":
@@ -71,6 +74,32 @@ def _init_state() -> None:
     st.session_state.setdefault("uploader_key", 0)  # increment to reset file widget
     # Session memory: thread_id persists for conversation memory
     st.session_state.setdefault("thread_id", str(uuid.uuid4()))
+    st.session_state.setdefault("trace_cache", {})
+    st.session_state.setdefault("health_cache", {"checked_at": 0.0, "ok": False})
+    st.session_state.setdefault("graph_version", "v2")
+
+
+def _get_backend_health(ttl_seconds: float = 10.0) -> bool:
+    cache = st.session_state.get("health_cache", {})
+    now = time.time()
+    checked_at = float(cache.get("checked_at", 0.0) or 0.0)
+    if now - checked_at >= ttl_seconds:
+        ok = health_check()
+        st.session_state["health_cache"] = {"checked_at": now, "ok": ok}
+        return ok
+    return bool(cache.get("ok", False))
+
+
+def _get_cached_trace(run_id: str) -> dict[str, Any] | None:
+    return st.session_state.get("trace_cache", {}).get(run_id)
+
+
+def _refresh_trace(run_id: str) -> dict[str, Any] | None:
+    trace_data = get_trace(run_id) if run_id else None
+    trace_cache = st.session_state.setdefault("trace_cache", {})
+    if run_id:
+        trace_cache[run_id] = trace_data
+    return trace_data
 
 
 def _render_result(result: dict) -> None:
@@ -119,12 +148,27 @@ def _render_result(result: dict) -> None:
         with tabs[0]:
             st.code(result.get("generated_sql", ""), language="sql")
 
-        with tabs[1]:
-            # Fetch and display full trace
-            run_id = result.get("run_id", "")
-            trace_data = get_trace(run_id) if run_id else None
+        run_id = result.get("run_id", "")
+        trace_data = _get_cached_trace(run_id) if run_id else None
+        trace_loaded = trace_data is not None
+        trace_col1, trace_col2 = st.columns([1, 1])
+        with trace_col1:
+            if run_id and st.button(
+                "Load Trace" if not trace_loaded else "Refresh Trace",
+                key=f"trace_load_{run_id}",
+                use_container_width=True,
+            ):
+                trace_data = _refresh_trace(run_id)
+                trace_loaded = trace_data is not None
+        with trace_col2:
+            if run_id:
+                st.caption(
+                    "Trace cached"
+                    if trace_loaded
+                    else "Trace not loaded yet"
+                )
 
-            # Check if trace data exists (either found=True or has execution_flow/nodes)
+        with tabs[1]:
             has_trace = trace_data and (
                 trace_data.get("found")
                 or trace_data.get("execution_flow")
@@ -241,16 +285,16 @@ def _render_result(result: dict) -> None:
                         st.caption(f"Attempt #{node.get('attempt', 1)}")
                 else:
                     st.info("No execution flow data available")
+            elif run_id:
+                st.info("Click `Load Trace` to fetch execution details.")
             else:
                 st.info("Trace data not found. Run ID: " + str(run_id))
 
         with tabs[2]:
-            # Raw Trace JSON
-            run_id = result.get("run_id", "")
-            trace_data = get_trace(run_id) if run_id else None
-
             if trace_data:
                 st.json(trace_data)
+            elif run_id:
+                st.info("Click `Load Trace` to fetch raw trace JSON.")
             else:
                 st.info("Trace data not found. Run ID: " + str(run_id))
 
@@ -350,6 +394,7 @@ def _run_current_query_if_needed() -> None:
                     if uploaded_file_data
                     else None,
                     thread_id=st.session_state.get("thread_id"),
+                    version=st.session_state.get("graph_version", "v2"),
                 )
                 pending_item["status"] = "done"
                 pending_item["content"] = result.get("answer", "No answer")
@@ -386,13 +431,19 @@ with st.sidebar:
     import os
 
     backend_url = os.getenv("BACKEND_URL", "http://localhost:8001")
-    if health_check():
+    if _get_backend_health():
         st.success(f"✅ Backend: `{backend_url}`", icon=None)
     else:
         st.error(f"❌ Backend offline: `{backend_url}`")
         st.info("Run: `uvicorn backend.main:app --port 8001`")
 
     st.subheader("Session")
+    selected_version = st.selectbox(
+        "Graph Version",
+        options=["v1", "v2", "v3"],
+        index=["v1", "v2", "v3"].index(st.session_state.get("graph_version", "v2")),
+    )
+    st.session_state["graph_version"] = selected_version
     st.write(f"Thread ID: `{st.session_state.get('thread_id', 'N/A')[:8]}...`")
     st.write(f"Pending queue: `{len(st.session_state['pending_queries'])}`")
     if st.session_state["is_processing"]:

@@ -1,6 +1,17 @@
 # Implementation TODO - DA Agent (Week/Day Build Plan)
 Date: 2026-03-31
 
+## Recent Updates (2026-04-04)
+### V3 Leader Trace Clarity
+- Added V3 substep trace nodes inside `leader_agent` for clearer debugging:
+  - `leader_llm_step_*`
+  - `leader_tool_*`
+  - `leader_parallel_dispatch`
+  - `leader_parallel_aggregate`
+  - `leader_sql_task_*`
+- Hardened `RunTracer` with a lock so parallel task traces can be appended safely.
+- Expanded trace summaries with `user_query`, `task_id`, `execution_mode`, `task_count`, `sql_row_count`, and short answer previews.
+
 ## Recent Updates (2026-03-31)
 ### Context Filtering & Dataset Context System
 - **Phase 1** (COMMITTED): State & Flow updates for context filtering

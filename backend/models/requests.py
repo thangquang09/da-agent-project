@@ -8,6 +8,7 @@ class FileUpload(BaseModel):
 
     name: str
     data: str  # base64-encoded bytes
+    context: str | None = None  # optional user-provided business context for this table
 
 
 class QueryRequest(BaseModel):
@@ -18,4 +19,4 @@ class QueryRequest(BaseModel):
     user_semantic_context: str | None = None
     uploaded_file_data: list[FileUpload] | None = None
     recursion_limit: int = Field(default=25, ge=1, le=50)
-    version: str = Field(default="v2", pattern="^(v1|v2)$")
+    version: str = Field(default="v2", pattern="^(v1|v2|v3)$")

@@ -204,6 +204,8 @@ def route_after_planning(
                 "status": "pending",
                 "requires_visualization": requires_viz,
                 "session_context": str(task.get("session_context", "")),
+                "run_id": str(state.get("run_id", "")),
+                "thread_id": str(state.get("thread_id", "")),
             }
 
             sends.append(Send("sql_worker", send_state))
@@ -222,30 +224,3 @@ def route_after_planning(
 
     # No tasks - should not reach here, but fallback
     return "synthesize_answer"
-
-
-def route_after_worker_execution(
-    state: AgentState,
-) -> Literal["aggregate_results", "synthesize_answer"]:
-    """
-    Route after parallel worker execution.
-
-    For direct execution mode or single-task results: skip aggregation, go straight to synthesis.
-    For multi-task parallel results: go to aggregation for unified analysis.
-    """
-    task_results = state.get("task_results", [])
-    execution_mode = state.get("execution_mode", "planned")
-
-    if not task_results:
-        return "synthesize_answer"
-
-    # Direct queries or single task -> skip unnecessary LLM aggregation
-    if execution_mode == "direct" or len(task_results) == 1:
-        logger.info(
-            "Skipping aggregate_results: execution_mode={mode}, task_count={count}",
-            mode=execution_mode,
-            count=len(task_results),
-        )
-        return "synthesize_answer"
-
-    return "aggregate_results"

@@ -16,7 +16,6 @@ from app.graph.edges import (
     route_after_sql_execution,
     route_after_sql_validation,
     route_to_execution_mode,
-    route_after_worker_execution,
 )
 from app.graph.nodes import (
     aggregate_results,
@@ -29,6 +28,7 @@ from app.graph.nodes import (
     generate_sql,
     get_schema,
     inject_session_context,
+    leader_agent,
     process_uploaded_files,
     retrieve_context_node,
     route_intent,
@@ -216,6 +216,8 @@ def _sql_worker_wrapper(state: dict) -> dict:
             "xml_database_context": state.get("xml_database_context", ""),
             "status": "pending",
             "requires_visualization": False,
+            "run_id": state.get("run_id", ""),
+            "thread_id": state.get("thread_id", ""),
         }
         # Handle continuity
         continuity_ctx = state.get("continuity_context", {})
@@ -393,14 +395,12 @@ def build_sql_v2_graph(checkpointer=None):
     )
 
     # Worker results fan-in
-    builder.add_conditional_edges(
-        "sql_worker",
-        route_after_worker_execution,
-        {
-            "aggregate_results": "aggregate_results",
-            "synthesize_answer": "synthesize_answer",
-        },
-    )
+    # IMPORTANT: Workers must go to aggregate_results via UNCONDITIONAL edge, not conditional.
+    # LangGraph merges all worker state updates before invoking the next node.
+    # - Annotated fields (task_results, tool_history, errors): merged via operator.add
+    # - Non-annotated fields (task_plan, execution_mode): preserved from before fan-out
+    # Using conditional edges here causes each worker to route independently with incomplete state.
+    builder.add_edge("sql_worker", "aggregate_results")
 
     # Standalone visualization goes directly to synthesis
     builder.add_edge("standalone_visualization", "aggregate_results")
@@ -413,6 +413,62 @@ def build_sql_v2_graph(checkpointer=None):
 
     # Final synthesis, action capture, and memory save
     builder.add_edge("synthesize_answer", "capture_action_node")
+    builder.add_edge("capture_action_node", "compact_and_save_memory")
+    builder.add_edge("compact_and_save_memory", END)
+
+    return builder.compile(checkpointer=checkpointer or InMemorySaver())
+
+
+def build_sql_v3_graph(checkpointer=None):
+    """
+    Version 3 with hierarchical orchestration.
+
+    V3 removes router-first control flow from the main path:
+    - no detect_context_type
+    - no route_intent
+    - no retrieve_context_node as a top-level branch
+
+    Instead, a leader/supervisor agent decides when to call high-level tools like:
+    - ask_sql_analyst
+    - retrieve_rag_answer
+    - create_execution_plan
+    """
+    builder = StateGraph(
+        AgentState,
+        input_schema=GraphInputState,
+        output_schema=GraphOutputState,
+    )
+
+    builder.add_node(
+        "process_uploaded_files",
+        _instrument_node("process_uploaded_files", process_uploaded_files, "tool"),
+    )
+    builder.add_node(
+        "inject_session_context",
+        _instrument_node("inject_session_context", inject_session_context, "memory"),
+    )
+    builder.add_node(
+        "detect_continuity_node",
+        _instrument_node("detect_continuity_node", detect_continuity_node, "memory"),
+    )
+    builder.add_node(
+        "leader_agent",
+        _instrument_node("leader_agent", leader_agent, "agent"),
+    )
+    builder.add_node(
+        "capture_action_node",
+        _instrument_node("capture_action_node", capture_action_node, "memory"),
+    )
+    builder.add_node(
+        "compact_and_save_memory",
+        _instrument_node("compact_and_save_memory", compact_and_save_memory, "memory"),
+    )
+
+    builder.add_edge(START, "process_uploaded_files")
+    builder.add_edge("process_uploaded_files", "inject_session_context")
+    builder.add_edge("inject_session_context", "detect_continuity_node")
+    builder.add_edge("detect_continuity_node", "leader_agent")
+    builder.add_edge("leader_agent", "capture_action_node")
     builder.add_edge("capture_action_node", "compact_and_save_memory")
     builder.add_edge("compact_and_save_memory", END)
 

@@ -1,6 +1,6 @@
 # System Design - DA Agent Lab
 
-**Updated:** 2026-03-31
+**Updated:** 2026-04-02
 
 Mục tiêu của tài liệu này là mô tả chi tiết, kỹ thuật luồng end-to-end của DA Agent Lab — từ lúc user gửi query đến khi nhận được câu trả lời có truy vết.
 
@@ -14,31 +14,53 @@ DA Agent Lab là một **constrained agent** dùng LangGraph để điều phố
 - **Deterministic code** cho các thành phần có quy tắc rõ ràng (validation, execution, RAG retrieval)
 - **SQLite** làm local data warehouse
 - **Vector search đơn giản** (cosine similarity trên token counter) cho RAG docs
+- **Memory system** với Qdrant vector store cho conversation continuity
+- **Visualization infrastructure** với E2B sandbox cho data visualization
 - **Observability** multi-layer: JSONL traces + Langfuse adapter
+- **FastAPI backend** với streaming SSE cho real-time feedback
 
 ### High-level flow
 
 ```
-User (CLI / Streamlit)
+User (CLI / Streamlit / HTTP API)
         |
         v
-  build_sql_v1_graph()   [LangGraph StateGraph]
+  FastAPI Backend (backend/main.py)
         |
-        +-- detect_context_type  [phan loai context: user_provided | csv_auto | mixed | default]
+        +-- /query endpoint handles requests
+        +-- run_query_async (thread pool)  
         |
-        +-- route_intent         [LLM quyet dinh: sql | rag | mixed | unknown]
+        v
+  build_sql_v2_graph()   [LangGraph StateGraph - Plan-and-Execute]
+        |
+        +-- detect_context_type  [phân loại context: user_provided | csv_auto | mixed | default]
+        |
+        +-- detect_continuity    [check for implicit follow-ups in conversation memory]
+        |
+        +-- route_intent         [LLM quyết định: sql | rag | mixed | unknown]
         |         |
-        |         +---> sql  ----> get_schema --> generate_sql --> validate_sql_node
-        |         |                                            |                |
-        |         |                                            v                v
-        |         |                                     execute_sql_node  [retry on error]
-        |         |                                            |
+        |         +---> sql/mixed  ----> task_planner (decompose query into subtasks)
+        |         |                           |
+        |         |                           v
+        |         |                    [parallel sql_workers for each subtask]
+        |         |                           |
+        |         |                           v
+        |         |                    aggregate_results
+        |         |                           |
         |         +---> rag  ----> retrieve_context_node
         |         |                        |
         |         +---> unknown ---> synthesize_answer (LLM fallback)
+        |         |
+        |         +---> visualize ---> standalone_visualization (E2B sandbox)
         |
         v
   synthesize_answer     [tong hop ket qua cuoi cung]
+        |
+        v
+  capture_action_node   [save to conversation memory]
+        |
+        v
+  compact_and_save_memory [compress and persist memory]
         |
         v
   Trace JSONL + Langfuse
@@ -56,33 +78,51 @@ Trạng thái chính được chia sẻ giữa tất cả các node qua LangGrap
 class AgentState(TypedDict, total=False):
     # --- Input ---
     user_query: str                      # Câu hỏi của user
-    target_db_path: str                  # Duong dan SQLite DB (optional)
-    user_semantic_context: str           # Context duoc user cung cap truc tiep
+    target_db_path: str                  # đường dẫn SQLite DB (optional)
+    user_semantic_context: str           # Context được user cung cap trực tiếp
     uploaded_files: list[str]           # Files upload (CSV, etc.)
+    uploaded_file_data: list[dict]      # File data (name, base64 encoded bytes)
+    thread_id: str                       # Session/thread identifier for memory continuity
     
     # --- Routing ---
     intent: Intent                        # sql | rag | mixed | unknown
-    intent_reason: str                    # Ly do LLM de cap intent
+    intent_reason: str                    # Lý do LLM để cấp intent
     
     # --- Messages (accumulate) ---
     messages: Annotated[list[dict], operator.add]
     
     # --- Schema & Context ---
-    schema_context: str                   # JSON mo ta tables/columns (tu get_schema)
+    schema_context: str                   # JSON mô tả tables/columns (tu get_schema)
     dataset_context: str                  # JSON stats: row counts, min/max dates, samples
     user_semantic_context: str
-    retrieved_dataset_context: list[dict] # RAG chunks tim duoc cho context_type
+    retrieved_dataset_context: list[dict] # RAG chunks tim được cho context_type
+    session_context: str                  # Context from conversation memory (continuity detection)
+    
+    # --- Memory ---
+    conversation_memory: list[dict]       # Previous conversation turns
+    memory_compacted: bool               # Whether memory has been compacted
+    continuity_detected: bool            # Whether this is an implicit follow-up
+    continuity_context: str              # Context from previous turns for continuity
+    
+    # --- Planning (v2 Graph) ---
+    planned_tasks: list[dict]             # Subtasks from task_planner
+    task_results: Annotated[list[dict], operator.add]  # Results from parallel workers
+    current_task_index: int               # Index of current task being processed
     
     # --- SQL Path ---
     generated_sql: str                    # SQL thuần LLM generate
-    validated_sql: str                    # SQL da duoc validate (sanitized, limit applied)
+    validated_sql: str                    # SQL da được validate (sanitized, limit applied)
     sql_result: dict                     # {rows, row_count, columns, latency_ms}
     
     # --- Analysis ---
-    analysis_result: dict                 # {summary, trend, insights} - LLM phan tich
+    analysis_result: dict                 # {summary, trend, insights} - LLM phan tích
     
     # --- RAG Path ---
     retrieved_context: list[dict]         # RAG chunks tu business docs
+    
+    # --- Visualization ---
+    visualization_request: dict           # Request for chart/table visualization
+    visualization_result: dict            # Result from E2B sandbox visualization
     
     # --- Synthesis ---
     final_answer: str
@@ -128,22 +168,32 @@ class GraphOutputState(TypedDict, total=False):
 
 | Node | Type | Responsibility |
 |------|------|----------------|
-| `detect_context_type` | classifier | Phan loai input: `user_provided`, `csv_auto`, `mixed`, `default` |
+| `detect_context_type` | classifier | phân loại input: `user_provided`, `csv_auto`, `mixed`, `default` |
+| `process_uploaded_files` | tool | Validate, profile, and auto-register uploaded CSV files |
+| `detect_continuity_node` | memory | Detect implicit follow-ups in conversation memory |
+| `inject_session_context` | memory | Inject context from conversation memory |
 | `route_intent` | agent (LLM) | LLM classify query thanh `sql`, `rag`, `mixed`, `unknown` |
 | `get_schema` | retriever | Lay schema + dataset stats tu SQLite |
 | `generate_sql` | generation (LLM) | LLM generate SQL tu query + schema |
 | `validate_sql_node` | guardrail | Validate SQL: read-only, known tables, limit clause |
 | `execute_sql_node` | tool | Execute validated SQL, return rows |
-| `analyze_result` | chain (LLM) | LLM phan tich ket qua, tao summary/trend/insights |
+| `analyze_result` | chain (LLM) | LLM phan tích ket qua, tao summary/trend/insights |
 | `retrieve_context_node` | retriever | RAG retrieval: metric_definition hoac business_context |
+| `task_planner` | planner (LLM) | Decompose query into parallelizable subtasks |
+| `sql_worker` | subgraph | Execute individual SQL tasks in parallel |
+| `standalone_visualization` | visualization | Generate charts/visualizations via E2B sandbox |
+| `aggregate_results` | aggregator | Combine results from parallel workers |
 | `synthesize_answer` | generation | Tong hop tra loi cuoi cung tu tat ca signal |
+| `capture_action_node` | memory | Capture actions and save to conversation memory |
+| `compact_and_save_memory` | memory | Compact and persist conversation memory |
 
 ### 3.2 Edges
 
 ```python
 # edges.py
 
-route_after_context_detection  --> always route to route_intent
+# V1 routing
+route_after_context_detection  --> process_uploaded_files OR inject_session_context
 route_after_intent             --> sql/mixed -> get_schema
                                 --> rag       -> retrieve_context_node  
                                 --> unknown   -> synthesize_answer
@@ -154,11 +204,19 @@ route_after_sql_validation     --> no errors -> execute_sql_node
 
 route_after_analysis           --> mixed -> retrieve_context_node
                                 --> !mixed -> synthesize_answer
+
+# V2 routing (Plan-and-Execute)
+route_to_execution_mode        --> sql/mixed -> task_planner
+                                --> rag       -> retrieve_context_node
+                                --> unknown   -> synthesize_answer
+
+route_after_planning           --> Send API fan-out to sql_worker(s) and/or standalone_visualization
+route_after_worker_execution   --> aggregate_results OR synthesize_answer
 ```
 
 ### 3.3 Node Instrumentation
 
-Moi node duoc bao boi `_instrument_node()` de tu dong goi tracer:
+Moi node được bao boi `_instrument_node()` de tu dong goi tracer:
 
 ```python
 def _instrument_node(node_name, fn, observation_type):
@@ -196,7 +254,184 @@ def _detect_context_type(user_context, uploaded_files):
 
 **Output:** `context_type`, cap nhat `tool_history`, `step_count`
 
-**Routing:** Luon di tiep den `route_intent`
+**Routing:** Luon di tiep đến `process_uploaded_files` hoac `inject_session_context`
+
+### 4.2 process_uploaded_files
+
+**Input:** `uploaded_files`, `uploaded_file_data`, `target_db_path` (tu state)
+
+**Logic:**
+1. Neu `uploaded_file_data` co san: validate va auto-register CSV qua `auto_register_csv()` tool
+2. Neu chi co `uploaded_files`: doc file va validate qua `validate_csv()` tool
+3. Profile data qua `profile_csv()` tool de xac dinh schema va data types
+4. Tao bang SQLite moi với ten duy nhat va insert du lieu
+
+**CSV Tools:**
+- `validate_csv()`: Kiem tra file size, encoding, delimiter, column sanitization
+- `profile_csv()`: Pandas-based profiling với type inference
+- `auto_register_csv()`: Full pipeline (validate → profile → CREATE TABLE → INSERT)
+
+**Output:** Cap nhat `target_db_path` neu co CSV moi, `tool_history`, `step_count`
+
+**Routing:** Luon di tiep đến `inject_session_context`
+
+### 4.3 detect_continuity_node
+
+**Input:** `user_query`, `thread_id`, `conversation_memory` (tu state)
+
+**Logic:**
+1. Truy van Qdrant vector store de tim cac tin nhan lien quan trong conversation memory
+2. Dung embedding similarity de phat hien implicit follow-up queries
+3. So sanh với cac tin nhan truoc do trong cung thread
+
+**Memory Integration:**
+- sử dụng `ConversationMemoryStore` singleton với SQLite backend
+- Co check_same_thread=False de đảm bảo thread safety trong async environment
+- Tach rieng conversation context de inject vao subsequent queries
+
+**Output:** `continuity_detected`, `continuity_context`, `tool_history`, `step_count`
+
+**Routing:** Luon di tiep đến `route_intent`
+
+### 4.4 inject_session_context
+
+**Input:** `thread_id`, `conversation_memory` (tu state)
+
+**Logic:**
+1. Lay conversation history tu Qdrant vector store
+2. Trich xuat semantic context tu cac tin nhan truoc do
+3. Gop với `user_semantic_context` neu co
+
+**Output:** `session_context`, `tool_history`, `step_count`
+
+**Routing:** Luon di tiep đến `detect_continuity_node`
+
+### 4.5 route_intent (LLM-driven)
+
+**Input:** `user_query`
+
+**LLM Call:**
+- Model: `gh/gpt-4o-mini` (configurable)
+- Temperature: 0.0
+- Prompt: `ROUTER_PROMPT_DEFINITION` ( qua `PromptManager`)
+
+**Prompt (`router.py`):**
+```
+You are an intent router for a Data Analyst Agent.
+Classify the query into exactly one intent:
+- sql: needs numeric values, trends, rankings, comparisons from structured data.
+- rag: needs definitions, caveats, business rules, or qualitative context.
+- mixed: needs both data and business context.
+- unknown: capability, help, or casual questions that don't require SQL/RAG.
+
+Return JSON only with shape:
+{"intent":"sql|rag|mixed|unknown","reason":"short reason"}
+No markdown. No extra keys.
+```
+
+**Output parsing:** Extract JSON tu LLM response, validate intent la 1 trong 4 gia tri hop le. Neu invalid thi `intent="unknown"`, `intent_reason="llm_invalid_output"`.
+
+**Output:** `intent`, `intent_reason`, `tool_history` ( với `token_usage`, `cost_usd`), `step_count`
+
+### 4.6 task_planner (LLM-driven, V2 only)
+
+**Input:** `user_query`, `schema_context`, `dataset_context`, `intent` (tu state)
+
+**Logic:**
+1. Phan tích query de xac dinh cac subtasks co the thuc hien song song
+2. Tao danh sach `TaskState` objects với `execution_mode` (single/parallel/linear)
+3. Xac dinh xem co can visualization hay khong
+
+**LLM Call:**
+- Model: `gh/gpt-4o` (configurable cho planning)
+- Temperature: 0.0
+- Prompt: Co few-shot examples de đảm bảo JSON output structure
+
+**Output:** `task_plan` (list of `TaskState`), `execution_mode`, `tool_history`, `step_count`
+
+**Routing:** sử dụng Send API de fan-out đến cac `sql_worker` va `standalone_visualization_worker`
+
+### 4.7 sql_worker (subgraph, V2 only)
+
+**Input:** `TaskState` (tu task_planner qua Send API)
+
+**Subgraph architecture:**
+- `get_schema` → `generate_sql` → `validate_sql_node` → `execute_sql_node` → `analyze_result`
+- Neu `requires_visualization` = True: `visualization_node` (cuoi cung)
+
+**Nested sequential trong parallel fan-out:**
+- SQL execution va visualization cho cung mot task luon la sequential (dung dependency order)
+- Cac tasks khác van chay song song qua Send API fan-out
+
+**Output:** Hoan thanh task va return result ve cho `task_results` accumulation
+
+**Routing:** Ket qua được accumulate qua `operator.add` va gui ve `aggregate_results`
+
+### 4.8 standalone_visualization (V2 only)
+
+**Input:** `user_query`, raw data neu co
+
+**Logic:**
+1. Nhan dien yeu cau visualization tu query
+2. Sinh ma Python (matplotlib/seaborn) de tao chart
+3. Thuc thi ma trong E2B sandbox với data an toan
+4. Tra ve image data (PNG/JPEG) ve cho Streamlit
+
+**E2B Integration:**
+- Conditional import pattern (optional dependency)
+- Graceful degradation neu E2B_API_KEY khong co
+- Upload data toi sandbox va nhan ket qua image ve
+
+**Output:** `visualization_result`, `tool_history`, `step_count`
+
+**Routing:** Gui ket qua ve `aggregate_results`
+
+### 4.9 aggregate_results (V2 only)
+
+**Input:** `task_results` (accumulated tu cac sql_worker)
+
+**Logic:**
+1. Gom nhom ket qua tu cac tasks song song
+2. Noi cac ket qua thanh mot response duy nhat
+3. Trich xuat visualization neu co
+
+**Accumulation pattern:**
+- sử dụng `Annotated[list[TaskState], operator.add]` de fan-in ket qua
+- Deterministic accumulation qua Python operators
+
+**Output:** `aggregated_results`, `tool_history`, `step_count`
+
+**Routing:** Gui ket qua ve `synthesize_answer`
+
+### 4.10 capture_action_node (Memory)
+
+**Input:** `final_payload`, `thread_id`, `user_query`
+
+**Logic:**
+1. Ghi lai hanh dong nguoi dung va ket qua tra ve vao conversation memory
+2. Luu tru trong Qdrant vector store với thread context
+3. Danh dau cho cac lan truy van tiep theo
+
+**Output:** Cap nhat `conversation_memory`, `tool_history`, `step_count`
+
+**Routing:** Gui tiep đến `compact_and_save_memory`
+
+### 4.11 compact_and_save_memory (Memory)
+
+**Input:** `conversation_memory`, `thread_id`
+
+**Logic:**
+1. Nen conversation memory de giam dung luong
+2. Luu tru vao Qdrant vector store
+3. đảm bảo performance cho cac lan truy van tiep theo
+
+**Memory management:**
+- cơ chế compaction de giu dung luong o muc hop ly
+- Thread-isolated de tranh conflict giữa cac session
+
+**Output:** `memory_compacted`, `tool_history`, `step_count`
+
+**Routing:** Ket thuc graph flow
 
 ---
 
@@ -225,7 +460,7 @@ No markdown. No extra keys.
 
 **Output parsing:** Extract JSON tu LLM response, validate intent la 1 trong 4 gia tri hop le. Neu invalid thi `intent="unknown"`, `intent_reason="llm_invalid_output"`.
 
-**Output:** `intent`, `intent_reason`, `tool_history` ( voi `token_usage`, `cost_usd`), `step_count`
+**Output:** `intent`, `intent_reason`, `tool_history` ( với `token_usage`, `cost_usd`), `step_count`
 
 ---
 
@@ -235,7 +470,7 @@ No markdown. No extra keys.
 
 **Logic:**
 1. Neu `enable_mcp_tool_client=True`: goi MCP tools `get_schema` va `dataset_context`
-2. Neu khong: goi truc tiep `get_schema_overview()` va `dataset_context()` (local)
+2. Neu khong: goi trực tiếp `get_schema_overview()` va `dataset_context()` (local)
 
 **`get_schema_overview()`** (tools/get_schema.py):
 ```python
@@ -254,14 +489,14 @@ def get_schema_overview(db_path):
 
 **`dataset_context()`** (tools/dataset_context.py):
 ```python
-# Tra ve JSON voi:
+# Tra ve JSON với:
 # - row_counts: {table_name: count}
 # - date_ranges: {table: {"min": date, "max": date}}
 # - samples: {table_name: [row1, row2]}
 ```
 
 **Dataset Context Retrieval** (chi khi `context_type in user_provided, csv_auto, mixed`):
-- Query RAG index voi `top_k=3` de lay `retrieved_dataset_context`
+- Query RAG index với `top_k=3` de lay `retrieved_dataset_context`
 - Giup LLM hieu ve data khi user cung cap them context
 
 **Output:** `schema_context` (JSON string), `dataset_context` (JSON string), `retrieved_dataset_context`, `tool_history`, `step_count`
@@ -300,7 +535,7 @@ Rules:
 
 **SQL Extraction:** Parse markdown-fenced code blocks, hoac tim first `SELECT/WITH` statement.
 
-**Output:** `generated_sql`, `tool_history` (voi `generation_status`: `llm_generated` | `llm_empty_output` | `llm_error:*`), `step_count`
+**Output:** `generated_sql`, `tool_history` (với `generation_status`: `llm_generated` | `llm_empty_output` | `llm_error:*`), `step_count`
 
 ---
 
@@ -391,7 +626,7 @@ Provide your analysis in this JSON format:
 **Retrieval Type Decision (LLM):**
 ```python
 def _llm_decide_retrieval_type(query):
-    # LLM quyet dinh: metric_definition hay business_context
+    # LLM quyết định: metric_definition hay business_context
     system = "You are a query classifier... 1='metric_definition', 2='business_context'"
     response = client.chat_completion(messages=[{"role":"system",...}, {"role":"user",...}])
     # Parse JSON response
@@ -399,14 +634,14 @@ def _llm_decide_retrieval_type(query):
 ```
 
 **Retrieval:**
-- `metric_definition`: query RAG index voi `source_filter=METRIC_DOCS` (metric_definitions.md, retention_rules.md)
-- `business_context`: query RAG index voi `source_filter=None` (tat ca docs)
+- `metric_definition`: query RAG index với `source_filter=METRIC_DOCS` (metric_definitions.md, retention_rules.md)
+- `business_context`: query RAG index với `source_filter=None` (tat ca docs)
 
 **RAG Index (`app/rag/index_docs.py`):**
 ```python
 def query_index(query, top_k, source_filter):
     # 1. Tokenize query thanh Counter (bag-of-words)
-    # 2. Compute cosine similarity voi moi chunk trong index
+    # 2. Compute cosine similarity với moi chunk trong index
     # 3. Sort by score descending, tra ve top_k
     return [{"source", "chunk_id", "score", "text"}, ...]
 ```
@@ -433,7 +668,7 @@ def query_index(query, top_k, source_filter):
 - Ca hai: `answer = "Data signal: {analysis.summary}\nBusiness context:\n{context_evidence}"`
 - Chi SQL: `answer = "Partial answer (SQL branch succeeded, retrieval branch missing): {analysis.summary}"`
 - Chi context: `answer = "Partial answer (retrieval branch succeeded, SQL branch failed): {context_evidence}"`
-- Khong gi: `answer = "I could not complete either SQL or retrieval branch..."`
+- Khong gì: `answer = "I could not complete either SQL or retrieval branch..."`
 
 **unknown:** (fully LLM-driven fallback)
 ```python
@@ -552,7 +787,7 @@ DEFAULT_MODEL_PRICING_USD_PER_1M = {
 - **Langfuse integration:** Fetch prompts tu Langfuse neu co, fallback sang local definitions
 - **Template variable substitution:** `{{variable}}` → value
 - **Conditional blocks:** `{{#if var}}...{{/if}}`
-- **Cache:** Langfuse prompts duoc cache 300s (configurable)
+- **Cache:** Langfuse prompts được cache 300s (configurable)
 
 ```python
 prompt_manager = PromptManager()
@@ -789,19 +1024,47 @@ CREATE TABLE videos (
 python -m app.main "DAU 7 ngày gần đây như thế nào?" --db-path data/warehouse/domain_eval.db
 ```
 
-### 10.2 Streamlit (`streamlit_app.py`)
+### 10.2 FastAPI Backend (`backend/main.py`)
+
+```bash
+# Start FastAPI server
+uv run python -m backend.main
+
+# Or with uvicorn
+uvicorn backend.main:app --host 0.0.0.0 --port 8001
+```
+
+**Backend Features:**
+- Async endpoints với thread pool cho LangGraph execution
+- Streaming SSE cho real-time progress feedback
+- CORS middleware cho Streamlit integration
+- Pre-warming cho embedding model va conversation store
+- Auto-seeding cho analytics.db neu chua ton tai
+
+**Endpoints:**
+- `POST /query` - Non-streaming query processing
+- `POST /query/upload` - File upload endpoint
+- `GET /query/stream` - Streaming SSE endpoint
+- `GET /health` - Health check
+- `GET /threads` - Thread/conversation management
+- `POST /evals/run` - Eval execution endpoint
+
+### 10.3 Streamlit Thin Client (`streamlit_app.py`)
 
 ```
 streamlit run streamlit_app.py
 ```
 
 Features:
-- Chat interface voi queue
+- SSE streaming integration với backend
+- Real-time progress feedback trong khi agent lam viec
+- Chat interface với queue
 - Sample query buttons (SQL/RAG/Mixed examples)
 - Debug tabs: SQL, Trace, Errors, Raw JSON
 - Metrics: Confidence, Intent, Tools Used, Tokens, Cost
+- File upload với multipart form data
 
-### 10.3 Eval Runner
+### 10.4 Eval Runner
 
 ```bash
 # Full eval
@@ -813,6 +1076,16 @@ uv run python -m evals.runner --suite domain --limit 12
 # Spider dev with gates
 uv run python -m evals.runner --suite spider --split dev --enforce-gates
 ```
+
+### 10.5 MCP Server (`mcp_server/server.py`)
+
+```bash
+python -m mcp_server.server
+```
+
+Exposes tools qua FastMCP với 2 transport modes:
+- `stdio` - Per-call spawn (legacy, latency cao)
+- `streamable-http` - Persistent connection (moi, latency thap)
 
 ---
 
@@ -945,8 +1218,8 @@ def call_mcp_tool(tool_name, args):
 
 ### 13.1 Constrained Agent vs Unconstrained
 
-System duoc thiet ke la **constrained agent**:
-- LLM chi duoc phep goi cac tools dã định nghĩa
+System được thiet ke la **constrained agent**:
+- LLM chi được phep goi cac tools dã định nghĩa
 - SQL phải pass validation trước khi execute
 - Không có "tool injection" hay "prompt injection" protection trong V1 này
 
@@ -961,6 +1234,32 @@ System duoc thiet ke la **constrained agent**:
 | SQL generation | LLM | Flexibility + schema grounding |
 | Answer synthesis | Mixed | Template-based + LLM fallback |
 | Unknown intent | LLM | Generative response |
+
+### 13.3 Memory & Conversation Continuity
+
+**Conversation Memory System:**
+- sử dụng Qdrant vector store de luu tru conversation history
+- Singleton `ConversationMemoryStore` với thread safety
+- Semantic similarity de phat hien implicit follow-ups
+- Compaction mechanism de quan ly dung luong
+
+**Continuity Detection:**
+- `detect_continuity_node` kiem tra cac truy van lien tiep trong cung thread
+- Trich xuat context tu cac lan hoi truoc de cai thien hieu qua
+- Giam so lan LLM phai giai thich lai cac khai niem da được trao doi
+
+### 13.4 Plan-and-Execute Architecture (V2)
+
+**Parallel Fan-out with Send API:**
+- `task_planner` phan tích query thanh cac subtasks doc lap
+- `Send` API tao fan-out đến cac `sql_worker` thuc hien song song
+- `operator.add` accumulation cho fan-in ket qua
+- "Nested sequential within parallel" pattern cho visualization dependency
+
+**Scalability Benefits:**
+- N queries doc lap chay song song thay vi lan luot
+- Better resource utilization cho cac tasks khong lien quan
+- Improved response time cho complex multi-part queries
 
 ### 13.3 Token Counter Embedding vs External Embeddings
 
@@ -980,12 +1279,37 @@ RAG index dùng bag-of-words token counter thay vi external embedding model:
 ## 14. File Structure
 
 ```
+backend/
+├── main.py               # FastAPI app factory, startup events, seeding
+├── routers/
+│   ├── __init__.py       # Router imports
+│   ├── health.py         # Health check endpoints
+│   ├── query.py          # Query endpoints (POST, upload, streaming SSE)
+│   ├── threads.py        # Thread/conversation management
+│   └── evals.py          # Eval endpoints
+├── models/
+│   ├── __init__.py       # Model imports
+│   ├── requests.py       # Pydantic request models
+│   └── responses.py      # Pydantic response models
+├── services/
+│   ├── __init__.py       # Service imports
+│   ├── agent_service.py  # Async wrapper around run_query()
+│   └── sse_service.py    # Server-Sent Events streaming
+└── utils/
+    ├── __init__.py       # Utility imports
+    └── serialization.py  # Bytes/base64 serialization helpers
+
 app/
 ├── graph/
 │   ├── state.py          # AgentState, GraphInput/OutputState, Intent, Confidence types
-│   ├── graph.py          # build_sql_v1_graph(), _instrument_node()
-│   ├── edges.py          # route_after_* conditional edges
-│   ├── nodes.py          # All 9 nodes implementation
+│   ├── graph.py          # build_sql_v1_graph(), build_sql_v2_graph(), _instrument_node()
+│   ├── edges.py          # route_after_* conditional edges, Send API fan-out
+│   ├── nodes.py          # All 12+ nodes implementation
+│   ├── sql_worker_graph.py # Nested subgraph for parallel SQL execution
+│   ├── standalone_visualization.py # E2B-based visualization worker
+│   ├── continuity.py     # Conversation continuity detection
+│   ├── context_resolver.py # Context resolution logic
+│   ├── error_classifier.py # Error classification system
 │   └── run_config.py     # RunConfig, new_run_config(), to_langgraph_config()
 ├── tools/
 │   ├── get_schema.py     # list_tables, describe_table, get_schema_overview
@@ -994,12 +1318,23 @@ app/
 │   ├── retrieve_metric_definition.py  # Wrapper
 │   ├── retrieve_business_context.py  # Wrapper
 │   ├── dataset_context.py # Row counts, date ranges, samples
+│   ├── csv_validator.py  # CSV validation tools
+│   ├── csv_profiler.py   # CSV profiling tools
+│   ├── auto_register.py  # CSV auto-registration pipeline
+│   ├── visualization.py  # E2BVisualizationService
 │   └── mcp_client.py     # call_mcp_tool(), persistent MCP connection
+├── memory/
+│   ├── __init__.py       # Memory module imports
+│   ├── conversation_store.py # Conversation memory with Qdrant integration
+│   ├── context_store.py  # Context persistence layer
+│   └── qdrant_client.py  # Vector store client
 ├── prompts/
 │   ├── manager.py        # PromptManager with Langfuse + local fallback
 │   ├── router.py         # ROUTER_PROMPT_DEFINITION
 │   ├── sql.py            # SQL_PROMPT_DEFINITION
-│   └── analysis.py      # ANALYSIS_PROMPT_DEFINITION
+│   ├── context_detection.py # Context detection prompts
+│   ├── synthesis.py      # Synthesis prompts
+│   └── analysis.py       # ANALYSIS_PROMPT_DEFINITION
 ├── rag/
 │   ├── index_docs.py     # build_local_index(), query_index() with cosine similarity
 │   └── retriever.py      # retrieve_metric_definition(), retrieve_business_context()
@@ -1010,7 +1345,7 @@ app/
 │   └── client.py         # LLMClient with chat_completion, cost estimation
 ├── config.py             # Settings dataclass, load_settings()
 ├── logger.py             # Loguru logger setup
-└── main.py               # run_query(), main() CLI entry
+└── main.py               # sync run_query(), main() CLI entry
 
 evals/
 ├── runner.py             # Eval runner with parallel execution
@@ -1030,6 +1365,8 @@ evals/
 
 mcp_server/
 └── server.py              # FastMCP server with tool definitions
+
+streamlit_app.py           # Thin client with SSE streaming
 
 docs/
 ├── research/rag/          # RAG source documents
@@ -1052,9 +1389,20 @@ LLM_API_URL=https://.../v1/chat/completions
 LLM_API_KEY=sk-...
 DEFAULT_ROUTER_MODEL=gh/gpt-4o-mini
 DEFAULT_SYNTHESIS_MODEL=gh/gpt-4o
+DEFAULT_PLANNER_MODEL=gh/gpt-4o
 
 # Database
 SQLITE_DB_PATH=data/warehouse/analytics.db
+
+# Backend
+BACKEND_PORT=8001
+BACKEND_CORS_ORIGINS=http://localhost:8501,*  # Streamlit + wildcard for dev
+BACKEND_RELOAD=false  # Enable for development
+
+# Memory
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+QDRANT_COLLECTION_NAME=conversation_memory
 
 # Observability
 TRACE_JSONL_PATH=evals/reports/traces.jsonl
@@ -1071,7 +1419,19 @@ MCP_HTTP_URL=http://127.0.0.1:8000/mcp
 # Eval
 ENABLE_LLM_SQL_GENERATION=true
 PROMPT_CACHE_TTL_SECONDS=300
+
+# E2B (Visualization)
+E2B_API_KEY=  # Optional - if not set, visualization features disabled
 ```
+
+### 15.2 Streaming & SSE Configuration
+
+The system supports real-time progress feedback via Server-Sent Events:
+
+- **Backend streaming endpoint**: `GET /query/stream` in `backend/routers/query.py`
+- **Frontend integration**: Streamlit uses `EventSource` to receive real-time updates
+- **Event types**: `started`, `node_completed`, `result`, `error`
+- **Progress tracking**: Each node completion fires an event with status update
 
 ---
 
