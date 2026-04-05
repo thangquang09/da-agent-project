@@ -1,135 +1,158 @@
+"""Seed PostgreSQL database with online_retail_II.csv dataset.
+
+This script creates the online_retail table and imports data from the CSV file.
+Uses PostgreSQL COPY command for efficient bulk loading.
+"""
+
 from __future__ import annotations
 
-import sqlite3
-from datetime import date, timedelta
+import csv
+from datetime import datetime
 from pathlib import Path
 
+import psycopg
 
+from app.config import load_settings
+from app.logger import logger
+
+
+# Project paths
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DB_PATH = PROJECT_ROOT / "data" / "warehouse" / "analytics.db"
+CSV_PATH = PROJECT_ROOT / "data" / "uci_online_retail" / "online_retail_II.csv"
 
 
-def _create_tables(conn: sqlite3.Connection) -> None:
-    conn.executescript(
+def _create_online_retail_table(conn: psycopg.Connection) -> None:
+    """Create online_retail table with PostgreSQL schema."""
+    conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS daily_metrics (
-            date TEXT PRIMARY KEY,
-            dau INTEGER NOT NULL,
-            revenue REAL NOT NULL,
-            retention_d1 REAL NOT NULL,
-            avg_session_time REAL NOT NULL
+        CREATE TABLE IF NOT EXISTS online_retail (
+            invoice TEXT NOT NULL,
+            stock_code TEXT NOT NULL,
+            description TEXT,
+            quantity INTEGER NOT NULL,
+            invoice_date TIMESTAMPTZ NOT NULL,
+            price NUMERIC(10, 4) NOT NULL,
+            customer_id TEXT,
+            country TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW()
         );
 
-        CREATE TABLE IF NOT EXISTS videos (
-            video_id TEXT PRIMARY KEY,
-            title TEXT NOT NULL,
-            publish_date TEXT NOT NULL,
-            views INTEGER NOT NULL,
-            watch_time REAL NOT NULL,
-            retention_rate REAL NOT NULL,
-            ctr REAL NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS metric_definitions (
-            metric_name TEXT PRIMARY KEY,
-            definition TEXT NOT NULL,
-            caveat TEXT NOT NULL,
-            business_note TEXT NOT NULL
-        );
+        -- Create indexes for common query patterns
+        CREATE INDEX IF NOT EXISTS idx_online_retail_invoice ON online_retail(invoice);
+        CREATE INDEX IF NOT EXISTS idx_online_retail_stock_code ON online_retail(stock_code);
+        CREATE INDEX IF NOT EXISTS idx_online_retail_country ON online_retail(country);
+        CREATE INDEX IF NOT EXISTS idx_online_retail_invoice_date ON online_retail(invoice_date);
         """
     )
+    logger.info("Created online_retail table with indexes")
 
 
-def _seed_daily_metrics(conn: sqlite3.Connection) -> None:
-    conn.execute("DELETE FROM daily_metrics")
-    today = date.today()
-    rows: list[tuple[str, int, float, float, float]] = []
-    for idx in range(30):
-        day = today - timedelta(days=29 - idx)
-        dau = 12000 + (idx * 35) - (200 if idx % 7 == 0 else 0)
-        revenue = 4800.0 + (idx * 21.5) - (90.0 if idx % 6 == 0 else 0.0)
-        retention_d1 = 0.38 + ((idx % 5) * 0.01)
-        avg_session_time = 14.2 + ((idx % 4) * 0.7)
-        rows.append(
-            (
-                day.isoformat(),
-                dau,
-                round(revenue, 2),
-                round(retention_d1, 4),
-                round(avg_session_time, 2),
-            )
-        )
-
-    conn.executemany(
-        """
-        INSERT INTO daily_metrics (date, dau, revenue, retention_d1, avg_session_time)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        rows,
-    )
+def _parse_csv_value(value: str | None) -> str | None:
+    """Parse CSV value, handling empty strings and quotes."""
+    if value is None or value.strip() == "":
+        return None
+    # Remove surrounding quotes if present
+    value = value.strip()
+    if (value.startswith('"') and value.endswith('"')) or (
+        value.startswith("'") and value.endswith("'")
+    ):
+        value = value[1:-1]
+    return value
 
 
-def _seed_videos(conn: sqlite3.Connection) -> None:
-    conn.execute("DELETE FROM videos")
-    rows = [
-        ("vid_001", "Gameplay Highlights #1", "2026-03-01", 120000, 56000.0, 0.47, 0.062),
-        ("vid_002", "Beginner Guide", "2026-03-03", 93000, 49000.0, 0.53, 0.071),
-        ("vid_003", "Patch Notes Breakdown", "2026-03-08", 78000, 35000.0, 0.41, 0.055),
-        ("vid_004", "Top 10 Tips", "2026-03-12", 101000, 52000.0, 0.51, 0.069),
-        ("vid_005", "Challenge Run", "2026-03-15", 67000, 30000.0, 0.39, 0.049),
-        ("vid_006", "Community Q&A", "2026-03-20", 88000, 44500.0, 0.46, 0.058),
-    ]
-    conn.executemany(
-        """
-        INSERT INTO videos (video_id, title, publish_date, views, watch_time, retention_rate, ctr)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        rows,
-    )
+def _parse_invoice_date(date_str: str) -> datetime:
+    """Parse invoice date from CSV format (e.g., '2009-12-01 07:45:00')."""
+    # Remove any surrounding quotes
+    date_str = date_str.strip().strip('"').strip("'")
+    # Parse datetime (no timezone in CSV, assume UTC)
+    return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
 
 
-def _seed_metric_definitions(conn: sqlite3.Connection) -> None:
-    conn.execute("DELETE FROM metric_definitions")
-    rows = [
-        (
-            "dau",
-            "Daily Active Users: unique users active in a calendar day.",
-            "Can spike due to campaign-driven low-quality users.",
-            "Track alongside retention and revenue quality.",
-        ),
-        (
-            "retention_d1",
-            "Share of users returning the day after first activity.",
-            "Sensitive to timezone cutoff and event delay.",
-            "Use weekly cohorts for trend-level interpretation.",
-        ),
-        (
-            "revenue",
-            "Total recognized daily gross revenue.",
-            "May be revised after payment reconciliation.",
-            "Use 7-day moving average for stable decision-making.",
-        ),
-    ]
-    conn.executemany(
-        """
-        INSERT INTO metric_definitions (metric_name, definition, caveat, business_note)
-        VALUES (?, ?, ?, ?)
-        """,
-        rows,
-    )
+def _import_csv_via_copy(conn: psycopg.Connection, csv_path: Path) -> None:
+    """Import CSV data using PostgreSQL COPY command (fastest method)."""
+    logger.info("Importing data via COPY from {path}", path=csv_path)
+
+    with conn.cursor() as cur:
+        # Use COPY FROM for efficient bulk loading
+        with csv_path.open("r", encoding="utf-8") as f:
+            # Skip header row
+            headers = f.readline().strip().split(",")
+            reader = csv.DictReader(f, fieldnames=headers)
+
+            # Use COPY with row-by-row writing for better error handling
+            with cur.copy("COPY online_retail (invoice, stock_code, description, quantity, invoice_date, price, customer_id, country) FROM STDIN") as copy:
+                for row_idx, row in enumerate(reader, 1):
+                    try:
+                        invoice = _parse_csv_value(row.get("Invoice", ""))
+                        stock_code = _parse_csv_value(row.get("StockCode", ""))
+                        description = _parse_csv_value(row.get("Description", ""))
+                        quantity_str = _parse_csv_value(row.get("Quantity", "0"))
+                        date_str = _parse_csv_value(row.get("InvoiceDate", ""))
+                        price_str = _parse_csv_value(row.get("Price", "0"))
+                        customer_id = _parse_csv_value(row.get("Customer ID", ""))
+                        country = _parse_csv_value(row.get("Country", ""))
+
+                        if not invoice or not stock_code:
+                            continue  # Skip rows without key fields
+
+                        quantity = int(quantity_str) if quantity_str else 0
+                        price = float(price_str) if price_str else 0.0
+                        invoice_date = _parse_invoice_date(date_str) if date_str else datetime.now()
+
+                        copy.write_row((
+                            invoice or "",
+                            stock_code or "",
+                            description or "",
+                            quantity,
+                            invoice_date,
+                            price,
+                            customer_id or "",
+                            country or "",
+                        ))
+                    except Exception as exc:
+                        logger.warning(
+                            "Skipping row {row_idx} due to error: {exc}",
+                            row_idx=row_idx,
+                            exc=exc,
+                        )
+                        continue
+
+    logger.info("Completed CSV import via COPY")
+
+
+def _get_row_count(conn: psycopg.Connection) -> int:
+    """Get total row count from online_retail table."""
+    with conn.cursor() as cur:
+        cur = cur.execute("SELECT COUNT(*) FROM online_retail")
+        return cur.fetchone()[0]
 
 
 def main() -> None:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(DB_PATH) as conn:
-        _create_tables(conn)
-        _seed_daily_metrics(conn)
-        _seed_videos(conn)
-        _seed_metric_definitions(conn)
-        conn.commit()
-    print(f"Seeded SQLite database at: {DB_PATH}")
+    """Main seeding function."""
+    if not CSV_PATH.exists():
+        raise FileNotFoundError(f"CSV file not found: {CSV_PATH}")
+
+    logger.info("Starting PostgreSQL database seeding...")
+    logger.info("CSV path: {path}", path=CSV_PATH)
+    logger.info("File size: {size_mb:.1f}MB", size_mb=CSV_PATH.stat().st_size / (1024 * 1024))
+
+    settings = load_settings()
+
+    with psycopg.connect(settings.database_url) as conn:
+        # Create table and indexes
+        _create_online_retail_table(conn)
+
+        # Import data
+        _import_csv_via_copy(conn, CSV_PATH)
+
+        # Verify import
+        row_count = _get_row_count(conn)
+        logger.info("Seeding completed! Total rows in online_retail: {rows}", rows=row_count)
+
+    print(f"✅ Seeded PostgreSQL database with online_retail data")
+    print(f"   Total rows: {row_count:,}")
+    print(f"   Connection: {settings.database_url}")
 
 
 if __name__ == "__main__":
     main()
-

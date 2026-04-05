@@ -1,267 +1,136 @@
 # DA Agent Lab
 
-A LangGraph-based Data Analyst Agent that answers business and data questions through SQL query execution, RAG over business documentation, deterministic analysis, and production-grade observability.
+**LangGraph-based Data Analyst Agent** — trả lời business/data questions qua SQL tools, RAG retrieval, Visualization, và Report generation, với full observability.
+
+![DA Agent Lab — Architecture](docs/_media/architecture_flow.png)
 
 ---
 
-![DA Agent Graph](docs/thangquang09/langgraph_graph.png)
+## What it does
+
+DA Agent Lab nhận câu hỏi tiếng Việt/tiếng Anh về business data — từ đơn giản ("DAU hôm qua?") đến phức tạp ("So sánh retention cohort tháng này với tháng trước rồi vẽ chart") — và tự động hoàn thiện:
+
+- **Phân loại & Ground** — Task Grounder (LLM mini) phân loại query thành `TaskProfile` (mode, source, required capabilities, confidence). Nếu query ambiguous → halt và hỏi user.
+- **Tool orchestration** — Leader Agent điều phối 5 worker tools qua tool-calling loop (≤5 steps): SQL query, RAG retrieval, Visualization, Report generation.
+- **Artifact evaluation** — Mỗi worker output được chuẩn hóa thành `WorkerArtifact`. Artifact Evaluator (deterministic code) quyết định: cần thêm tool? đủ rồi? hay cần hỏi user?
+- **Synthesize & trace** — Final Composer tổng hợp câu trả lời. Toàn bộ run được trace JSONL + Langfuse để replay và debug.
 
 ---
 
-## Overview
+## Quick Start
 
-The agent handles three classes of questions:
+```bash
+# 1. Cài dependencies
+uv sync
 
-| Class | Example | Route |
-|-------|---------|-------|
-| **SQL** | *"DAU 7 ngày gần đây có giảm không?"* | Schema → SQL Gen → Execute → Analyze |
-| **RAG** | *"Retention D1 là gì?"* | Retrieve metric definitions → Synthesize |
-| **Mixed** | *"Retention tuần này giảm từ ngày nào và metric này tính như thế nào?"* | SQL path + RAG retrieval → Synthesize |
+# 2. Seed database (lần đầu)
+PYTHONPATH=. python data/seeds/create_seed_db.py
+
+# 3. Backend
+uv run uvicorn backend.main:app --port 8001 --reload
+
+# 4. Frontend (terminal khác)
+BACKEND_URL=http://localhost:8001 uv run streamlit run streamlit_app.py
+
+# 5. CLI trực tiếp
+uv run python -m app.main "Top 5 sản phẩm bán chạy nhất?"
+```
+
+| Service | URL |
+|---------|-----|
+| Streamlit UI | http://localhost:8501 |
+| FastAPI docs | http://localhost:8001/docs |
+| MCP server | http://localhost:8000/mcp |
 
 ---
 
-## Architecture
+## Available Tools
 
-### Main Graph (V2)
+Agent exposed **5 high-level tools** qua Leader Agent tool-calling surface:
 
-```
-User Query
-    │
-    ▼
-detect_context_type ──► [has CSV?] ──► process_uploaded_files
-    │                                           │
-    └───────────────────────────────────────────┘
-                         │
-                         ▼
-                    route_intent
-                         │
-          ┌──────────────┼──────────────┐
-        sql/mixed        rag         unknown
-          │               │               │
-     task_planner  retrieve_context   synthesize_answer
-          │               │
-    [Send fan-out]        └──────────────────┐
-          │                                  │
-    ┌─────┴──────┐                           │
-  sql_worker  standalone_viz                 │
-          │                                  │
-    aggregate_results ────────────────────── ┤
-          │                                  │
-        mixed? ──► retrieve_context_node     │
-          │               │                  │
-          └───────────────┴──────────────────┘
-                          │
-                    synthesize_answer
-                          │
-                     AnswerPayload
-```
+| Tool | Trigger | What it does |
+|------|---------|-------------|
+| `ask_sql_analyst` | Data questions, counting, ranking, trend, comparison | Schema lookup → SQL generation → validate → execute → analyze |
+| `ask_sql_analyst_parallel` | Multi-part questions (2+ independent sub-queries) | Fan-out parallel SQL workers, merge results |
+| `retrieve_rag_answer` | Business definitions, policy, qualitative context | Vector similarity search in uploaded docs |
+| `create_visualization` | Inline data values in query (e.g. "vẽ biểu đồ 10, 20, 30") | E2B sandbox → Python/Altair chart |
+| `generate_report` | Explicit multi-section report request | 4-phase pipeline: plan → execute → write → critique |
 
-### SQL Worker Subgraph
+**Low-level internals (not exposed to user):**
 
-Each task dispatched via the Send API runs through an isolated SQL Worker subgraph with a built-in self-correction loop:
+| Tool | File | Purpose |
+|------|------|---------|
+| `validate_sql_query` | `app/tools/validate_sql.py` | AST-based SELECT-only validation + regex block |
+| `get_schema_overview` | `app/tools/get_schema.py` | Database schema introspection |
+| `ConversationMemoryStore` | `app/memory/store.py` | SQLite session persistence |
 
-```
-_task_get_schema
-    │
-    ▼
-_task_generate_sql ◄────────────────────────────┐
-    │                                            │
-    ▼                                            │ retry (≤ 2x)
-_task_validate_sql                               │ with error context
-    │                                            │
-    ├── [invalid] ───────────────────────────────┘
-    │
-    ▼
-_task_execute_sql
-    │
-    ├── [retryable error] ────────────────────────┘
-    │
-    ▼
-_task_generate_visualization  (optional)
-```
+---
 
-**SQL safety** is enforced deterministically before execution: only `SELECT` and CTEs are allowed; `INSERT`, `UPDATE`, `DELETE`, `DROP`, and all DDL statements are blocked.
+## Development Commands
 
-### E2B Visualization
+```bash
+# Tests
+uv run pytest                                        # All tests
+uv run pytest tests/test_sql_tools.py -v             # SQL tools
+uv run pytest -k "memory" -v                        # Memory tests
+uv run pytest --cov=app --cov-report=term-missing  # Coverage
 
-```
-SQL Result / Raw Data
-    │
-    ▼
-LLM Code Generation (matplotlib / seaborn / pandas)
-    │
-    ├── success ──► E2B Sandbox ──► Base64 PNG
-    │
-    └── failure ──► Template Fallback ──► E2B Sandbox ──► Base64 PNG
+# Evaluation
+uv run python evals/runner.py                        # Full eval suite
+
+# Database
+PYTHONPATH=. python data/seeds/create_seed_db.py      # Re-seed
+docker exec da-agent-postgres psql -U postgres -c "\dt"  # List tables
+
+# API smoke tests
+curl http://localhost:8001/health
+curl -X POST http://localhost:8001/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "DAU 7 ngày gần đây?", "thread_id": "test-001"}'
+curl -N "http://localhost:8001/query/stream?q=DAU&thread_id=test"
 ```
 
 ---
 
-## Tech Stack
+## Environment Variables
 
-| Layer | Technology |
-|-------|-----------|
-| Orchestration | [LangGraph](https://langchain-ai.github.io/langgraph/) — explicit state, conditional edges, Send API |
-| LLM Backend | OpenAI-compatible API (configurable via `LLM_API_URL`) |
-| Database | SQLite — analytics warehouse + LangGraph checkpointer |
-| Vector Store | ChromaDB — metric definitions, business context |
-| Observability | [Langfuse](https://langfuse.com/) — traces, spans, prompt versioning |
-| Visualization | [E2B](https://e2b.dev/) — sandboxed Python chart execution |
-| MCP Server | [FastMCP](https://gofastmcp.com/) — 7 tools exposed as MCP endpoints |
-| Logging | [Loguru](https://loguru.readthedocs.io/) |
-| UI | [Streamlit](https://streamlit.io/) |
-| Package Manager | [uv](https://docs.astral.sh/uv/) |
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DATABASE_URL` | ✅ | `postgresql://postgres:postgres@localhost:5432/postgres` | PostgreSQL |
+| `LLM_API_URL` | ✅ | — | LLM API endpoint |
+| `LLM_API_KEY` | ✅ | — | API key |
+| `E2B_API_KEY` | ❌ | — | E2B sandbox (visualization) |
+| `BACKEND_URL` | ❌ | `http://localhost:8001` | Streamlit → Backend |
+| `TRACE_JSONL_PATH` | ❌ | `evals/reports/traces.jsonl` | JSONL trace output |
+| `ENABLE_LANGFUSE` | ❌ | `false` | Langfuse tracing |
 
 ---
 
 ## Project Structure
 
 ```
-app/
-├── graph/
-│   ├── state.py                    # AgentState, TaskState, AnswerPayload
-│   ├── graph.py                    # build_sql_v1_graph(), build_sql_v2_graph()
-│   ├── nodes.py                    # All node functions
-│   ├── edges.py                    # Routing / conditional-edge functions
-│   ├── sql_worker_graph.py         # SQL worker subgraph (V2)
-│   ├── visualization_node.py       # E2B chart generation node
-│   ├── standalone_visualization.py # Standalone viz worker
-│   └── error_classifier.py         # SQL error taxonomy
-├── tools/
-│   ├── get_schema.py
-│   ├── query_sql.py
-│   ├── validate_sql.py
-│   ├── retrieve_metric_definition.py
-│   ├── retrieve_business_context.py
-│   ├── dataset_context.py
-│   ├── auto_register.py
-│   ├── csv_profiler.py
-│   ├── csv_validator.py
-│   └── visualization.py
-├── prompts/                        # Prompt modules with Langfuse versioning
-├── rag/                            # ChromaDB indexing and retrieval
-├── observability/                  # RunTracer, span schemas
-├── memory/                         # Cross-turn context store
-└── main.py
-
-mcp_server/                         # FastMCP server (7 exposed tools)
-data/seeds/                         # Seed database creation
-docs/research/rag/                  # Markdown docs indexed for RAG
-evals/                              # Eval runner, metrics, case contracts
-tests/                              # Pytest unit tests
-streamlit_app.py
+da-agent-project/
+├── app/
+│   ├── graph/               # LangGraph nodes, state, graph builders
+│   │   ├── graph.py         # build_sql_v3_graph() — 10-node graph
+│   │   ├── nodes.py         # leader_agent, artifact_evaluator, clarify_question_node
+│   │   ├── task_grounder.py # TaskProfile classifier (LLM mini)
+│   │   ├── state.py         # AgentState TypedDict, TaskProfile, WorkerArtifact
+│   │   └── standalone_visualization.py  # E2B sandbox viz worker
+│   ├── memory/              # ConversationMemoryStore (SQLite)
+│   ├── observability/       # RunTracer (JSONL + Langfuse)
+│   ├── prompts/             # All LLM prompt definitions
+│   ├── tools/               # SQL safety, RAG, schema tools
+│   └── main.py             # run_query() — UI-agnostic entry
+├── backend/                 # FastAPI HTTP layer
+├── mcp_server/             # FastMCP tool surface
+├── streamlit_app.py         # Thin Streamlit UI
+├── evals/                   # Evaluation suite
+├── data/seeds/             # Database seed scripts
+├── docker/                 # Dockerfiles
+└── docs/                   # Architecture & technical docs
+    ├── README.md            # Entry point
+    ├── thangquang09/        # Tiếng Việt — architecture, system design, interview
+    └── _tech_specs/         # English — state model, worker contracts, observability
 ```
 
----
-
-## Quick Start
-
-**Prerequisites:** Python 3.11+, [`uv`](https://docs.astral.sh/uv/)
-
-```bash
-git clone https://github.com/thangquang09/da-agent-project.git
-cd da-agent-project
-
-uv sync
-cp .env.example .env          # fill in credentials
-
-uv run python data/seeds/create_seed_db.py
-uv run python -m app.rag.index_docs
-
-uv run streamlit run streamlit_app.py   # web UI
-uv run python -m app.main               # CLI
-uv run python -m mcp_server.server      # MCP server
-```
-
----
-
-## Configuration
-
-```bash
-LLM_API_URL=https://api.openai.com/v1/chat/completions
-LLM_API_KEY=your-api-key
-
-DEFAULT_MODEL=gpt-4o
-MODEL_FALLBACK=gpt-4o-mini
-
-SQLITE_DB_PATH=data/warehouse/analytics.db
-
-LANGFUSE_PUBLIC_KEY=pk-lf-...
-LANGFUSE_SECRET_KEY=sk-lf-...
-LANGFUSE_HOST=https://cloud.langfuse.com
-
-E2B_API_KEY=your-e2b-api-key
-
-ENABLE_MCP_TOOL_CLIENT=false
-MCP_HTTP_URL=http://127.0.0.1:8000/mcp
-```
-
----
-
-## Response Format
-
-```json
-{
-  "answer": "DAU trong 7 ngày gần đây có xu hướng giảm nhẹ...",
-  "evidence": ["DAU ngày 2026-03-25: 12,450", "DAU ngày 2026-03-31: 11,200"],
-  "confidence": "high",
-  "used_tools": ["get_schema", "generate_sql", "execute_sql", "analyze_result"],
-  "generated_sql": "SELECT date, dau FROM daily_metrics ORDER BY date DESC LIMIT 7",
-  "visualization": { "type": "line", "image_base64": "..." }
-}
-```
-
----
-
-## Tools
-
-| Tool | Category | Description |
-|------|----------|-------------|
-| `get_schema` | Schema | DB schema overview — tables, columns, types |
-| `describe_table` | Schema | Single table schema |
-| `list_tables` | Schema | All table names in the DB |
-| `query_sql` | SQL | Execute validated SELECT query (max 200 rows) |
-| `validate_sql` | SQL | Deterministic safety validation |
-| `retrieve_metric_definition` | RAG | Semantic search over metric definitions |
-| `retrieve_business_context` | RAG | Semantic search over business docs |
-| `dataset_context` | RAG | Dataset-level context chunks |
-| `validate_csv` | File | Check encoding, delimiter, schema |
-| `profile_csv` | File | Column stats, type inference, row count |
-| `auto_register_csv` | File | Register CSV as SQLite table |
-| `check_table_exists` | Utility | Table existence check |
-
-**MCP-exposed** (via FastMCP at `:8000/mcp`): `get_schema`, `query_sql`, `validate_csv`, `profile_csv`, `auto_register_csv`, `retrieve_metric_definition`, `dataset_context`.
-
----
-
-## Observability
-
-Every run is traced to Langfuse with run-level and node-level spans:
-
-- **Run-level:** `run_id`, `intent`, `total_steps`, `total_latency_ms`, `total_token_usage`, `status`
-- **Node-level:** `node_name`, `latency_ms`, `input_summary`, `output_summary`, `error_class`
-
-**Failure taxonomy:** `ROUTING_ERROR` · `SQL_GENERATION_ERROR` · `SQL_VALIDATION_ERROR` · `SQL_EXECUTION_ERROR` · `RAG_RETRIEVAL_ERROR` · `SYNTHESIS_ERROR` · `CSV_PROCESSING_ERROR` · `VISUALIZATION_ERROR` · `STEP_LIMIT_REACHED`
-
----
-
-## Evaluation
-
-```bash
-uv run python evals/runner.py
-uv run python evals/runner.py --suite spider_dev
-```
-
-| Metric | Gate |
-|--------|------|
-| `routing_accuracy` | ≥ 0.90 |
-| `sql_validity_rate` | ≥ 0.90 |
-| `tool_path_accuracy` | ≥ 0.95 |
-| `answer_format_validity` | 1.00 |
-| `groundedness_pass_rate` | ≥ 0.70 |
-
----
-
-## License
-
-MIT

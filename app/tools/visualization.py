@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,13 +13,24 @@ from typing import Any
 from app.config import load_settings
 from app.logger import logger
 
+# Load .env early so E2B_API_KEY is available
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
+
 # Conditional import - E2B is optional
 try:
     from e2b_code_interpreter import Sandbox
+    from e2b_code_interpreter.exceptions import TimeoutException as SandboxException
 
     E2B_AVAILABLE = True
 except ImportError:
     E2B_AVAILABLE = False
+    Sandbox = Any  # type: ignore[misc,assignment]
+    SandboxException = RuntimeError  # type: ignore[misc,assignment]
     logger.warning(
         "E2B not installed. Visualization features disabled. Install with: pip install e2b-code-interpreter"
     )
@@ -54,8 +66,38 @@ class E2BVisualizationService:
         self.api_key = api_key or os.getenv("E2B_API_KEY")
         self._sandbox: Any | None = None
 
-    def _get_sandbox(self) -> Any:
-        """Get or create E2B sandbox instance."""
+    def close(self) -> None:
+        """Close the E2B sandbox and cleanup resources."""
+        if self._sandbox is not None:
+            try:
+                logger.info("Closing E2B sandbox")
+                self._sandbox.close()
+            except Exception as exc:
+                logger.warning(f"Error closing E2B sandbox: {exc}")
+            finally:
+                self._sandbox = None
+
+    def __enter__(self) -> E2BVisualizationService:
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Context manager exit - ensures sandbox cleanup."""
+        self.close()
+
+    def _get_sandbox(self, max_retries: int = 2, timeout_seconds: int = 300) -> Any:
+        """Get or create E2B sandbox instance with retry logic.
+
+        Args:
+            max_retries: Maximum number of retry attempts for sandbox creation.
+            timeout_seconds: Timeout in seconds for sandbox lifetime (max 3600).
+
+        Returns:
+            E2B Sandbox instance.
+
+        Raises:
+            RuntimeError: If sandbox creation fails after all retries.
+        """
         if not E2B_AVAILABLE:
             raise RuntimeError(
                 "E2B library not installed. Install with: pip install e2b-code-interpreter"
@@ -64,11 +106,63 @@ class E2BVisualizationService:
         if not self.api_key:
             raise RuntimeError("E2B_API_KEY not configured in environment")
 
-        if self._sandbox is None:
-            logger.info("Creating E2B sandbox instance")
-            self._sandbox = Sandbox.create(api_key=self.api_key)
+        if self._sandbox is not None:
+            return self._sandbox
 
-        return self._sandbox
+        # E2B SDK expects seconds, max 3600 (1 hour)
+        timeout = min(timeout_seconds, 3600)
+
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                logger.info(
+                    f"Creating E2B sandbox instance (attempt {attempt + 1}/{max_retries + 1})"
+                )
+                self._sandbox = Sandbox.create(
+                    api_key=self.api_key,
+                    timeout=timeout,
+                )
+                logger.info("E2B sandbox created successfully")
+                return self._sandbox
+            except SandboxException as exc:
+                last_error = exc
+                error_msg = str(exc).lower()
+
+                # Check for specific error types
+                if "sandbox was not found" in error_msg or "timeout" in error_msg:
+                    logger.warning(
+                        f"E2B sandbox creation timeout (attempt {attempt + 1}): {exc}"
+                    )
+                elif "api key" in error_msg or "unauthorized" in error_msg:
+                    logger.error(f"E2B API key invalid: {exc}")
+                    raise RuntimeError(
+                        "E2B_API_KEY is invalid or unauthorized"
+                    ) from exc
+                else:
+                    logger.warning(
+                        f"E2B sandbox creation failed (attempt {attempt + 1}): {exc}"
+                    )
+
+                if attempt < max_retries:
+                    wait_time = 2**attempt  # Exponential backoff: 1s, 2s
+                    logger.info(f"Waiting {wait_time}s before retry...")
+                    time.sleep(wait_time)
+            except Exception as exc:
+                last_error = exc
+                logger.exception(
+                    f"Unexpected error creating E2B sandbox (attempt {attempt + 1})"
+                )
+                if attempt < max_retries:
+                    wait_time = 2**attempt
+                    logger.info(f"Waiting {wait_time}s before retry...")
+                    time.sleep(wait_time)
+
+        # All retries exhausted
+        raise RuntimeError(
+            f"Failed to create E2B sandbox after {max_retries + 1} attempts. "
+            f"Last error: {last_error}. "
+            "Please check your E2B_API_KEY and network connection."
+        ) from last_error
 
     def _upload_data(
         self, data_rows: list[dict[str, Any]], filename: str = "data.csv"
@@ -125,9 +219,7 @@ class E2BVisualizationService:
         Returns:
             VisualizationResult with image data or error
         """
-        import time
-
-        start_time = time.time()
+        start_time = time.monotonic()
 
         if not E2B_AVAILABLE:
             return VisualizationResult(
@@ -168,7 +260,7 @@ class E2BVisualizationService:
                     success=False,
                     error=f"{execution.error.name}: {execution.error.value}",
                     code_executed=code_to_run,
-                    execution_time_ms=(time.time() - start_time) * 1000,
+                    execution_time_ms=(time.monotonic() - start_time) * 1000,
                 )
 
             # Extract image
@@ -179,10 +271,10 @@ class E2BVisualizationService:
                     success=False,
                     error="No chart generated. Code must use plt.show() or save figure.",
                     code_executed=code_to_run,
-                    execution_time_ms=(time.time() - start_time) * 1000,
+                    execution_time_ms=(time.monotonic() - start_time) * 1000,
                 )
 
-            execution_time_ms = (time.time() - start_time) * 1000
+            execution_time_ms = (time.monotonic() - start_time) * 1000
             logger.info(
                 f"Visualization generated successfully ({len(image_data)} bytes, {execution_time_ms:.0f}ms)"
             )
@@ -195,13 +287,39 @@ class E2BVisualizationService:
                 execution_time_ms=execution_time_ms,
             )
 
+        except SandboxException as exc:
+            error_msg = str(exc)
+            logger.error(f"E2B sandbox error: {error_msg}")
+
+            # Provide user-friendly error messages
+            if (
+                "sandbox was not found" in error_msg.lower()
+                or "timeout" in error_msg.lower()
+            ):
+                user_error = (
+                    "E2B sandbox timed out while starting. "
+                    "This may be due to high demand. Please try again later."
+                )
+            elif "api key" in error_msg.lower() or "unauthorized" in error_msg.lower():
+                user_error = (
+                    "E2B API key is invalid or expired. Please check your E2B_API_KEY."
+                )
+            else:
+                user_error = f"E2B sandbox error: {error_msg}"
+
+            return VisualizationResult(
+                success=False,
+                error=user_error,
+                code_executed=python_code if python_code else "",
+                execution_time_ms=(time.monotonic() - start_time) * 1000,
+            )
         except Exception as exc:
             logger.exception("Visualization generation failed")
             return VisualizationResult(
                 success=False,
                 error=str(exc),
                 code_executed=python_code if python_code else "",
-                execution_time_ms=(time.time() - start_time) * 1000,
+                execution_time_ms=(time.monotonic() - start_time) * 1000,
             )
 
     def _generate_chart_code(

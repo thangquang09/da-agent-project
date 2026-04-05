@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from collections import Counter
 from contextvars import ContextVar, Token
@@ -56,28 +57,64 @@ def _safe_jsonable(value: Any, max_length: int = 300) -> Any:
     return str(value)[:max_length]
 
 
-def _state_summary(state: dict[str, Any]) -> dict[str, Any]:
+def _prune_empty_fields(data: dict[str, Any]) -> dict[str, Any]:
     return {
-        "intent": state.get("intent"),
+        key: value
+        for key, value in data.items()
+        if value is not None and value != [] and value != {}
+    }
+
+
+def _state_summary(state: dict[str, Any]) -> dict[str, Any]:
+    return _prune_empty_fields({
+        "user_query": _safe_jsonable(state.get("user_query")),
+        "task_id": state.get("task_id"),
         "step_count": state.get("step_count"),
+        "task_profile": _safe_jsonable(state.get("task_profile")),
+        "artifact_count": len(state.get("artifacts", []) or []),
         "has_schema_context": bool(state.get("schema_context")),
         "generated_sql": _safe_jsonable(state.get("generated_sql")),
         "validated_sql": _safe_jsonable(state.get("validated_sql")),
-        "sql_row_count": state.get("sql_result", {}).get("row_count") if isinstance(state.get("sql_result"), dict) else None,
+        "sql_row_count": (
+            state.get("sql_result", {}).get("row_count")
+            if isinstance(state.get("sql_result"), dict)
+            else None
+        ),
         "retrieved_context_count": len(state.get("retrieved_context", []) or []),
         "errors": _safe_jsonable(state.get("errors", [])),
-    }
+    })
 
 
 def _output_summary(update: dict[str, Any]) -> dict[str, Any]:
-    return {
+    return _prune_empty_fields({
         "keys": sorted(list(update.keys())),
+        "answer_preview": _safe_jsonable(
+            update.get("final_answer") or update.get("answer_summary")
+        ),
         "intent": update.get("intent"),
         "step_count": update.get("step_count"),
+        "status": update.get("status"),
+        "sql_row_count": (
+            update.get("sql_result", {}).get("row_count")
+            if isinstance(update.get("sql_result"), dict)
+            else None
+        ),
         "tool_history_delta": len(update.get("tool_history", []) or []),
         "errors_delta": _safe_jsonable(update.get("errors", [])),
         "generated_sql": _safe_jsonable(update.get("generated_sql")),
-    }
+        "artifact_type": (
+            update.get("artifact_type")
+            or (update.get("artifacts", [{}])[0].get("artifact_type") if update.get("artifacts") else None)
+        ),
+        "terminal": (
+            update.get("artifact_terminal")
+            or (any(a.get("terminal") for a in update.get("artifacts", [])) if update.get("artifacts") else None)
+        ),
+        "recommended_action": (
+            update.get("artifact_recommended_action")
+            or (update.get("artifacts", [{}])[0].get("recommended_next_action") if update.get("artifacts") else None)
+        ),
+    })
 
 
 class LangfuseAdapter:
@@ -190,12 +227,14 @@ class RunTracer:
         self.trace_path.parent.mkdir(parents=True, exist_ok=True)
         self.node_attempts: Counter[str] = Counter()
         self.node_records: list[NodeTraceRecord] = []
+        self._lock = threading.Lock()
         self.langfuse = LangfuseAdapter()
         self.langfuse.start_run(run_id=run_id, query=query, thread_id=thread_id)
 
     def start_node(self, node_name: str, state: dict[str, Any], observation_type: str = "span") -> NodeScope:
-        self.node_attempts[node_name] += 1
-        attempt = self.node_attempts[node_name]
+        with self._lock:
+            self.node_attempts[node_name] += 1
+            attempt = self.node_attempts[node_name]
         scope = NodeScope(
             node_name=node_name,
             attempt=attempt,
@@ -233,8 +272,9 @@ class RunTracer:
             error_message=error_message,
             observation_type=scope.observation_type,
         )
-        self.node_records.append(record)
-        self._append_jsonl(record.to_dict())
+        with self._lock:
+            self.node_records.append(record)
+            self._append_jsonl(record.to_dict())
         self.langfuse.end_node(scope.langfuse_observation, update=update, error_message=error_message)
         logger.info(
             "Trace node={node} attempt={attempt} status={status} latency_ms={latency}",
@@ -293,6 +333,17 @@ class RunTracer:
             else:
                 total_cost_usd = round(total_cost_usd, 8)
 
+        artifacts = payload.get("artifacts", []) or []
+        artifact_types = sorted(set(
+            a.get("artifact_type")
+            for a in artifacts
+            if a.get("artifact_type")
+        ))
+        task_profile = payload.get("task_profile")
+        grounding_confidence = (
+            task_profile.get("confidence") if task_profile else None
+        )
+
         run_record = RunTraceRecord(
             record_type="run",
             run_id=self.run_id,
@@ -301,7 +352,7 @@ class RunTracer:
             ended_at=ended_at,
             latency_ms=latency_ms,
             query=self.query,
-            routed_intent=str(payload.get("intent", "unknown")),
+            intent=str(payload.get("intent", "unknown")),
             status="failed" if status == "failed" else "success",
             total_steps=int(payload.get("step_count", 0) or 0),
             used_tools=used_tools,
@@ -312,15 +363,20 @@ class RunTracer:
             total_token_usage=total_token_usage,
             total_cost_usd=total_cost_usd,
             final_confidence=str(payload.get("confidence", "unknown")),
+            task_profile=_safe_jsonable(task_profile),
+            grounding_confidence=grounding_confidence,
+            artifact_count=len(artifacts),
+            artifact_types=artifact_types,
         )
-        self._append_jsonl(run_record.to_dict())
+        with self._lock:
+            self._append_jsonl(run_record.to_dict())
         self.langfuse.end_run(payload=payload, status=status, error_message=error_message)
         logger.info(
             "Trace run_id={run_id} status={status} latency_ms={latency} intent={intent}",
             run_id=self.run_id,
             status=run_record.status,
             latency=latency_ms,
-            intent=run_record.routed_intent,
+            intent=run_record.intent,
         )
 
     def _append_jsonl(self, record: dict[str, Any]) -> None:

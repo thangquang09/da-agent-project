@@ -11,6 +11,7 @@ from app.config import load_settings
 from app.graph.state import TaskState
 from app.llm import LLMClient
 from app.logger import logger
+from app.prompts import prompt_manager
 from app.tools import query_sql, validate_sql
 from app.tools.visualization import (
     get_visualization_service,
@@ -53,48 +54,128 @@ def _format_sql_error(error_msg: str) -> str:
     return "An error occurred while executing the query. The data may not be available or the query needs adjustment."
 
 
+def _apply_parameter_changes(sql: str, parameter_changes: dict[str, Any]) -> str:
+    """
+    Apply parameter changes to inherited SQL.
+
+    This is a simple string-based approach for common patterns:
+    - Replace WHERE condition values
+    - Update column selections
+
+    For complex changes, the SQL should be regenerated.
+    """
+    if not parameter_changes:
+        return sql
+
+    modified_sql = sql
+
+    # Try to apply simple parameter replacements
+    # Example: {"addiction_level": "Medium"} → replace 'High' with 'Medium' in WHERE
+    for param_name, new_value in parameter_changes.items():
+        # Pattern: column = 'value' or column='value'
+        pattern = rf"({param_name}\s*=\s*)'[^']*'(?=\s|$|AND|OR|\))"
+        replacement = rf"\1'{new_value}'"
+        modified_sql = re.sub(pattern, replacement, modified_sql, flags=re.IGNORECASE)
+
+    return modified_sql
+
+
 def _task_get_schema(task_state: TaskState) -> dict[str, Any]:
-    """Get schema for a specific task."""
+    """Get schema for a specific task. Reuse schema_context from task_planner if available."""
+    existing_schema = task_state.get("schema_context", "")
+    if existing_schema:
+        return {
+            "schema_context": existing_schema,
+            "status": "running",
+            "tool_history": [
+                {
+                    "tool": "get_schema",
+                    "status": "reused",
+                    "source": "task_planner",
+                }
+            ],
+        }
+
     db_path = task_state.get("target_db_path")
     from app.tools import get_schema_overview
 
     try:
         overview = get_schema_overview(db_path=Path(db_path) if db_path else None)
         schema = str(overview)
+        table_count = len(overview.get("tables", []))
     except Exception as exc:
         logger.warning("Failed to get schema in worker: {error}", error=str(exc))
-        schema = task_state.get("schema_context", "")
+        schema = ""
+        table_count = 0
 
-    # Only return fields that need to be updated
     return {
         "schema_context": schema,
         "status": "running",
+        "tool_history": [
+            {
+                "tool": "get_schema",
+                "status": "ok",
+                "table_count": table_count,
+            }
+        ],
     }
 
 
 def _task_generate_sql(task_state: TaskState) -> dict[str, Any]:
-    """Generate SQL for a specific task."""
+    """Generate SQL for a specific task. Re-use inherited SQL if continuity is detected."""
     query = task_state.get("query", "")
     schema = task_state.get("schema_context", "")
+    session_context = task_state.get("session_context", "")
+    inherited_sql = task_state.get("inherited_sql")
+    parameter_changes = task_state.get("parameter_changes", {})
 
+    # If continuity detected and we have inherited SQL, re-use it
+    if inherited_sql:
+        logger.info(
+            "Using inherited SQL from continuity context (length={len_sql})",
+            len_sql=len(inherited_sql),
+        )
+
+        # Apply parameter changes if any
+        if parameter_changes:
+            sql = _apply_parameter_changes(inherited_sql, parameter_changes)
+            logger.info(
+                "Applied parameter changes to inherited SQL: {changes}",
+                changes=parameter_changes,
+            )
+        else:
+            sql = inherited_sql
+
+        return {
+            "generated_sql": sql,
+            "status": "running",
+            "tool_history": [
+                {
+                    "tool": "generate_sql",
+                    "status": "inherited",
+                    "source": "continuity",
+                }
+            ],
+        }
+
+    # Normal flow: generate SQL via LLM
     settings = load_settings()
     sql = ""
+    llm_usage = None
+    llm_cost_usd = None
 
     try:
         client = LLMClient.from_env()
-
-        system_prompt = """You are a SQL expert. Generate a read-only SQL query to answer the user's question.
-Use the provided schema. Only use SELECT and WITH statements.
-Respond with ONLY the SQL query, no explanations."""
-
+        messages = prompt_manager.sql_worker_messages(
+            query=query,
+            session_context=session_context,
+            xml_database_context=task_state.get("xml_database_context", ""),
+            schema_context=task_state.get("schema_context", ""),
+            previous_sql=task_state.get("generated_sql") if task_state.get("sql_last_error") else None,
+            error_message=task_state.get("sql_last_error"),
+        )
         response = client.chat_completion(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": f"Schema: {schema[:1500]}\n\nQuestion: {query}\n\nGenerate SQL:",
-                },
-            ],
+            messages=messages,
             model=settings.model_sql_generation,
             temperature=0.0,
         )
@@ -105,6 +186,8 @@ Respond with ONLY the SQL query, no explanations."""
             .get("content", "")
             .strip()
         )
+        llm_usage = response.get("_usage_normalized")
+        llm_cost_usd = response.get("_cost_usd_estimate")
 
         # Extract SQL from markdown if present
         fenced_match = re.search(
@@ -126,7 +209,19 @@ Respond with ONLY the SQL query, no explanations."""
         logger.error("SQL generation failed in worker: {error}", error=str(exc))
         sql = ""
 
-    return {"generated_sql": sql}
+    return {
+        "generated_sql": sql,
+        "status": "ok" if sql else "failed",
+        "tool_history": [
+            {
+                "tool": "generate_sql",
+                "status": "ok" if sql else "failed",
+                "sql_length": len(sql),
+                "token_usage": llm_usage,
+                "cost_usd": llm_cost_usd,
+            }
+        ],
+    }
 
 
 def _task_validate_sql(task_state: TaskState) -> dict[str, Any]:
@@ -138,6 +233,15 @@ def _task_validate_sql(task_state: TaskState) -> dict[str, Any]:
         return {
             "status": "failed",
             "error": "No SQL generated",
+            "sql_last_error": "No SQL generated by the LLM",
+            "sql_retry_count": task_state.get("sql_retry_count", 0) + 1,
+            "tool_history": [
+                {
+                    "tool": "validate_sql",
+                    "status": "failed",
+                    "reason": "no_sql",
+                }
+            ],
         }
 
     result = validate_sql(
@@ -145,13 +249,32 @@ def _task_validate_sql(task_state: TaskState) -> dict[str, Any]:
     )
 
     if not result.is_valid:
+        error_msg = "; ".join(result.reasons)
         return {
             "status": "failed",
-            "error": "; ".join(result.reasons),
+            "error": error_msg,
+            "sql_last_error": error_msg,
+            "sql_retry_count": task_state.get("sql_retry_count", 0) + 1,
             "validated_sql": result.sanitized_sql,
+            "tool_history": [
+                {
+                    "tool": "validate_sql",
+                    "status": "failed",
+                    "reasons": result.reasons,
+                }
+            ],
         }
 
-    return {"validated_sql": result.sanitized_sql}
+    return {
+        "validated_sql": result.sanitized_sql,
+        "sql_last_error": None,  # clear any previous errors on success
+        "tool_history": [
+            {
+                "tool": "validate_sql",
+                "status": "ok",
+            }
+        ],
+    }
 
 
 def _task_execute_sql(task_state: TaskState) -> dict[str, Any]:
@@ -163,16 +286,46 @@ def _task_execute_sql(task_state: TaskState) -> dict[str, Any]:
         return {
             "status": "failed",
             "error": "No validated SQL to execute",
+            "sql_last_error": "No validated SQL to execute",
+            "sql_retry_count": task_state.get("sql_retry_count", 0) + 1,
             "sql_result": {"error": "No SQL", "rows": [], "row_count": 0},
         }
 
     try:
         result = query_sql(sql, db_path=Path(db_path) if db_path else None)
 
+        # Persist to result_store
+        result_ref = None
+        try:
+            from app.tools.result_store import get_result_store
+
+            store = get_result_store()
+            result_ref = store.save_result(
+                sql=sql,
+                sql_result=result,
+                run_id=task_state.get("run_id"),
+                thread_id=task_state.get("thread_id"),
+                db_path=str(db_path) if db_path else None,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to save result to result_store: {error}", error=str(exc)
+            )
+
         return {
             "sql_result": result,
             "status": "success",
+            "sql_last_error": None,  # clear any previous errors on success
             "execution_time_ms": result.get("latency_ms", 0),
+            "result_ref": result_ref,
+            "tool_history": [
+                {
+                    "tool": "execute_sql",
+                    "status": "ok",
+                    "row_count": result.get("row_count", 0),
+                    "latency_ms": result.get("latency_ms", 0),
+                }
+            ],
         }
     except Exception as exc:
         # Log error without full stack trace to avoid leaking internal details
@@ -187,7 +340,16 @@ def _task_execute_sql(task_state: TaskState) -> dict[str, Any]:
         return {
             "status": "failed",
             "error": user_friendly_error,
+            "sql_last_error": error_msg,
+            "sql_retry_count": task_state.get("sql_retry_count", 0) + 1,
             "sql_result": {"error": user_friendly_error, "rows": [], "row_count": 0},
+            "tool_history": [
+                {
+                    "tool": "execute_sql",
+                    "status": "failed",
+                    "error": user_friendly_error,
+                }
+            ],
         }
 
 
@@ -220,7 +382,7 @@ def _task_generate_visualization(task_state: TaskState) -> dict[str, Any]:
                 "success": False,
                 "error": "Visualization service not available (E2B not configured)",
             },
-            "status": "skipped",
+            "status": "success",  # Keep success so task results are not dropped
         }
 
     # Step 1: Generate Python visualization code using LLM (preferred)
@@ -314,48 +476,17 @@ def _generate_visualization_code_llm(query: str, data_rows: list[dict]) -> str |
     for i, row in enumerate(data_rows[:3]):
         schema_desc += f"  Row {i + 1}: {row}\n"
 
-    system_prompt = """You are a Python data visualization expert. Write code using pandas, seaborn, and matplotlib.
-
-CRITICAL REQUIREMENTS:
-1. Read data from '/home/user/query_data.csv' using pandas (df = pd.read_csv('/home/user/query_data.csv'))
-2. Choose the EXACT chart type the user requested (bar chart, line chart, scatter plot, pie chart, histogram)
-3. Use seaborn for the visualization (sns.barplot, sns.lineplot, sns.scatterplot, sns.histplot, etc.)
-4. Make the chart visually appealing with proper styling
-5. Set appropriate figure size (12x6 or similar)
-6. Add title, labels, and rotate x-axis labels if needed
-7. END your code with plt.show() to display the chart
-8. Do NOT include any explanations, markdown, or comments - only the Python code
-9. The code must be self-contained and runnable
-
-Available libraries: pandas, seaborn, matplotlib, numpy
-
-IMPORTANT: If the user explicitly mentions a chart type (e.g., "bar chart", "biểu đồ cột"), use that exact type. Do not default to scatter plot."""
-
-    user_prompt = f"""Create visualization for this data based on the user's request.
-
-User Query: {query}
-
-Data Schema:
-{schema_desc}
-
-Write Python code that:
-1. Reads the CSV file from '/home/user/query_data.csv'
-2. Creates the appropriate chart type as requested by the user
-3. Makes it visually appealing
-4. Ends with plt.show()
-
-Return ONLY the Python code, no markdown or explanations."""
-
     try:
         settings = load_settings()
         client = LLMClient.from_env()
+        messages = prompt_manager.visualization_messages(
+            query=query,
+            schema_desc=schema_desc,
+        )
 
         # Use model_sql_generation as requested
         response = client.chat_completion(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=messages,
             model=settings.model_sql_generation,
             temperature=0.2,
         )
@@ -502,6 +633,37 @@ def _should_visualize(task_state: TaskState) -> bool:
     )
 
 
+def _after_validate(task_state: TaskState) -> str:
+    """Determine next step after SQL validation."""
+    if task_state.get("status") == "failed":
+        # Retry up to 2 times
+        if task_state.get("sql_retry_count", 0) <= 2:
+            logger.info(
+                "SQL validation failed, retrying (count={count})",
+                count=task_state.get("sql_retry_count", 0),
+            )
+            return "generate_sql"
+        return END
+    return "execute_sql"
+
+
+def _after_execute(task_state: TaskState) -> str:
+    """Determine next step after SQL execution."""
+    if task_state.get("status") == "failed":
+        # Retry up to 2 times
+        if task_state.get("sql_retry_count", 0) <= 2:
+            logger.info(
+                "SQL execution failed, retrying (count={count})",
+                count=task_state.get("sql_retry_count", 0),
+            )
+            return "generate_sql"
+        return END
+
+    if _should_visualize(task_state):
+        return "generate_visualization"
+    return END
+
+
 def build_sql_worker_graph():
     """
     Subgraph for executing a single SQL task.
@@ -526,19 +688,29 @@ def build_sql_worker_graph():
     builder.add_edge(START, "get_schema")
     builder.add_edge("get_schema", "generate_sql")
     builder.add_edge("generate_sql", "validate_sql")
-    builder.add_edge("validate_sql", "execute_sql")
 
-    # Conditional routing for visualization
-    # If requires_visualization=True AND status=success -> generate_visualization -> END
-    # Otherwise -> END
+    # Conditional routing after validation (proceed to execution, retry, or end on failure)
     builder.add_conditional_edges(
-        "execute_sql",
-        _should_visualize,
+        "validate_sql",
+        _after_validate,
         {
-            True: "generate_visualization",
-            False: END,
+            "execute_sql": "execute_sql",
+            "generate_sql": "generate_sql",
+            END: END,
         },
     )
+
+    # Conditional routing after execution (proceed to visualization, retry, or end)
+    builder.add_conditional_edges(
+        "execute_sql",
+        _after_execute,
+        {
+            "generate_visualization": "generate_visualization",
+            "generate_sql": "generate_sql",
+            END: END,
+        },
+    )
+
     builder.add_edge("generate_visualization", END)
 
     return builder.compile()

@@ -1,25 +1,30 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
+from app.config import load_settings
 from app.graph import (
-    build_sql_v1_graph,
-    build_sql_v2_graph,
+    build_sql_v3_graph,
     new_run_config,
     to_langgraph_config,
 )
-from app.logger import logger
+from app.logger import ensure_debug_file_sink, logger
 from app.observability import RunTracer, reset_current_tracer, set_current_tracer
 
-# Graph version registry (Factory Pattern)
-GRAPH_REGISTRY: dict[str, Callable] = {
-    "v1": build_sql_v1_graph,
-    "v2": build_sql_v2_graph,
-}
 
+def _make_serializable(obj: Any) -> Any:
+    """Convert bytes to base64-encoded str for JSON serialization."""
+    if isinstance(obj, bytes):
+        return base64.b64encode(obj).decode()
+    if isinstance(obj, dict):
+        return {k: _make_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_make_serializable(i) for i in obj]
+    return obj
 
 def _extract_numeric_evidence(payload: dict, key: str) -> int | None:
     for item in payload.get("evidence", []):
@@ -39,13 +44,18 @@ def run_query(
     user_semantic_context: str | None = None,
     uploaded_files: list[str] | None = None,
     uploaded_file_data: list[dict[str, Any]] | None = None,
-    expected_keywords: list[str] | None = None,
-    version: str = "v2",
+    expected_keywords: list[str] | None = None,  # Deprecated: eval-only field
+    version: str = "v3",
     thread_id: str | None = None,
 ) -> dict:
-    # Get graph builder from registry (fallback to v2)
-    graph_builder = GRAPH_REGISTRY.get(version, build_sql_v2_graph)
-    graph = graph_builder()
+    if version != "v3":
+        raise ValueError(f"Unsupported graph version: {version}")
+
+    settings = load_settings()
+    if settings.debug_log_path:
+        ensure_debug_file_sink(settings.debug_log_path, settings.debug_log_level)
+
+    graph = build_sql_v3_graph()
     run_cfg = new_run_config(recursion_limit=recursion_limit, thread_id=thread_id)
     tracer = RunTracer(
         run_id=run_cfg.run_id,
@@ -54,6 +64,7 @@ def run_query(
     )
     tracer_token = set_current_tracer(tracer)
     graph_input: dict[str, Any] = {"user_query": user_query}
+    graph_input["run_id"] = run_cfg.run_id
     if db_path:
         graph_input["target_db_path"] = str(Path(db_path))
     if user_semantic_context:
@@ -62,8 +73,6 @@ def run_query(
         graph_input["uploaded_files"] = uploaded_files
     if uploaded_file_data:
         graph_input["uploaded_file_data"] = uploaded_file_data
-    if expected_keywords:
-        graph_input["expected_keywords"] = expected_keywords
     # Pass thread_id to graph input for session memory
     if thread_id:
         graph_input["thread_id"] = thread_id
@@ -76,6 +85,9 @@ def run_query(
         payload["run_id"] = output.get("run_id", run_cfg.run_id)
         payload["intent"] = output.get("intent", payload.get("intent", "unknown"))
         payload["intent_reason"] = output.get("intent_reason", "")
+        payload["response_mode"] = output.get(
+            "response_mode", payload.get("response_mode", "answer")
+        )
         payload["errors"] = output.get("errors", [])
         payload["step_count"] = output.get("step_count", payload.get("step_count"))
         payload["tool_history"] = output.get("tool_history", [])
@@ -99,6 +111,7 @@ def run_query(
             "generated_sql": "",
             "intent": "unknown",
             "intent_reason": "",
+            "response_mode": "answer",
             "errors": [{"category": "SYNTHESIS_ERROR", "message": str(exc)}],
             "step_count": 0,
             "tool_history": [],
@@ -131,9 +144,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--version",
-        choices=["v1", "v2"],
-        default="v2",
-        help="Graph version to use (v1=linear, v2=plan-and-execute)",
+        choices=["v3"],
+        default="v3",
+        help="Graph version to use",
     )
     return parser.parse_args()
 
@@ -150,7 +163,9 @@ def main() -> None:
         "Query completed with confidence={confidence}",
         confidence=result.get("confidence"),
     )
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    # Convert bytes (e.g., PNG image_data) to base64 for JSON serialization
+    serializable_result = _make_serializable(result)
+    print(json.dumps(serializable_result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

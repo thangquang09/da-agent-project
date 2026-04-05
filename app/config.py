@@ -40,7 +40,7 @@ class Settings:
     default_router_model: str
     default_synthesis_model: str
     available_models: tuple[str, ...]
-    sqlite_db_path: str
+    database_url: str
     enable_llm_sql_generation: bool
     trace_jsonl_path: str
     enable_langfuse: bool
@@ -56,13 +56,21 @@ class Settings:
     mcp_stdio_command: str
     mcp_stdio_args: tuple[str, ...]
     # Node-specific model configuration (for future flexibility)
+    model_leader: str
     model_router: str
+    model_preclassifier: str
     model_synthesis: str
     model_sql_generation: str
     model_context_detection: str
     model_task_planner: str
     model_aggregation: str
     model_fallback: str
+    model_report_planner: str
+    model_report_writer: str
+    model_report_critic: str
+    # Debug file sink — always active, defaults to logs/DEBUG.log
+    debug_log_path: str
+    debug_log_level: str
 
 
 def _env_bool(value: str | None, default: bool) -> bool:
@@ -92,7 +100,11 @@ def load_settings() -> Settings:
     default_synthesis_model = os.getenv("DEFAULT_SYNTHESIS_MODEL", default_model)
 
     # Node-specific models (can be overridden via env vars for flexibility)
+    model_leader = os.getenv("MODEL_LEADER", default_model)
     model_router = os.getenv("MODEL_ROUTER", default_router_model)
+    model_preclassifier = os.getenv(
+        "MODEL_PRECLASSIFIER", "gh/gpt-4o-mini"
+    )  # Lightweight classifier model
     model_synthesis = os.getenv("MODEL_SYNTHESIS", default_synthesis_model)
     model_sql_generation = os.getenv("MODEL_SQL_GENERATION", default_model)
     model_context_detection = os.getenv("MODEL_CONTEXT_DETECTION", default_model)
@@ -101,6 +113,9 @@ def load_settings() -> Settings:
     model_fallback = os.getenv(
         "MODEL_FALLBACK", "gh/gpt-4o-mini"
     )  # Keep mini for simple fallback
+    model_report_planner = os.getenv("MODEL_REPORT_PLANNER", model_leader)
+    model_report_writer = os.getenv("MODEL_REPORT_WRITER", model_synthesis)
+    model_report_critic = os.getenv("MODEL_REPORT_CRITIC", model_leader)
 
     settings = Settings(
         llm_api_url=os.getenv(
@@ -111,9 +126,9 @@ def load_settings() -> Settings:
         default_router_model=default_router_model,
         default_synthesis_model=default_synthesis_model,
         available_models=tuple(models),
-        sqlite_db_path=os.getenv(
-            "SQLITE_DB_PATH",
-            str(PROJECT_ROOT / "data" / "warehouse" / "analytics.db"),
+        database_url=os.getenv(
+            "DATABASE_URL",
+            "postgresql://postgres:postgres@localhost:5432/postgres",
         ),
         enable_llm_sql_generation=_env_bool(
             os.getenv("ENABLE_LLM_SQL_GENERATION"), True
@@ -142,13 +157,23 @@ def load_settings() -> Settings:
         langfuse_org_id=os.getenv("LANGFUSE_ORG_ID", ""),
         langfuse_cloud_region=os.getenv("LANGFUSE_CLOUD_REGION", "EU"),
         # Node-specific model configuration
+        model_leader=model_leader,
         model_router=model_router,
+        model_preclassifier=model_preclassifier,
         model_synthesis=model_synthesis,
         model_sql_generation=model_sql_generation,
         model_context_detection=model_context_detection,
         model_task_planner=model_task_planner,
         model_aggregation=model_aggregation,
         model_fallback=model_fallback,
+        model_report_planner=model_report_planner,
+        model_report_writer=model_report_writer,
+        model_report_critic=model_report_critic,
+        # Debug file sink — always active, defaults to logs/DEBUG.log
+        debug_log_path=os.getenv(
+            "DEBUG_LOG_PATH", str(PROJECT_ROOT / "logs" / "DEBUG.log")
+        ),
+        debug_log_level=os.getenv("DEBUG_LOG_LEVEL", "DEBUG").upper(),
     )
 
     if not settings.llm_api_key:

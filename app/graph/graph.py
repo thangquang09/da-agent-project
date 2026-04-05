@@ -1,74 +1,63 @@
 from __future__ import annotations
 
-import sqlite3
-
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import RetryPolicy
 
-from app.graph.edges import (
-    route_after_analysis,
-    route_after_context_detection,
-    route_after_intent,
-    route_after_planning,
-    route_after_process_files,
-    route_after_sql_execution,
-    route_after_sql_validation,
-    route_to_execution_mode,
-    route_after_worker_execution,
-)
 from app.graph.nodes import (
-    aggregate_results,
-    analyze_result,
+    artifact_evaluator,
+    capture_action_node,
+    clarify_question_node,
     compact_and_save_memory,
-    detect_context_type,
-    execute_sql_node,
-    generate_sql,
-    get_schema,
     inject_session_context,
+    leader_agent,
     process_uploaded_files,
-    retrieve_context_node,
-    route_intent,
-    synthesize_answer,
-    task_planner,
-    validate_sql_node,
 )
-from app.graph.sql_worker_graph import get_sql_worker_graph
-from app.graph.standalone_visualization import standalone_visualization_worker
+from app.graph.report_subgraph import build_report_subgraph
 from app.graph.state import AgentState, GraphInputState, GraphOutputState
+from app.graph.task_grounder import task_grounder
+from app.logger import logger
 from app.observability import get_current_tracer
 
 
 def _instrument_node(node_name: str, fn, observation_type: str = "span"):  # noqa: ANN001
     def _wrapped(state: AgentState) -> AgentState:
         tracer = get_current_tracer()
-        if tracer is None:
-            return fn(state)
-        scope = tracer.start_node(
-            node_name=node_name, state=state, observation_type=observation_type
-        )
-        try:
-            update = fn(state)
-        except Exception as exc:  # noqa: BLE001
-            tracer.end_node(scope, error=exc)
-            raise
-        tracer.end_node(scope, update=update)
-        return update
+        # Bind user_query to logger context for debug file traceability
+        user_query = state.get("user_query", "-") if isinstance(state, dict) else "-"
+        effective_run_id = tracer.run_id if tracer else "-"
+        with logger.contextualize(run_id=effective_run_id, node_name=node_name, task_id="-", user_query=str(user_query)):
+            if tracer is None:
+                return fn(state)
+            scope = tracer.start_node(
+                node_name=node_name,
+                state=state,
+                observation_type=observation_type,
+            )
+            try:
+                update = fn(state)
+            except Exception as exc:  # noqa: BLE001
+                tracer.end_node(scope, error=exc)
+                raise
+            tracer.end_node(scope, update=update)
+            return update
 
     return _wrapped
 
 
-def build_sql_v1_graph(checkpointer=None):
+def build_sql_v3_graph(checkpointer=None):
+    """
+    Leader-first runtime graph for DA Agent Lab.
+
+    Flow:
+    process_uploaded_files -> inject_session_context -> task_grounder
+    -> leader_agent -> capture_action_node -> compact_and_save_memory
+    """
     builder = StateGraph(
         AgentState,
         input_schema=GraphInputState,
         output_schema=GraphOutputState,
     )
 
-    builder.add_node(
-        "detect_context_type",
-        _instrument_node("detect_context_type", detect_context_type, "classifier"),
-    )
     builder.add_node(
         "process_uploaded_files",
         _instrument_node("process_uploaded_files", process_uploaded_files, "tool"),
@@ -78,233 +67,72 @@ def build_sql_v1_graph(checkpointer=None):
         _instrument_node("inject_session_context", inject_session_context, "memory"),
     )
     builder.add_node(
-        "route_intent", _instrument_node("route_intent", route_intent, "agent")
+        "task_grounder",
+        _instrument_node("task_grounder", task_grounder, "agent"),
     )
     builder.add_node(
-        "get_schema", _instrument_node("get_schema", get_schema, "retriever")
+        "leader_agent",
+        _instrument_node("leader_agent", leader_agent, "agent"),
     )
     builder.add_node(
-        "generate_sql",
-        _instrument_node("generate_sql", generate_sql, "generation"),
-        retry_policy=RetryPolicy(max_attempts=2),
+        "artifact_evaluator",
+        _instrument_node("artifact_evaluator", artifact_evaluator, "agent"),
     )
     builder.add_node(
-        "validate_sql_node",
-        _instrument_node("validate_sql_node", validate_sql_node, "guardrail"),
+        "clarify_question_node",
+        _instrument_node("clarify_question_node", clarify_question_node, "memory"),
     )
+    builder.add_node("report_subgraph", build_report_subgraph())
     builder.add_node(
-        "execute_sql_node",
-        _instrument_node("execute_sql_node", execute_sql_node, "tool"),
-    )
-    builder.add_node(
-        "analyze_result", _instrument_node("analyze_result", analyze_result, "chain")
-    )
-    builder.add_node(
-        "retrieve_context_node",
-        _instrument_node("retrieve_context_node", retrieve_context_node, "retriever"),
-    )
-    builder.add_node(
-        "synthesize_answer",
-        _instrument_node("synthesize_answer", synthesize_answer, "generation"),
+        "capture_action_node",
+        _instrument_node("capture_action_node", capture_action_node, "memory"),
     )
     builder.add_node(
         "compact_and_save_memory",
         _instrument_node("compact_and_save_memory", compact_and_save_memory, "memory"),
     )
 
-    builder.add_edge(START, "detect_context_type")
-    builder.add_conditional_edges(
-        "detect_context_type",
-        route_after_context_detection,
-        {
-            "process_uploaded_files": "process_uploaded_files",
-            "inject_session_context": "inject_session_context",
-        },
-    )
+    builder.add_edge(START, "process_uploaded_files")
     builder.add_edge("process_uploaded_files", "inject_session_context")
-    builder.add_edge("inject_session_context", "route_intent")
+    builder.add_edge("inject_session_context", "task_grounder")
+    builder.add_edge("task_grounder", "leader_agent")
+    builder.add_edge("leader_agent", "artifact_evaluator")
     builder.add_conditional_edges(
-        "route_intent",
-        route_after_intent,
+        "artifact_evaluator",
+        _route_after_leader,
         {
-            "get_schema": "get_schema",
-            "retrieve_context_node": "retrieve_context_node",
-            "synthesize_answer": "synthesize_answer",
+            "leader_agent": "leader_agent",  # continue/retry — loop back
+            "clarify_question_node": "clarify_question_node",  # wait_for_user — interrupt
+            "report_subgraph": "report_subgraph",
+            "capture_action_node": "capture_action_node",
         },
     )
-
-    builder.add_edge("get_schema", "generate_sql")
-    builder.add_edge("generate_sql", "validate_sql_node")
-    builder.add_conditional_edges(
-        "validate_sql_node",
-        route_after_sql_validation,
-        {
-            "generate_sql": "generate_sql",  # Self-correction loop
-            "execute_sql_node": "execute_sql_node",
-            "retrieve_context_node": "retrieve_context_node",
-            "synthesize_answer": "synthesize_answer",
-        },
-    )
-    builder.add_conditional_edges(
-        "execute_sql_node",
-        route_after_sql_execution,
-        {
-            "generate_sql": "generate_sql",  # Self-correction loop
-            "analyze_result": "analyze_result",
-        },
-    )
-    builder.add_conditional_edges(
-        "analyze_result",
-        route_after_analysis,
-        {
-            "retrieve_context_node": "retrieve_context_node",
-            "synthesize_answer": "synthesize_answer",
-        },
-    )
-    builder.add_edge("retrieve_context_node", "synthesize_answer")
-    builder.add_edge("synthesize_answer", "compact_and_save_memory")
+    builder.add_edge("report_subgraph", "capture_action_node")
+    builder.add_edge("capture_action_node", "compact_and_save_memory")
     builder.add_edge("compact_and_save_memory", END)
+    builder.add_edge("clarify_question_node", END)
 
     return builder.compile(checkpointer=checkpointer or InMemorySaver())
 
 
-def _sql_worker_wrapper(task_state: dict) -> dict:
+def _route_after_leader(state: AgentState) -> str:
+    """Route after artifact_evaluator.
+
+    Decisions from artifact_evaluator:
+    - "continue" / "retry" → loop back to leader_agent
+    - "wait_for_user"      → halt and surface clarification question (interrupt)
+    - "finalize"           → capture_action_node (or report_subgraph if report mode)
     """
-    Wrapper node that runs SQL worker and returns result for accumulation.
+    eval_decision = (state.get("artifact_evaluation") or {}).get("decision", "finalize")
 
-    This wrapper properly isolates the worker subgraph execution and returns
-    only the task result to be added to task_results via operator.add.
-    """
-    from app.graph.sql_worker_graph import get_sql_worker_graph
+    if eval_decision in ("continue", "retry"):
+        return "leader_agent"  # loop back
 
-    worker = get_sql_worker_graph()
+    if eval_decision == "wait_for_user":
+        return "clarify_question_node"  # interrupt and ask user
 
-    # Run the worker subgraph
-    result = worker.invoke(task_state)
+    # finalize — report mode goes to report pipeline, else capture
+    if state.get("response_mode") == "report":
+        return "report_subgraph"
 
-    # Return the task result wrapped for accumulation
-    # The task_results field uses Annotated[list, operator.add]
-    return {"task_results": [result]}
-
-
-def build_sql_v2_graph(checkpointer=None):
-    """
-    Version 2 with Plan-and-Execute architecture using Send API.
-
-    This graph introduces:
-    - task_planner: Decomposes queries into parallelizable sub-tasks
-    - sql_worker: Subgraph for executing individual tasks in parallel
-    - aggregate_results: Fan-in to combine parallel task results
-
-    Routing logic:
-    - If task_planner outputs 1 task: routes through single worker (linear)
-    - If task_planner outputs >1 tasks: fans out to parallel workers (parallel)
-    """
-    builder = StateGraph(
-        AgentState,
-        input_schema=GraphInputState,
-        output_schema=GraphOutputState,
-    )
-
-    # Add existing nodes
-    builder.add_node(
-        "detect_context_type",
-        _instrument_node("detect_context_type", detect_context_type, "classifier"),
-    )
-    builder.add_node(
-        "process_uploaded_files",
-        _instrument_node("process_uploaded_files", process_uploaded_files, "tool"),
-    )
-    builder.add_node(
-        "inject_session_context",
-        _instrument_node("inject_session_context", inject_session_context, "memory"),
-    )
-    builder.add_node(
-        "route_intent", _instrument_node("route_intent", route_intent, "agent")
-    )
-    builder.add_node(
-        "retrieve_context_node",
-        _instrument_node("retrieve_context_node", retrieve_context_node, "retriever"),
-    )
-    builder.add_node(
-        "synthesize_answer",
-        _instrument_node("synthesize_answer", synthesize_answer, "generation"),
-    )
-    builder.add_node(
-        "compact_and_save_memory",
-        _instrument_node("compact_and_save_memory", compact_and_save_memory, "memory"),
-    )
-
-    # Add Plan-and-Execute nodes
-    builder.add_node(
-        "task_planner",
-        _instrument_node("task_planner", task_planner, "planner"),
-    )
-    builder.add_node(
-        "sql_worker",
-        _sql_worker_wrapper,
-    )
-    builder.add_node(
-        "standalone_visualization",
-        standalone_visualization_worker,
-    )
-    builder.add_node(
-        "aggregate_results",
-        _instrument_node("aggregate_results", aggregate_results, "aggregator"),
-    )
-
-    # Context detection flow
-    builder.add_edge(START, "detect_context_type")
-    builder.add_conditional_edges(
-        "detect_context_type",
-        route_after_context_detection,
-        {
-            "process_uploaded_files": "process_uploaded_files",
-            "inject_session_context": "inject_session_context",
-        },
-    )
-    builder.add_edge("process_uploaded_files", "inject_session_context")
-    builder.add_edge("inject_session_context", "route_intent")
-
-    # Intent routing with Plan-and-Execute
-    builder.add_conditional_edges(
-        "route_intent",
-        route_to_execution_mode,
-        {
-            "task_planner": "task_planner",  # SQL/mixed -> task planner
-            "retrieve_context_node": "retrieve_context_node",  # RAG -> retrieval
-            "synthesize_answer": "synthesize_answer",  # unknown -> synthesis
-        },
-    )
-
-    # Plan-and-Execute flow
-    builder.add_conditional_edges(
-        "task_planner",
-        route_after_planning,
-        ["sql_worker", "standalone_visualization", "synthesize_answer"],
-    )
-
-    # Worker results fan-in
-    builder.add_conditional_edges(
-        "sql_worker",
-        route_after_worker_execution,
-        {
-            "aggregate_results": "aggregate_results",
-            "synthesize_answer": "synthesize_answer",
-        },
-    )
-
-    # Standalone visualization goes directly to synthesis
-    builder.add_edge("standalone_visualization", "aggregate_results")
-
-    # Aggregation to synthesis
-    builder.add_edge("aggregate_results", "synthesize_answer")
-
-    # RAG flow
-    builder.add_edge("retrieve_context_node", "synthesize_answer")
-
-    # Final synthesis and memory save
-    builder.add_edge("synthesize_answer", "compact_and_save_memory")
-    builder.add_edge("compact_and_save_memory", END)
-
-    return builder.compile(checkpointer=checkpointer or InMemorySaver())
+    return "capture_action_node"

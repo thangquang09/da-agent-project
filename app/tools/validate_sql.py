@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import re
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import sqlglot
+
 from app.config import load_settings
 from app.logger import logger
+from app.tools.get_schema import list_tables
+from app.tools.sql_safety import needs_safety_limit
 
 
 FORBIDDEN_SQL_PATTERNS = [
@@ -25,7 +28,8 @@ FORBIDDEN_SQL_PATTERNS = [
 ]
 READ_QUERY_PATTERN = re.compile(r"^\s*(SELECT|WITH)\b", flags=re.IGNORECASE | re.DOTALL)
 TABLE_TOKEN_PATTERN = re.compile(
-    r"\b(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)\b", flags=re.IGNORECASE
+    r'\b(?:FROM|JOIN)\s+(?:"([a-zA-Z_][a-zA-Z0-9_]*)"|([a-zA-Z_][a-zA-Z0-9_]*))',
+    flags=re.IGNORECASE,
 )
 # Pattern to match the first CTE after WITH (supports RECURSIVE)
 CTE_NAME_PATTERN = re.compile(
@@ -45,31 +49,6 @@ class SQLValidationResult:
     reasons: list[str]
     detected_tables: list[str]
 
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "is_valid": self.is_valid,
-            "sanitized_sql": self.sanitized_sql,
-            "reasons": self.reasons,
-            "detected_tables": self.detected_tables,
-        }
-
-
-def _default_db_path() -> Path:
-    return Path(load_settings().sqlite_db_path)
-
-
-def _list_tables(db_path: Path) -> set[str]:
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT name
-            FROM sqlite_master
-            WHERE type='table'
-              AND name NOT LIKE 'sqlite_%'
-            """
-        ).fetchall()
-    return {row[0].lower() for row in rows}
-
 
 def _sanitize_sql(sql: str) -> str:
     cleaned = sql.strip()
@@ -81,21 +60,66 @@ def _sanitize_sql(sql: str) -> str:
 def _extract_cte_names(sql: str) -> set[str]:
     """Return lower-cased CTE names defined in a WITH clause.
 
-    Handles:
+    Uses sqlglot AST parsing for correctness with:
     - Simple CTEs: WITH cte1 AS (...)
     - Recursive CTEs: WITH RECURSIVE cte1 AS (...)
-    - Chained CTEs: WITH cte1 AS (...), cte2 AS (...), cte3 AS (...)
+    - Chained CTEs: WITH cte1 AS (...), cte2 AS (...)
+    - Quoted identifiers: WITH "MyCTE" AS (...)
+    - Column aliases are NOT CTEs (handled separately)
     """
-    names = set()
+    try:
+        parsed = sqlglot.parse_one(sql, read="postgres")
+        cte_names: set[str] = set()
+        for cte in parsed.find_all(sqlglot.exp.CTE):
+            alias = cte.alias
+            if alias:
+                cte_names.add(alias.lower())
+        return cte_names
+    except sqlglot.errors.ParseError:
+        # Fallback to regex for unparseable SQL
+        return _extract_cte_names_regex(sql)
 
-    # Find initial CTE after WITH (handles RECURSIVE keyword)
+
+def _extract_table_names(sql: str) -> set[str]:
+    """Extract lower-cased table names referenced in SQL using AST parsing.
+
+    Handles:
+    - FROM table_name
+    - FROM "quoted_table"
+    - JOIN schema.table (uses table name only)
+    - Subquery references
+    - Aliased tables (extracts original name)
+    """
+    try:
+        parsed = sqlglot.parse_one(sql, read="postgres")
+        table_names: set[str] = set()
+        for table in parsed.find_all(sqlglot.exp.Table):
+            name = table.name
+            if name:
+                table_names.add(name.lower())
+        return table_names
+    except sqlglot.errors.ParseError:
+        # Fallback to regex
+        return _extract_table_names_regex(sql)
+
+
+def _extract_table_names_regex(sql: str) -> set[str]:
+    """Fallback regex extraction for unparseable SQL."""
+    names: set[str] = set()
+    for quoted_name, unquoted_name in TABLE_TOKEN_PATTERN.findall(sql):
+        name = quoted_name or unquoted_name
+        if name:
+            names.add(name.lower())
+    return names
+
+
+def _extract_cte_names_regex(sql: str) -> set[str]:
+    """Fallback regex extraction for CTE names (unparseable SQL)."""
+    names: set[str] = set()
     for match in CTE_NAME_PATTERN.finditer(sql):
         names.add(match.group(1).lower())
-
-    # Find chained CTEs after commas
     for match in CTE_CHAIN_PATTERN.finditer(sql):
         names.add(match.group(1).lower())
-
     return names
 
 
@@ -103,16 +127,50 @@ def _has_limit_clause(sql: str) -> bool:
     return bool(re.search(r"\blimit\s+\d+\b", sql, flags=re.IGNORECASE))
 
 
+def _is_bounded_query(sql: str) -> bool:
+    """Check if the query is naturally bounded and should NOT get a safety LIMIT.
+
+    Delegates to sql_safety.needs_safety_limit to avoid drift.
+    """
+    return not needs_safety_limit(sql)
+
+
 def validate_sql(
     sql: str, db_path: Path | None = None, *, max_limit: int | None = None
 ) -> SQLValidationResult:
-    path = db_path or _default_db_path()
+    """Validate SQL query for safety and correctness.
+
+    Args:
+        sql: SQL query string to validate
+        db_path: Optional database path (SQLite for Spider eval, None for PostgreSQL)
+        max_limit: Optional maximum LIMIT to add for unbounded queries
+
+    Returns:
+        SQLValidationResult with validation status, sanitized SQL, and reasons.
+    """
     reasons: list[str] = []
     sanitized_sql = _sanitize_sql(sql)
-    table_names = _list_tables(path)
-    detected_tables = [
-        name.lower() for name in TABLE_TOKEN_PATTERN.findall(sanitized_sql)
-    ]
+
+    # List tables from appropriate database
+    if db_path:
+        # Spider evaluation: use SQLite database
+        import sqlite3
+
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type='table'
+                  AND name NOT LIKE 'sqlite_%'
+                """
+            ).fetchall()
+            table_names = {row[0].lower() for row in rows}
+    else:
+        # Main application: use PostgreSQL
+        table_names = {tbl.lower() for tbl in list_tables()}
+
+    detected_tables = sorted(list(_extract_table_names(sanitized_sql)))
     cte_names = _extract_cte_names(sanitized_sql)
 
     if not sanitized_sql:
@@ -145,7 +203,8 @@ def validate_sql(
         and READ_QUERY_PATTERN.search(sanitized_sql)
     ):
         if not _has_limit_clause(sanitized_sql):
-            sanitized_sql = f"{sanitized_sql}\nLIMIT {max_limit}"
+            if not _is_bounded_query(sanitized_sql):
+                sanitized_sql = f"{sanitized_sql}\nLIMIT {max_limit}"
 
     is_valid = len(reasons) == 0
     logger.info(

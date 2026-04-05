@@ -296,6 +296,8 @@ def generate_schema_sql(profile: CSVProfileResult) -> str:
     columns_sql = []
     for col in profile.columns:
         sql_type = sql_type_map.get(col.dtype, "TEXT")
-        columns_sql.append(f"    {col.name} {sql_type}")
+        quoted_col = col.name.replace('"', '""')  # escape any embedded double-quotes
+        columns_sql.append(f'    "{quoted_col}" {sql_type}')
 
-    return f"CREATE TABLE {profile.table_name} (\n" + ",\n".join(columns_sql) + "\n);"
+    quoted_table = profile.table_name.replace('"', '""')
+    return f'CREATE TABLE "{quoted_table}" (\n' + ",\n".join(columns_sql) + "\n);"

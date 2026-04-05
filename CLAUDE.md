@@ -173,6 +173,7 @@ Có → good change. Không → probably a distraction.
 | `docs/thangquang09/overview.md` | Project overview |
 | `docs/thangquang09/implementation_todo.md` | Implementation tracking |
 | `docs/research/` | Research notes, datasets, RAG docs, eval pipeline |
+| `app/prompts/CLAUDE.md` | Prompt inventory — all LLM prompts are defined in `app/prompts/` |
 
 ---
 

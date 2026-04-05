@@ -6,6 +6,7 @@ from app.config import load_settings
 from app.graph.state import AgentState, TaskState
 from app.llm import LLMClient
 from app.logger import logger
+from app.prompts import prompt_manager
 from app.tools.visualization import (
     get_visualization_service,
     is_visualization_available,
@@ -121,44 +122,16 @@ def _generate_visualization_code(query: str, data_sample: list[dict]) -> str | N
     # Detect chart type preference from query
     chart_type = _detect_chart_type(query)
 
-    system_prompt = """You are a Python data visualization expert. Write code using pandas, seaborn, and matplotlib.
-
-CRITICAL REQUIREMENTS:
-1. Read data from '/home/user/query_data.csv' using pandas
-2. Use seaborn for the visualization (sns.barplot, sns.lineplot, sns.scatterplot, etc.)
-3. Make the chart visually appealing with proper styling
-4. Set appropriate figure size (12x6 or similar)
-5. Add title, labels, and rotate x-axis labels if needed
-6. END your code with plt.show() to display the chart
-7. Do NOT include any explanations, markdown, or comments - only the Python code
-8. The code must be self-contained and runnable
-
-Available libraries: pandas, seaborn, matplotlib, numpy"""
-
-    user_prompt = f"""Create a {chart_type} visualization for this data.
-
-User Query: {query}
-
-Data Schema:
-{schema_desc}
-
-Write Python code that:
-1. Reads the CSV file from '/home/user/query_data.csv'
-2. Creates an appropriate {chart_type} chart using seaborn
-3. Makes it visually appealing
-4. Ends with plt.show()
-
-Return ONLY the Python code, no markdown or explanations."""
-
     try:
         client = LLMClient.from_env()
         settings = load_settings()
-
+        messages = prompt_manager.visualization_messages(
+            query=query,
+            schema_desc=schema_desc,
+            chart_type=chart_type,
+        )
         response = client.chat_completion(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=messages,
             model=settings.model_synthesis,
             temperature=0.2,
         )
