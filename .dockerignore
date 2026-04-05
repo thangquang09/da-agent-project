@@ -1,0 +1,53 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Git
+.git/
+.gitignore
+
+# Large datasets (NOT needed in Docker image — seeded at runtime)
+data/movie_lens/
+data/spider_1/
+
+# SQLite databases (managed via Docker volumes, not baked in)
+data/warehouse/
+*.db
+*.sqlite
+
+# Eval reports (managed via Docker volume)
+evals/reports/
+
+# Test files (not needed in production image)
+tests/
+
+# Dev/docs
+docs/
+*.md
+CODEBASE_ANALYSIS.md
+streamlit_app_original.py
+
+# Backup files
+*.backup.*
+*.orig
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Temp
+tmp/
+*.tmp
+*.log
