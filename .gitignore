@@ -74,6 +74,9 @@ vendor/
 # Local scratch / test files (may contain real credentials)
 curl_command.txt
 JD.txt
+
+# Personal docs (interview prep, CV notes — not part of public project)
+docs/thangquang09/
 project_for_cv.md
 
 # Graph export images (re-generated via export_graph.py)

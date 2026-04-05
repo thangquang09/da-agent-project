@@ -8,12 +8,12 @@
 
 ## What it does
 
-Nhận câu hỏi tiếng Việt hoặc tiếng Anh về business data, tự động:
+DA Agent Lab nhận câu hỏi tiếng Việt/tiếng Anh về business data — từ đơn giản ("DAU hôm qua?") đến phức tạp ("So sánh retention cohort tháng này với tháng trước rồi vẽ chart") — và tự động hoàn thiện:
 
-1. **Phân loại & ground** câu hỏi qua Task Grounder (LLM mini)
-2. **Gọi worker phù hợp**: SQL query, RAG retrieval, Visualization, Report
-3. **Evaluate artifacts** — nếu chưa đủ → gọi thêm worker; nếu ambiguous → hỏi user
-4. **Synthesize câu trả lời** có sức cân, kèm trace đầy đủ
+- **Phân loại & Ground** — Task Grounder (LLM mini) phân loại query thành `TaskProfile` (mode, source, required capabilities, confidence). Nếu query ambiguous → halt và hỏi user.
+- **Tool orchestration** — Leader Agent điều phối 5 worker tools qua tool-calling loop (≤5 steps): SQL query, RAG retrieval, Visualization, Report generation.
+- **Artifact evaluation** — Mỗi worker output được chuẩn hóa thành `WorkerArtifact`. Artifact Evaluator (deterministic code) quyết định: cần thêm tool? đủ rồi? hay cần hỏi user?
+- **Synthesize & trace** — Final Composer tổng hợp câu trả lời. Toàn bộ run được trace JSONL + Langfuse để replay và debug.
 
 ---
 
@@ -134,34 +134,3 @@ da-agent-project/
     └── _tech_specs/         # English — state model, worker contracts, observability
 ```
 
----
-
-## API Reference
-
-### `POST /query`
-```json
-{"query": "DAU 7 ngày gần đây?", "thread_id": "optional-uuid", "version": "v3"}
-```
-
-### `GET /query/stream?q=...&thread_id=...`
-SSE streaming: `started` → `result` / `error`
-
-### `GET /threads/{id}/history`
-Conversation history by `thread_id`.
-
-### `DELETE /threads/{id}`
-Clear conversation memory (idempotent, 204).
-
----
-
-## Architecture Highlights
-
-**Hybrid Supervisor Pattern** — Leader Agent (LLM) điều phối, Artifact Evaluator (deterministic code) quyết định stop/continue. Không giao hoàn toàn cho LLM.
-
-**Artifact-based Evaluation** — Mỗi worker trả về `WorkerArtifact` chuẩn hóa: `artifact_type`, `status`, `payload`, `evidence`, `terminal`, `recommended_next_action`.
-
-**Clarify Interrupt** — Khi `task_profile.confidence == "low"` hoặc `task_mode == "ambiguous"`, graph halt tại `clarify_question_node` và hỏi user. Không đoán sai.
-
-**SQL Safety** — Chỉ SELECT. Validation qua sqlglot AST + regex block. CTE extraction để tránh injection.
-
-**Observability-first** — `@trace_node` decorator trên mọi node. JSONL trace + Langfuse prompt versioning + trace replay.

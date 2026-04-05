@@ -30,16 +30,19 @@ DA Agent Lab — Hybrid Architecture v3
 
 ## Thư mục
 
-### `thangquang09/` — Thắng & Phỏng vấn viên
+### `thangquang09/` — Thắng & Phỏng vấn viên *(gitignored)*
+
+> ⚠️ **Thư mục này nằm trong `.gitignore`** — không được commit. Dùng local.
 
 **Ngôn ngữ:** Tiếng Việt · **Quy tắc:** Ghi WHY + HOW, không ghi WHAT
 
 
-| File                                                    | Nội dung                                                                      |
-| ------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| [01_architecture.md](thangquang09/01_architecture.md)   | Sơ đồ khối chi tiết, Task Grounder, Artifact Evaluator, Routing decisions     |
-| [02_system_design.md](thangquang09/02_system_design.md) | Token economy, latency analysis, scalability, failure taxonomy                |
-| [03_interview_qna.md](thangquang09/03_interview_qna.md) | Trả lời hóc búa: LangGraph vs LC, hybrid decisions, SQL safety, observability |
+| File                                                      | Nội dung                                                                      |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| [01_architecture.md](thangquang09/01_architecture.md)     | Sơ đồ khối chi tiết, Task Grounder, Artifact Evaluator, Routing decisions     |
+| [02_system_design.md](thangquang09/02_system_design.md)  | Token economy, latency analysis, scalability, failure taxonomy                |
+| [03_interview_qna.md](thangquang09/03_interview_qna.md)  | Trả lời hóc búa: LangGraph vs LC, hybrid decisions, SQL safety, observability |
+| [04_project_for_cv.md](thangquang09/04_project_for_cv.md)| Portfolio entry cho CV — technical stack, decisions, challenges                 |
 
 
 ### `_tech_specs/` — Tài liệu kỹ thuật chi tiết
@@ -60,12 +63,12 @@ DA Agent Lab — Hybrid Architecture v3
 ## Đọc nhanh theo vai trò
 
 
-| Vai trò            | Đọc                                                                    |
-| ------------------ | ---------------------------------------------------------------------- |
-| Phỏng vấn viên     | `thangquang09/01_architecture.md` → `thangquang09/03_interview_qna.md` |
-| Review code mới    | `_tech_specs/01_state_model.md` + `_tech_specs/02_worker_contracts.md` |
-| Debug production   | `_tech_specs/03_observability.md`                                      |
-| Thay đổi kiến trúc | `thangquang09/01_architecture.md` → `_tech_specs/01_state_model.md`    |
+| Vai trò          | Đọc                                                                    |
+| ---------------- | ---------------------------------------------------------------------- |
+| Phỏng vấn viên   | `docs/thangquang09/01_architecture.md` + `03_interview_qna.md` *(local only)* |
+| Review code mới   | `_tech_specs/01_state_model.md` + `_tech_specs/02_worker_contracts.md`  |
+| Debug production  | `_tech_specs/03_observability.md`                                       |
+| Thay đổi kiến trúc | `_tech_specs/01_state_model.md` → `_tech_specs/02_worker_contracts.md` |
 
 
 ---
