@@ -111,7 +111,11 @@ def _render_result(result: dict) -> None:
     col5.metric("Tokens", int(result.get("total_token_usage", 0) or 0))
     col6.metric("Cost (USD)", f"{float(result.get('total_cost_usd', 0) or 0):.6f}")
 
-    st.write(result.get("answer", "No answer"))
+    report_markdown = result.get("report_markdown")
+    if report_markdown:
+        st.markdown(report_markdown)
+    else:
+        st.write(result.get("answer", "No answer"))
     st.caption(f"Run ID: {result.get('run_id', '-')}")
 
     # Render visualization if present

@@ -40,6 +40,28 @@ def _extract_first_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _build_xml_database_context(
+    overview: dict[str, Any],
+    table_contexts: dict[str, str] | None = None,
+) -> str:
+    from app.tools.table_context import (
+        TableEntry,
+        build_full_xml_context,
+        format_schema_columns,
+    )
+
+    contexts = table_contexts or {}
+    entries = [
+        TableEntry(
+            table_name=table["table_name"],
+            schema=format_schema_columns(table["columns"]),
+            business_context=contexts.get(table["table_name"], ""),
+        )
+        for table in overview.get("tables", [])
+    ]
+    return build_full_xml_context(entries)
+
+
 def _generate_data_summary(rows: list[dict[str, Any]], query: str) -> str:
     """Generate a meaningful summary from query results when LLM analysis fails."""
     if not rows:
@@ -177,31 +199,21 @@ def task_planner(state: AgentState) -> AgentState:
     # Build XML database context for v2 (no standalone get_schema node runs before task_planner)
     xml_database_context = state.get("xml_database_context", "")
     table_contexts = state.get("table_contexts") or {}
-    if table_contexts and not xml_database_context:
+    if not xml_database_context:
         try:
             from pathlib import Path as _Path
 
             from app.tools.get_schema import get_schema_overview as _get_schema_overview
-            from app.tools.table_context import (
-                TableEntry,
-                build_full_xml_context,
-                format_schema_columns,
-            )
 
             _db = _Path(target_db_path) if target_db_path else None
             _overview = _get_schema_overview(db_path=_db)
-            _entries = [
-                TableEntry(
-                    table_name=t["table_name"],
-                    schema=format_schema_columns(t["columns"]),
-                    business_context=table_contexts.get(t["table_name"], ""),
-                )
-                for t in _overview.get("tables", [])
-            ]
-            xml_database_context = build_full_xml_context(_entries)
+            xml_database_context = _build_xml_database_context(
+                _overview,
+                table_contexts,
+            )
             logger.info(
                 "task_planner: built XML context for {n} tables",
-                n=len(_entries),
+                n=len(_overview.get("tables", [])),
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -811,22 +823,8 @@ def _ensure_v3_schema_context(state: AgentState) -> AgentState:
 
     xml_database_context = state.get("xml_database_context", "")
     table_contexts = state.get("table_contexts") or {}
-    if table_contexts and not xml_database_context:
-        from app.tools.table_context import (
-            TableEntry,
-            build_full_xml_context,
-            format_schema_columns,
-        )
-
-        entries = [
-            TableEntry(
-                table_name=t["table_name"],
-                schema=format_schema_columns(t["columns"]),
-                business_context=table_contexts.get(t["table_name"], ""),
-            )
-            for t in overview.get("tables", [])
-        ]
-        xml_database_context = build_full_xml_context(entries)
+    if not xml_database_context:
+        xml_database_context = _build_xml_database_context(overview, table_contexts)
 
     enriched_state = dict(state)
     enriched_state["schema_context"] = schema_context
@@ -1296,6 +1294,7 @@ def leader_agent(state: AgentState) -> AgentState:
             return {
                 "final_answer": answer,
                 "final_payload": payload,
+                "response_mode": "answer",
                 "intent": intent,
                 "intent_reason": str(parsed.get("reason", "leader_finalized")),
                 "errors": sql_artifacts.get("errors", []),
@@ -1409,6 +1408,24 @@ def leader_agent(state: AgentState) -> AgentState:
                 ],
             }
             inferred_intent = "sql" if inferred_intent == "unknown" else inferred_intent
+        elif tool_name == "generate_report":
+            used_high_level_tools.append(tool_name)
+            leader_tool_history.append(
+                {
+                    "tool": tool_name,
+                    "status": "ok",
+                    "reason": reason,
+                    "source": "leader_agent",
+                }
+            )
+            return {
+                "response_mode": "report",
+                "report_request": tool_query,
+                "report_status": "planning",
+                "critic_iteration": 0,
+                "tool_history": leader_tool_history,
+                "step_count": state.get("step_count", 0) + step,
+            }
         else:
             break
 
@@ -1454,6 +1471,7 @@ def leader_agent(state: AgentState) -> AgentState:
     return {
         "final_answer": answer,
         "final_payload": payload,
+        "response_mode": "answer",
         "intent": "sql",
         "intent_reason": "leader_fallback_sql_analyst",
         "errors": fallback_result.get("errors", []),

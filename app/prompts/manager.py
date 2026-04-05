@@ -16,6 +16,9 @@ from app.prompts.decomposition import TASK_DECOMPOSITION_PROMPT
 from app.prompts.evaluation import GROUNDEDNESS_EVALUATION_PROMPT
 from app.prompts.fallback import FALLBACK_ASSISTANT_PROMPT
 from app.prompts.leader import LEADER_AGENT_PROMPT_DEFINITION
+from app.prompts.report_critic import REPORT_CRITIC_PROMPT_DEFINITION
+from app.prompts.report_planner import REPORT_PLANNER_PROMPT_DEFINITION
+from app.prompts.report_writer import REPORT_WRITER_PROMPT_DEFINITION
 from app.prompts.router import ROUTER_PROMPT_DEFINITION
 from app.prompts.sql_worker import SQL_WORKER_GENERATION_PROMPT
 from app.prompts.synthesis import SYNTHESIS_PROMPT_DEFINITION
@@ -253,11 +256,59 @@ class PromptManager:
             {"query": query, "schema": schema},
         )
 
+    def report_planner_messages(
+        self,
+        query: str,
+        session_context: str = "",
+        xml_database_context: str = "",
+    ) -> list[dict[str, str]]:
+        return self._compile_prompt(
+            REPORT_PLANNER_PROMPT_DEFINITION,
+            {
+                "query": query,
+                "session_context": session_context or "",
+                "xml_database_context": xml_database_context or "",
+            },
+        )
+
+    def report_writer_messages(
+        self,
+        query: str,
+        report_plan: str,
+        section_results: str,
+        critic_feedback: str = "",
+    ) -> list[dict[str, str]]:
+        return self._compile_prompt(
+            REPORT_WRITER_PROMPT_DEFINITION,
+            {
+                "query": query,
+                "report_plan": report_plan,
+                "section_results": section_results,
+                "critic_feedback": critic_feedback or "",
+            },
+        )
+
+    def report_critic_messages(
+        self,
+        query: str,
+        section_results: str,
+        report_draft: str,
+    ) -> list[dict[str, str]]:
+        return self._compile_prompt(
+            REPORT_CRITIC_PROMPT_DEFINITION,
+            {
+                "query": query,
+                "section_results": section_results,
+                "report_draft": report_draft,
+            },
+        )
+
     def sql_worker_messages(
         self,
         query: str,
         session_context: str = "",
         xml_database_context: str = "",
+        schema_context: str = "",
         previous_sql: str | None = None,
         error_message: str | None = None,
     ) -> list[dict[str, str]]:
@@ -269,6 +320,7 @@ class PromptManager:
                     "query": query,
                     "session_context": session_context or "",
                     "xml_database_context": xml_database_context or "",
+                    "schema_context": schema_context or "",
                     "previous_sql": previous_sql,
                     "error_message": error_message,
                 },
@@ -280,6 +332,7 @@ class PromptManager:
                 "query": query,
                 "session_context": session_context or "",
                 "xml_database_context": xml_database_context or "",
+                "schema_context": schema_context or "",
             },
         )
 

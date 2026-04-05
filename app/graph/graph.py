@@ -10,6 +10,7 @@ from app.graph.nodes import (
     leader_agent,
     process_uploaded_files,
 )
+from app.graph.report_subgraph import build_report_subgraph
 from app.graph.state import AgentState, GraphInputState, GraphOutputState
 from app.observability import get_current_tracer
 
@@ -61,6 +62,7 @@ def build_sql_v3_graph(checkpointer=None):
         "leader_agent",
         _instrument_node("leader_agent", leader_agent, "agent"),
     )
+    builder.add_node("report_subgraph", build_report_subgraph())
     builder.add_node(
         "capture_action_node",
         _instrument_node("capture_action_node", capture_action_node, "memory"),
@@ -73,8 +75,24 @@ def build_sql_v3_graph(checkpointer=None):
     builder.add_edge(START, "process_uploaded_files")
     builder.add_edge("process_uploaded_files", "inject_session_context")
     builder.add_edge("inject_session_context", "leader_agent")
-    builder.add_edge("leader_agent", "capture_action_node")
+    builder.add_conditional_edges(
+        "leader_agent",
+        _route_after_leader,
+        {
+            "report_subgraph": "report_subgraph",
+            "capture_action_node": "capture_action_node",
+        },
+    )
+    builder.add_edge("report_subgraph", "capture_action_node")
     builder.add_edge("capture_action_node", "compact_and_save_memory")
     builder.add_edge("compact_and_save_memory", END)
 
     return builder.compile(checkpointer=checkpointer or InMemorySaver())
+
+
+def _route_after_leader(state: AgentState) -> str:
+    return (
+        "report_subgraph"
+        if state.get("response_mode") == "report"
+        else "capture_action_node"
+    )

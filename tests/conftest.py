@@ -15,6 +15,8 @@ MULTI_QUERY = (
     '"Có bao nhiêu học sinh đã hoàn thành khóa luyện thi (test prep course = \'completed\')?"'
 )
 
+REPORT_QUERY = "Hãy viết báo cáo phân tích chi tiết về tập dữ liệu này"
+
 
 class FakeV3LLMClient:
     def chat_completion(self, **kwargs):  # noqa: ANN003
@@ -24,7 +26,17 @@ class FakeV3LLMClient:
 
         if "You are the supervisor of a hierarchical data analyst system." in system:
             return self._leader_response(user)
-        if "You are a SQL expert. Generate a read-only SQL query" in system:
+        if "You are a data analysis report planner." in system:
+            return self._report_planner_response(user)
+        if "You are a professional data analyst report writer." in system:
+            return self._report_writer_response(user)
+        if "You are a report critic for a data analysis system." in system:
+            return self._report_critic_response(user)
+        if (
+            "You are a SQL expert. Generate a read-only SQL query" in system
+            or "You are a PostgreSQL expert. Generate a read-only SQL query" in system
+            or "You are a PostgreSQL expert. Fix the failed SQL query below." in system
+        ):
             return self._sql_response(user)
         if "You are a helpful data analyst assistant." in system:
             return self._synthesis_response(user)
@@ -64,6 +76,13 @@ class FakeV3LLMClient:
                     "args": {"query": "Retention D1 là gì?"},
                     "reason": "Definition request",
                 }
+            elif REPORT_QUERY in user:
+                payload = {
+                    "action": "tool",
+                    "tool": "generate_report",
+                    "args": {"query": REPORT_QUERY},
+                    "reason": "Explicit report request",
+                }
             else:
                 payload = {
                     "action": "tool",
@@ -82,13 +101,60 @@ class FakeV3LLMClient:
             }
         return {"choices": [{"message": {"content": json.dumps(payload, ensure_ascii=False)}}]}
 
+    def _report_planner_response(self, user: str) -> dict:
+        payload = {
+            "title": "Báo cáo phân tích dữ liệu học sinh",
+            "executive_summary_instruction": "Tóm tắt các phát hiện quan trọng nhất.",
+            "sections": [
+                {
+                    "section_id": "1",
+                    "title": "Cơ cấu giới tính",
+                    "analysis_query": "Có bao nhiêu học sinh nam và bao nhiêu học sinh nữ trong tập dữ liệu này?",
+                },
+                {
+                    "section_id": "2",
+                    "title": "Điểm toán trung bình",
+                    "analysis_query": "Điểm toán (math score) trung bình của toàn bộ học sinh là bao nhiêu?",
+                },
+            ],
+            "conclusion_instruction": "Kết luận ngắn gọn dựa trên dữ liệu.",
+        }
+        return {"choices": [{"message": {"content": json.dumps(payload, ensure_ascii=False)}}]}
+
+    def _report_writer_response(self, user: str) -> dict:
+        content = (
+            "# Báo cáo phân tích dữ liệu học sinh\n\n"
+            "## Tóm tắt điều hành\n\n"
+            "Dữ liệu cho thấy có 518 học sinh nữ và 482 học sinh nam. "
+            "Điểm toán trung bình của toàn bộ học sinh là 66.08.\n\n"
+            "## Cơ cấu giới tính\n\n"
+            "Có 518 học sinh nữ và 482 học sinh nam trong tập dữ liệu này.\n\n"
+            "## Điểm toán trung bình\n\n"
+            "Điểm toán trung bình của toàn bộ học sinh là 66.08.\n"
+        )
+        return {"choices": [{"message": {"content": content}}]}
+
+    def _report_critic_response(self, user: str) -> dict:
+        payload = {
+            "verdict": "APPROVED",
+            "issues": [],
+            "summary": "Draft is grounded in the provided SQL evidence.",
+        }
+        return {"choices": [{"message": {"content": json.dumps(payload, ensure_ascii=False)}}]}
+
     def _sql_response(self, user: str) -> dict:
         query = self._extract_sql_question(user)
         sql = "SELECT 1 AS value"
-        if "học sinh nam và học sinh nữ" in query or "Có bao nhiêu học sinh nam" in query:
+        if (
+            "học sinh nam và học sinh nữ" in query
+            or "Có bao nhiêu học sinh nam" in query
+            or "giới tính nam" in query
+        ):
             sql = (
-                "SELECT gender, COUNT(*) AS student_count "
-                "FROM Performance_of_Stuednts GROUP BY gender"
+                "SELECT COUNT(*) AS male_students "
+                "FROM Performance_of_Stuednts WHERE gender = 'male'"
+                if "giới tính nam" in query
+                else "SELECT gender, COUNT(*) AS student_count FROM Performance_of_Stuednts GROUP BY gender"
             )
         elif "Điểm toán" in query and "trung bình" in query:
             sql = 'SELECT AVG("math score") AS average_math_score FROM Performance_of_Stuednts'
@@ -110,6 +176,8 @@ class FakeV3LLMClient:
     def _synthesis_response(self, user: str) -> dict:
         if "Số lượng học sinh nam và học sinh nữ" in user or "Có bao nhiêu học sinh nam" in user:
             answer = "Có 518 học sinh nữ và 482 học sinh nam trong tập dữ liệu này."
+        elif "giới tính nam" in user:
+            answer = "Có 482 người giới tính nam trong dữ liệu này."
         elif "Điểm toán" in user and "trung bình" in user:
             answer = "Điểm toán trung bình của toàn bộ học sinh là 66.08."
         elif "khóa luyện thi" in user or "test prep course" in user:
@@ -161,6 +229,14 @@ class FakeV3LLMClient:
             )
         if "Retention D1 là gì?" in query:
             return "Không có thông tin"
+        if REPORT_QUERY in query:
+            return (
+                "# Báo cáo phân tích dữ liệu học sinh\n\n"
+                "Dữ liệu cho thấy có 518 học sinh nữ và 482 học sinh nam. "
+                "Điểm toán trung bình của toàn bộ học sinh là 66.08."
+            )
+        if "giới tính nam" in query:
+            return "Có 482 người giới tính nam trong dữ liệu này."
         if "Điểm toán trung bình" in query or "math score" in query:
             return "Điểm toán trung bình của toàn bộ học sinh là 66.08."
         if "Tính tổng điểm 3 môn trung bình theo từng nhóm" in query:
@@ -168,6 +244,24 @@ class FakeV3LLMClient:
         if "chỉ tính cho các học sinh nam" in query:
             return "Chỉ tính cho học sinh nam thì có 482 học sinh."
         return "Không có thông tin."
+
+
+_TEST_THREAD_IDS = [
+    "v3-single-query",
+    "v3-multi-query",
+    "v3-rag-stub",
+    "v3-simple-male-query",
+    "v3-report-query",
+    "v3-retry-test-1",
+    "v3-retry-test-2",
+    "v3-retry-test-3",
+    # backend API tests
+    "api-v3",
+    "api-v2-rejected",
+    # observability tests
+    "trace-v3-parallel",
+    "trace-v3-single",
+]
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -183,6 +277,21 @@ def reset_settings_cache():
     load_settings.cache_clear()
     yield
     load_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def clean_test_conversation_memory():
+    """Clear all test thread IDs before every test.
+
+    Prevents UNIQUE constraint violations in conversation_memory when the
+    same thread_id accumulates turns across repeated test runs.
+    """
+    from app.memory.conversation_store import get_conversation_memory_store
+
+    store = get_conversation_memory_store()
+    for tid in _TEST_THREAD_IDS:
+        store.clear_thread(tid)
+    yield
 
 
 @pytest.fixture

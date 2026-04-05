@@ -7,6 +7,8 @@ from typing import Annotated, Any, Literal, TypedDict
 Intent = Literal["sql", "rag", "mixed", "unknown"]
 Confidence = Literal["high", "medium", "low"]
 ContextType = Literal["user_provided", "csv_auto", "mixed", "default"]
+ResponseMode = Literal["answer", "report"]
+ReportStatus = Literal["planning", "executing", "writing", "critiquing", "done", "failed"]
 TaskType = Literal[
     "sql_query", "data_analysis", "context_lookup", "standalone_visualization"
 ]
@@ -40,6 +42,8 @@ class TaskState(TypedDict, total=False):
     inherited_sql: str  # SQL inherited from previous turn for continuity
     parameter_changes: dict[str, Any]  # Parameter changes for inherited SQL
     xml_database_context: str  # XML block injected into SQL agent system prompt
+    sql_retry_count: int  # Retry counter for self-correction inside worker
+    sql_last_error: str | None  # Error context for self-correction
     tool_history: list[dict[str, Any]]  # Propagate tool usage from subgraph nodes
     result_ref: dict[str, Any]  # Result store reference from task execution
     run_id: str
@@ -48,6 +52,7 @@ class TaskState(TypedDict, total=False):
 
 class AnswerPayload(TypedDict, total=False):
     answer: str
+    report_markdown: str | None
     evidence: list[str]
     confidence: Confidence
     used_tools: list[str]
@@ -71,18 +76,13 @@ class AgentState(TypedDict, total=False):
     intent_reason: str
     messages: Annotated[list[dict[str, Any]], operator.add]
     schema_context: str
-    dataset_context: str
     user_semantic_context: str
-    retrieved_dataset_context: list[dict[str, Any]]
     context_type: ContextType
     needs_semantic_context: bool
-    detected_intent: list[str]
     uploaded_files: list[str]
     uploaded_file_data: list[dict[str, Any]]
     registered_tables: list[str]
     retrieved_context: list[dict[str, Any]]
-    resolved_context: str
-    conflict_notes: list[str]
     generated_sql: str
     validated_sql: str
     sql_result: dict[str, Any]
@@ -118,6 +118,17 @@ class AgentState(TypedDict, total=False):
     result_ref: dict[
         str, Any
     ]  # {result_id, row_count, columns, sample, stats, has_full_data, full_data_path}
+    response_mode: ResponseMode
+    report_request: str
+    report_plan: "ReportPlan"
+    report_sections: list["ReportSection"]
+    report_draft: str
+    report_final: str
+    critic_feedback: str
+    critic_iteration: int
+    report_status: ReportStatus
+    report_feedback_hash: str
+    report_draft_hash: str
 
 
 class GraphInputState(TypedDict, total=False):
@@ -143,3 +154,25 @@ class GraphOutputState(TypedDict, total=False):
     execution_mode: ExecutionMode
     aggregate_analysis: dict[str, Any]
     tool_history: list[dict[str, Any]]
+    response_mode: ResponseMode
+
+
+class ReportSection(TypedDict, total=False):
+    section_id: str
+    title: str
+    analysis_query: str
+    sql_result: dict[str, Any]
+    result_ref: dict[str, Any] | None
+    visualization: dict[str, Any] | None
+    narrative: str
+    status: Literal["pending", "done", "failed"]
+    error: str | None
+    generated_sql: str
+    validated_sql: str
+
+
+class ReportPlan(TypedDict, total=False):
+    title: str
+    executive_summary_instruction: str
+    sections: list[ReportSection]
+    conclusion_instruction: str

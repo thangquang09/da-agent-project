@@ -81,6 +81,9 @@ def run_query(
         payload["run_id"] = output.get("run_id", run_cfg.run_id)
         payload["intent"] = output.get("intent", payload.get("intent", "unknown"))
         payload["intent_reason"] = output.get("intent_reason", "")
+        payload["response_mode"] = output.get(
+            "response_mode", payload.get("response_mode", "answer")
+        )
         payload["errors"] = output.get("errors", [])
         payload["step_count"] = output.get("step_count", payload.get("step_count"))
         payload["tool_history"] = output.get("tool_history", [])
@@ -104,6 +107,7 @@ def run_query(
             "generated_sql": "",
             "intent": "unknown",
             "intent_reason": "",
+            "response_mode": "answer",
             "errors": [{"category": "SYNTHESIS_ERROR", "message": str(exc)}],
             "step_count": 0,
             "tool_history": [],

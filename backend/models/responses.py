@@ -26,8 +26,10 @@ class QueryResponse(BaseModel):
     run_id: str = ""
     thread_id: str = ""
     answer: str = ""
+    report_markdown: str | None = None
     intent: str = "unknown"
     intent_reason: str = ""
+    response_mode: str = "answer"
     confidence: str = "low"
     used_tools: list[str] = []
     generated_sql: str = ""

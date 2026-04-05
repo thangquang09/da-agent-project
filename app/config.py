@@ -40,7 +40,7 @@ class Settings:
     default_router_model: str
     default_synthesis_model: str
     available_models: tuple[str, ...]
-    sqlite_db_path: str
+    database_url: str
     enable_llm_sql_generation: bool
     trace_jsonl_path: str
     enable_langfuse: bool
@@ -64,6 +64,9 @@ class Settings:
     model_task_planner: str
     model_aggregation: str
     model_fallback: str
+    model_report_planner: str
+    model_report_writer: str
+    model_report_critic: str
 
 
 def _env_bool(value: str | None, default: bool) -> bool:
@@ -103,6 +106,9 @@ def load_settings() -> Settings:
     model_fallback = os.getenv(
         "MODEL_FALLBACK", "gh/gpt-4o-mini"
     )  # Keep mini for simple fallback
+    model_report_planner = os.getenv("MODEL_REPORT_PLANNER", model_leader)
+    model_report_writer = os.getenv("MODEL_REPORT_WRITER", model_synthesis)
+    model_report_critic = os.getenv("MODEL_REPORT_CRITIC", model_leader)
 
     settings = Settings(
         llm_api_url=os.getenv(
@@ -113,9 +119,9 @@ def load_settings() -> Settings:
         default_router_model=default_router_model,
         default_synthesis_model=default_synthesis_model,
         available_models=tuple(models),
-        sqlite_db_path=os.getenv(
-            "SQLITE_DB_PATH",
-            str(PROJECT_ROOT / "data" / "warehouse" / "analytics.db"),
+        database_url=os.getenv(
+            "DATABASE_URL",
+            "postgresql://postgres:postgres@localhost:5432/postgres",
         ),
         enable_llm_sql_generation=_env_bool(
             os.getenv("ENABLE_LLM_SQL_GENERATION"), True
@@ -152,6 +158,9 @@ def load_settings() -> Settings:
         model_task_planner=model_task_planner,
         model_aggregation=model_aggregation,
         model_fallback=model_fallback,
+        model_report_planner=model_report_planner,
+        model_report_writer=model_report_writer,
+        model_report_critic=model_report_critic,
     )
 
     if not settings.llm_api_key:

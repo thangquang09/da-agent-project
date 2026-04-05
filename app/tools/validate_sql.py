@@ -28,7 +28,8 @@ FORBIDDEN_SQL_PATTERNS = [
 ]
 READ_QUERY_PATTERN = re.compile(r"^\s*(SELECT|WITH)\b", flags=re.IGNORECASE | re.DOTALL)
 TABLE_TOKEN_PATTERN = re.compile(
-    r"\b(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)\b", flags=re.IGNORECASE
+    r'\b(?:FROM|JOIN)\s+(?:"([a-zA-Z_][a-zA-Z0-9_]*)"|([a-zA-Z_][a-zA-Z0-9_]*))',
+    flags=re.IGNORECASE,
 )
 # Pattern to match the first CTE after WITH (supports RECURSIVE)
 CTE_NAME_PATTERN = re.compile(
@@ -124,9 +125,11 @@ def validate_sql(
         # Main application: use PostgreSQL
         table_names = {tbl.lower() for tbl in list_tables()}
 
-    detected_tables = [
-        name.lower() for name in TABLE_TOKEN_PATTERN.findall(sanitized_sql)
-    ]
+    detected_tables = []
+    for quoted_name, unquoted_name in TABLE_TOKEN_PATTERN.findall(sanitized_sql):
+        table_name = quoted_name or unquoted_name
+        if table_name:
+            detected_tables.append(table_name.lower())
     cte_names = _extract_cte_names(sanitized_sql)
 
     if not sanitized_sql:

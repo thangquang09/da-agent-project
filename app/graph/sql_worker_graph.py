@@ -170,6 +170,7 @@ def _task_generate_sql(task_state: TaskState) -> dict[str, Any]:
             query=query,
             session_context=session_context,
             xml_database_context=task_state.get("xml_database_context", ""),
+            schema_context=task_state.get("schema_context", ""),
             previous_sql=task_state.get("generated_sql") if task_state.get("sql_last_error") else None,
             error_message=task_state.get("sql_last_error"),
         )
