@@ -136,6 +136,11 @@ class AgentState(TypedDict, total=False):
     # Grounding Group (v4) — set by task_grounder node
     artifacts: Annotated[list[WorkerArtifact], operator.add]  # Worker artifacts accumulated
     task_profile: TaskProfile  # Grounded task profile from grounder
+    # v3 State fields
+    execution_mode: str  # "linear" | "parallel" | "leader_loop" — set by task planner
+    continuity_context: dict[
+        str, Any
+    ]  # Follow-up query context (is_continuation, inherited_action, parameter_changes)
     artifact_evaluation: dict[str, Any]  # Decision from artifact_evaluator node
     clarification_question: str  # Human question from clarify decision; empty = no clarification needed
     # Session memory fields

@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import psycopg
 import sqlglot
 
 from app.config import load_settings
