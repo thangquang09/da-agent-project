@@ -14,6 +14,7 @@ from app.prompts.manager import PromptManager, prompt_manager
 from app.prompts.router import ROUTER_PROMPT_DEFINITION
 from app.prompts.sql_worker import SQL_WORKER_GENERATION_PROMPT
 from app.prompts.synthesis import SYNTHESIS_PROMPT_DEFINITION
+from app.prompts.task_grounder import TASK_GROUNDER_PROMPT
 from app.prompts.visualization import VISUALIZATION_CODE_GENERATION_PROMPT
 
 __all__ = [
@@ -35,4 +36,5 @@ __all__ = [
     "VISUALIZATION_CODE_GENERATION_PROMPT",
     "CONTINUITY_DETECTION_PROMPT_DEFINITION",
     "GROUNDEDNESS_EVALUATION_PROMPT",
+    "TASK_GROUNDER_PROMPT",
 ]

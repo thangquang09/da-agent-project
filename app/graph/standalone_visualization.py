@@ -15,11 +15,43 @@ from app.tools.visualization import (
 )
 
 
-def standalone_visualization_worker(task_state: TaskState) -> dict[str, Any]:
-    """Worker for standalone visualization tasks with user-provided raw data.
+def _normalize_raw_data(raw_data: list[Any]) -> list[dict[str, Any]]:
+    """Normalize raw numeric data to chart-ready format.
 
-    This handles cases where users provide data directly in their query,
-    e.g., "vẽ biểu đồ với các giá trị 10, 20, 30"
+    Accepts a list of numbers (e.g., [10, 30, 60]) and converts to
+    list of dicts with Category/Value keys for visualization.
+
+    Also accepts pre-formatted list[dict] (passthrough).
+    """
+    if not raw_data:
+        return []
+
+    # Already formatted
+    if isinstance(raw_data[0], dict):
+        return raw_data  # type: ignore[return-value]
+
+    result: list[dict[str, Any]] = []
+    for idx, val in enumerate(raw_data, start=1):
+        try:
+            result.append(
+                {"Category": f"Category {idx}", "Value": float(val)}
+            )
+        except (ValueError, TypeError):
+            continue
+    return result
+
+
+def inline_data_worker(task_state: TaskState) -> dict[str, Any]:
+    """InlineDataWorker — handles visualization for user-provided data.
+    
+    This worker:
+    - Accepts raw data directly from the query (inline_data source)
+    - NEVER generates SQL
+    - NEVER calls validate_sql()
+    - NEVER touches the database
+    - Returns WorkerArtifact with artifact_type="chart"
+    
+    Data source: task_state.get("raw_data") — list of dicts with "value" keys
     """
     query = task_state.get("query", "")
     raw_data = task_state.get("raw_data", [])
@@ -31,6 +63,13 @@ def standalone_visualization_worker(task_state: TaskState) -> dict[str, Any]:
                 "error": "No raw data provided for visualization",
             },
             "status": "failed",
+            # WorkerArtifact fields
+            "artifact_type": "chart",
+            "artifact_status": "failed",
+            "artifact_payload": {"error": "No raw data provided"},
+            "artifact_evidence": {"source": "input_validation"},
+            "artifact_terminal": False,
+            "artifact_recommended_action": "clarify",
         }
 
     if not is_visualization_available():
@@ -40,6 +79,13 @@ def standalone_visualization_worker(task_state: TaskState) -> dict[str, Any]:
                 "error": "Visualization service not available (E2B not configured)",
             },
             "status": "skipped",
+            # WorkerArtifact fields
+            "artifact_type": "chart",
+            "artifact_status": "failed",
+            "artifact_payload": {"error": "Visualization service not available"},
+            "artifact_evidence": {"source": "e2b_check"},
+            "artifact_terminal": False,
+            "artifact_recommended_action": "clarify",
         }
 
     try:
@@ -53,6 +99,13 @@ def standalone_visualization_worker(task_state: TaskState) -> dict[str, Any]:
                     "error": "Failed to generate visualization code",
                 },
                 "status": "failed",
+                # WorkerArtifact fields
+                "artifact_type": "chart",
+                "artifact_status": "failed",
+                "artifact_payload": {"error": "Failed to generate visualization code"},
+                "artifact_evidence": {"source": "llm_code_generation"},
+                "artifact_terminal": False,
+                "artifact_recommended_action": "clarify",
             }
 
         # Step 2: Upload raw data as CSV to E2B sandbox
@@ -74,6 +127,13 @@ def standalone_visualization_worker(task_state: TaskState) -> dict[str, Any]:
                     "code_executed": python_code,
                 },
                 "status": "failed",
+                # WorkerArtifact fields
+                "artifact_type": "chart",
+                "artifact_status": "failed",
+                "artifact_payload": {"error": f"{execution.error.name}: {execution.error.value}"},
+                "artifact_evidence": {"source": "code_execution", "error_type": execution.error.name},
+                "artifact_terminal": False,
+                "artifact_recommended_action": "clarify",
             }
 
         # Step 4: Extract image
@@ -87,6 +147,13 @@ def standalone_visualization_worker(task_state: TaskState) -> dict[str, Any]:
                     "code_executed": python_code,
                 },
                 "status": "failed",
+                # WorkerArtifact fields
+                "artifact_type": "chart",
+                "artifact_status": "failed",
+                "artifact_payload": {"error": "No chart generated"},
+                "artifact_evidence": {"source": "image_extraction"},
+                "artifact_terminal": False,
+                "artifact_recommended_action": "clarify",
             }
 
         return {
@@ -96,8 +163,25 @@ def standalone_visualization_worker(task_state: TaskState) -> dict[str, Any]:
                 "image_format": image_format,
                 "code_executed": python_code,
                 "execution_time_ms": 0.0,
+                "terminal": True,
+                "recommended_next_action": "finalize",
             },
             "status": "success",
+            # WorkerArtifact fields
+            "artifact_type": "chart",
+            "artifact_status": "success",
+            "artifact_payload": {
+                "image_data": image_data,
+                "image_format": image_format,
+                "chart_type": "unknown",  # Would need LLM to determine
+                "normalized_rows": len(raw_data),
+            },
+            "artifact_evidence": {
+                "source": "inline_data",
+                "normalized_rows": len(raw_data),
+            },
+            "artifact_terminal": True,
+            "artifact_recommended_action": "finalize",
         }
 
     except Exception as exc:
@@ -125,6 +209,13 @@ def standalone_visualization_worker(task_state: TaskState) -> dict[str, Any]:
                 "error": user_error,
             },
             "status": "failed",
+            # WorkerArtifact fields
+            "artifact_type": "chart",
+            "artifact_status": "failed",
+            "artifact_payload": {"error": user_error},
+            "artifact_evidence": {"source": "exception_handler"},
+            "artifact_terminal": False,
+            "artifact_recommended_action": "clarify",
         }
 
 
@@ -210,3 +301,7 @@ def _extract_image(execution: Any) -> tuple[bytes | None, str]:
         if result.jpeg:
             return base64.b64decode(result.jpeg), "jpeg"
     return None, ""
+
+
+# Backward compatibility alias
+standalone_visualization_worker = inline_data_worker

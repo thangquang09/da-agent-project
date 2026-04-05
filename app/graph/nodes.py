@@ -813,6 +813,226 @@ def _summarize_tool_result(tool_name: str, result: dict[str, Any]) -> str:
     return json.dumps(result, ensure_ascii=False, indent=2)[:1500]
 
 
+def _generate_clarification_question(
+    user_query: str,
+    task_profile: dict[str, Any],
+    collected: set[str],
+    missing: set[str],
+) -> str:
+    """Generate a human-readable clarification question based on task profile.
+
+    This replaces the old "clarify" decision with a real question the user
+    sees, giving them a chance to refine an ambiguous query before the agent
+    proceeds with wrong assumptions.
+    """
+    task_mode = task_profile.get("task_mode", "unknown")
+    data_source = task_profile.get("data_source", "unknown")
+    confidence = task_profile.get("confidence", "medium")
+    reasoning = task_profile.get("reasoning", "")
+
+    # Heuristics to produce a specific question
+    if task_mode == "ambiguous":
+        if data_source == "mixed":
+            return (
+                f"Tôi không chắc câu hỏi của bạn cần lấy dữ liệu từ đâu. "
+                f"Bạn muốn tôi truy vấn database chính, xem file bạn upload, "
+                f"hay hỏi về kiến thức/tài liệu? "
+                f"(Câu hỏi gốc: \"{user_query}\")"
+            )
+        elif data_source == "unknown":
+            return (
+                f"Tôi không rõ câu hỏi này liên quan đến loại dữ liệu nào. "
+                f"Bạn có thể nói rõ hơn bạn muốn phân tích dữ liệu, "
+                f"tra cứu định nghĩa, hay xem nội dung tài liệu không?"
+            )
+        else:
+            return (
+                f"Câu hỏi của bạn hơi mơ hồ: \"{user_query}\". "
+                f"Bạn có thể diễn đạt lại cụ thể hơn không?"
+            )
+    elif confidence == "low":
+        return (
+            f"Tôi không chắc về câu hỏi của bạn. "
+            f"Bạn có thể nói rõ hơn \"{user_query}\" không?"
+        )
+    elif missing:
+        cap_labels = {
+            "sql_result": "dữ liệu từ database",
+            "rag_context": "thông tin từ tài liệu",
+            "chart": "biểu đồ",
+            "report_draft": "báo cáo",
+        }
+        missing_labels = [cap_labels.get(m, m) for m in missing]
+        missing_text = ", ".join(missing_labels)
+        return (
+            f"Để trả lời đầy đủ, tôi cần thêm: {missing_text}. "
+            f"Bạn muốn tôi bổ sung những phần này không?"
+        )
+    else:
+        return (
+            f"Câu hỏi \"{user_query}\" chưa rõ ràng. "
+            f"Bạn có thể cung cấp thêm chi tiết không?"
+        )
+
+
+def clarify_question_node(state: AgentState) -> AgentState:
+    """Graph node that halts execution and surfaces a clarification question to the user.
+
+    This node is entered when artifact_evaluator returns decision="wait_for_user".
+    The clarification_question field is already set by _evaluate_artifacts.
+
+    Returns state with:
+    - final_answer = the clarification question (shown to user)
+    - confidence = "low" (uncertain)
+    - step_count incremented
+
+    The caller (frontend/CLI) should detect that final_answer starts with
+    "[CLARIFY]" and treat it as a clarification prompt rather than a final answer.
+    """
+    clarification_question = state.get("clarification_question", "")
+    user_query = state.get("user_query", "")
+
+    # Prefix marker so the caller can distinguish clarification from a real answer
+    prefixed_question = f"[CLARIFY] {clarification_question}"
+
+    logger.info(
+        "Clarification needed: {question}",
+        question=clarification_question[:100],
+    )
+
+    return {
+        "final_answer": prefixed_question,
+        "clarification_question": clarification_question,
+        "confidence": "low",
+        "step_count": state.get("step_count", 0) + 1,
+        "tool_history": [
+            {
+                "tool": "clarify_question_node",
+                "decision": "wait_for_user",
+                "question": clarification_question[:200],
+            }
+        ],
+    }
+
+
+def _evaluate_artifacts(state: AgentState) -> AgentState:
+    """Deterministic evaluation of collected artifacts.
+
+    Checks:
+    1. All required capabilities from TaskProfile are covered by artifacts
+    2. Any failed artifact with retry recommendation
+    3. Terminal artifact present → can finalize
+    4. Max steps exceeded → force finalize
+    5. Ambiguous task (low confidence) → ask user to clarify
+    """
+    task_profile = state.get("task_profile") or {}
+    artifacts = state.get("artifacts", [])
+    required_caps = set(task_profile.get("required_capabilities", []))
+    task_mode = task_profile.get("task_mode", "simple")
+    task_confidence = task_profile.get("confidence", "high")
+    user_query = state.get("user_query", "")
+
+    # Map capabilities to artifact types
+    CAPABILITY_TO_TYPE = {
+        "sql": "sql_result",
+        "rag": "rag_context",
+        "visualization": "chart",
+        "report": "report_draft",
+    }
+
+    # Check coverage
+    collected_types = {a.get("artifact_type") for a in artifacts}
+    needed_types = {CAPABILITY_TO_TYPE.get(c) for c in required_caps if c != "report"}
+
+    # If report needed, check report_draft
+    if "report" in required_caps:
+        needed_types.add("report_draft")
+
+    missing_types = needed_types - collected_types
+
+    # Check for failed artifacts with retry
+    failed_with_retry = [
+        a for a in artifacts
+        if a.get("status") == "failed" and a.get("recommended_next_action") in ("retry_sql", "ask_rag")
+    ]
+
+    # Check for terminal artifact
+    terminal_artifact = next((a for a in artifacts if a.get("terminal")), None)
+
+    # Determine decision
+    decision: Literal["continue", "finalize", "retry", "wait_for_user"] = "continue"
+    reason = ""
+    clarification_question = ""
+
+    if terminal_artifact:
+        decision = "finalize"
+        reason = f"terminal artifact: {terminal_artifact.get('artifact_type')}"
+    elif failed_with_retry:
+        decision = "retry"
+        reason = f"failed artifact needs retry: {failed_with_retry[0].get('artifact_type')}"
+    elif not missing_types and artifacts:
+        decision = "finalize"
+        reason = f"all capabilities covered: {collected_types}"
+    elif not artifacts and not required_caps:
+        decision = "finalize"
+        reason = "no artifacts needed"
+    elif task_mode == "ambiguous" or task_confidence == "low":
+        # Ambiguous / low-confidence task — stop and ask the user
+        clarification_question = _generate_clarification_question(
+            user_query=user_query,
+            task_profile=task_profile,
+            collected=collected_types,
+            missing=missing_types,
+        )
+        decision = "wait_for_user"
+        reason = f"ambiguous task (mode={task_mode}, conf={task_confidence})"
+    else:
+        decision = "continue"
+        reason = f"missing: {missing_types}"
+
+    logger.info(
+        "Artifact evaluator: decision={decision}, reason={reason}",
+        decision=decision,
+        reason=reason,
+    )
+
+    return {
+        "artifact_evaluation": {
+            "decision": decision,
+            "reason": reason,
+            "collected_types": sorted(collected_types),
+            "missing_types": sorted(missing_types),
+            "has_terminal": bool(terminal_artifact),
+            "failed_with_retry": len(failed_with_retry) > 0,
+        },
+        "clarification_question": clarification_question,
+        "tool_history": [
+            {
+                "tool": "artifact_evaluator",
+                "decision": decision,
+                "reason": reason,
+                "collected_types": sorted(collected_types),
+                "missing_types": sorted(missing_types),
+                "has_terminal": bool(terminal_artifact),
+            }
+        ],
+        "step_count": state.get("step_count", 0) + 1,
+    }
+
+
+def artifact_evaluator(state: AgentState) -> AgentState:
+    """Graph node that runs deterministic artifact evaluation after leader_agent.
+
+    Reads state["artifacts"] and state["task_profile"], calls _evaluate_artifacts,
+    and returns a state update with artifact_evaluation decision.
+
+    Routing after this node:
+    - "finalize" or "clarify" → capture_action_node
+    - "continue" or "retry"   → leader_agent (loop back)
+    """
+    return _evaluate_artifacts(state)
+
+
 def _ensure_v3_schema_context(state: AgentState) -> AgentState:
     if state.get("schema_context") and state.get("xml_database_context") is not None:
         return state
@@ -872,6 +1092,92 @@ def _normalize_parallel_sql_tasks(
     if not normalized and default_query.strip():
         normalized.append({"task_id": "1", "query": default_query.strip()})
     return normalized
+
+
+def _extract_inline_data_from_query(query: str) -> list[dict[str, Any]]:
+    """Extract numeric data from user query for standalone visualization.
+    
+    Looks for patterns like:
+    - "vẽ biểu đồ với 10, 20, 30"
+    - "biểu đồ cho các giá trị 10, 30, 60"
+    - "show pie chart: 10%, 30%, 60%"
+    
+    Returns list of dicts with "value" key, or empty list if no data found.
+    """
+    # Patterns that indicate inline data visualization request
+    viz_keywords = [
+        "vẽ", "biểu đồ", "chart", "plot", "graph", "đồ thị",
+        "pie", "bar", "line", "column", "pie chart", "biểu đồ tròn",
+    ]
+    
+    if not any(kw in query.lower() for kw in viz_keywords):
+        return []
+    
+    # Extract numbers (integers or floats)
+    numbers = re.findall(r"\b\d+\.?\d*\b", query)
+    
+    if not numbers:
+        return []
+    
+    # Check if these numbers look like data (not dates, IDs, etc.)
+    # Strategy: if there's a list/comma pattern, these are likely data values
+    # e.g. "10, 30, 60" in the query suggests data values
+    
+    # Simple heuristic: if numbers are separated by commas/spaces and 
+    # surrounded by viz keywords, treat as data
+    data_values = []
+    for n in numbers:
+        try:
+            val = float(n)
+            # Filter out likely non-data numbers:
+            # - Year-like numbers (1900-2099)
+            # - Percentage > 100 (unless it's clearly a fraction)
+            # - Very large round numbers (might be page numbers, IDs)
+            if 1900 <= val <= 2099:
+                continue
+            if val > 100 and '.' not in n:
+                continue
+            if val > 10000:
+                continue
+            data_values.append({"value": val})
+        except ValueError:
+            continue
+    
+    return data_values
+
+
+def _is_inline_data_query(query: str) -> bool:
+    """Detect if query is requesting inline data visualization.
+    
+    Checks:
+    1. Query asks for visualization/chart
+    2. Contains numeric values that look like data (not dates/IDs)
+    3. Data values are comma-separated (suggests a list)
+    """
+    viz_keywords = [
+        "vẽ", "biểu đồ", "chart", "plot", "graph", "đồ thị",
+        "pie", "bar", "line", "column", "pie chart",
+    ]
+    
+    if not any(kw in query.lower() for kw in viz_keywords):
+        return False
+    
+    # Check for comma-separated numbers suggesting data list
+    # Pattern: number followed by comma/space/number
+    comma_numbers = re.findall(r"\d+\.?\d*\s*[,，]\s*\d+\.?\d*", query)
+    if comma_numbers:
+        return True
+    
+    # Pattern: numbers in a list context like "10 20 30"
+    numbers = re.findall(r"\b\d+\.?\d*\b", query)
+    if len(numbers) >= 2:
+        # Check spacing between numbers
+        for i in range(len(numbers) - 1):
+            pattern = f"{re.escape(numbers[i])}\\s+\\d"
+            if re.search(pattern, query):
+                return True
+    
+    return False
 
 
 def _execute_sql_analyst_task(task: dict[str, Any]) -> dict[str, Any]:
@@ -1062,6 +1368,23 @@ def ask_sql_analyst_tool(
         "tool_history": tool_history,
         "errors": errors,
         "confidence": confidence,
+        # WorkerArtifact — for standardized supervisor evaluation
+        "artifact_type": "sql_result",
+        "artifact_status": "success" if successful_results and not failed_results else ("partial" if successful_results else "failed"),
+        "artifact_payload": {
+            "sql_result": sql_result,
+            "answer_summary": answer_summary,
+        },
+        "artifact_evidence": {
+            "generated_sql": generated_sql,
+            "validated_sql": validated_sql,
+            "table": (
+                validated_sql.split("FROM")[1].split()[0].strip('"')
+                if "FROM" in validated_sql else "unknown"
+            ),
+        },
+        "artifact_terminal": len(successful_results) > 0 and not failed_results,
+        "artifact_recommended_action": "finalize" if (successful_results and not failed_results) else ("retry_sql" if failed_results else "clarify"),
     }
 
 
@@ -1191,6 +1514,21 @@ def ask_sql_analyst_parallel_tool(
         ],
         "confidence": "high" if successful_results and not failed_results else "medium",
         "task_results": task_results,
+        # WorkerArtifact — for standardized supervisor evaluation
+        "artifact_type": "sql_result",
+        "artifact_status": "success" if successful_results and not failed_results else ("partial" if successful_results else "failed"),
+        "artifact_payload": {
+            "sql_result": aggregate_update.get("sql_result", {}),
+            "answer_summary": answer_summary,
+            "task_count": len(normalized_tasks),
+        },
+        "artifact_evidence": {
+            "generated_sql": aggregate_update.get("generated_sql", ""),
+            "validated_sql": aggregate_update.get("validated_sql", ""),
+            "parallel_tasks": [r.get("task_id") for r in task_results],
+        },
+        "artifact_terminal": len(successful_results) > 0 and not failed_results,
+        "artifact_recommended_action": "finalize" if (successful_results and not failed_results) else ("retry_sql" if failed_results else "clarify"),
     }
 
 
@@ -1208,6 +1546,59 @@ def leader_agent(state: AgentState) -> AgentState:
     sql_artifacts: dict[str, Any] = {}
     used_high_level_tools: list[str] = []
     inferred_intent = "unknown"
+    # Accumulated WorkerArtifacts — injected into state on each return.
+    # Initialize from state so loop-back merges with previous cycle artifacts.
+    artifacts: list[dict[str, Any]] = list(state.get("artifacts", []))
+
+    def _make_artifact(
+        tool_name: str,
+        tool_result: dict[str, Any],
+        status: str,
+    ) -> dict[str, Any]:
+        """Build a WorkerArtifact dict from a tool result."""
+        # Map tool_name → artifact_type
+        TOOL_TO_ARTIFACT_TYPE = {
+            "ask_sql_analyst": "sql_result",
+            "ask_sql_analyst_parallel": "sql_result",
+            "retrieve_rag_answer": "rag_context",
+            "create_visualization": "chart",
+            "generate_report": "report_draft",
+        }
+        artifact_type = TOOL_TO_ARTIFACT_TYPE.get(tool_name, "sql_result")
+
+        # Determine terminal from tool result shape
+        terminal = False
+        recommended_action: str = "none"
+        if tool_name == "create_visualization":
+            viz = tool_result.get("visualization", {})
+            if isinstance(viz, dict):
+                terminal = viz.get("success", False)
+                recommended_action = "finalize" if terminal else "clarify"
+        elif tool_name in ("ask_sql_analyst", "ask_sql_analyst_parallel"):
+            terminal = tool_result.get("artifact_terminal", False)
+            recommended_action = tool_result.get("artifact_recommended_action", "finalize")
+        elif tool_name == "retrieve_rag_answer":
+            retrieved = tool_result.get("retrieved_context", [])
+            has_context = bool(retrieved)
+            # Empty context: mark terminal=True so artifact_evaluator finalizes instead of looping
+            terminal = True
+            recommended_action = "finalize"
+
+        return {
+            "artifact_type": artifact_type,
+            "status": status,
+            "payload": tool_result,
+            "evidence": {
+                "tool": tool_name,
+                "row_count": tool_result.get("sql_result", {}).get("row_count", 0),
+                "retrieved_chunks": len(tool_result.get("retrieved_context", [])),
+                "viz_success": tool_result.get("visualization", {}).get("success")
+                if tool_name == "create_visualization"
+                else None,
+            },
+            "terminal": terminal,
+            "recommended_next_action": recommended_action,
+        }
 
     for step in range(1, 6):
         messages = prompt_manager.leader_agent_messages(
@@ -1215,6 +1606,7 @@ def leader_agent(state: AgentState) -> AgentState:
             session_context=session_context,
             xml_database_context=xml_database_context,
             scratchpad="\n\n".join(scratchpad_entries),
+            task_profile=state.get("task_profile"),
         )
 
         try:
@@ -1306,6 +1698,7 @@ def leader_agent(state: AgentState) -> AgentState:
                 "sql_result": sql_artifacts.get("sql_result", {}),
                 "visualization": sql_artifacts.get("visualization"),
                 "result_ref": sql_artifacts.get("result_ref"),
+                "artifacts": artifacts,
             }
 
         if action != "tool":
@@ -1323,6 +1716,7 @@ def leader_agent(state: AgentState) -> AgentState:
                 lambda tool_query=tool_query: ask_sql_analyst_tool(state, tool_query),
                 observation_type="tool",
             )
+            artifacts.append(_make_artifact("ask_sql_analyst", tool_result, "success"))
             sql_artifacts = tool_result
             inferred_intent = "sql" if inferred_intent == "unknown" else inferred_intent
         elif tool_name == "ask_sql_analyst_parallel":
@@ -1340,6 +1734,7 @@ def leader_agent(state: AgentState) -> AgentState:
                 ),
                 observation_type="tool",
             )
+            artifacts.append(_make_artifact("ask_sql_analyst_parallel", tool_result, "success"))
             sql_artifacts = tool_result
             inferred_intent = "sql" if inferred_intent == "unknown" else inferred_intent
         elif tool_name == "retrieve_rag_answer":
@@ -1354,25 +1749,16 @@ def leader_agent(state: AgentState) -> AgentState:
                 ),
                 observation_type="retriever",
             )
+            artifacts.append(_make_artifact("retrieve_rag_answer", tool_result, "success"))
             inferred_intent = "rag" if inferred_intent == "unknown" else "mixed"
         elif tool_name == "create_visualization":
-            from app.graph.standalone_visualization import standalone_visualization_worker
+            from app.graph.standalone_visualization import inline_data_worker
 
             raw_data = tool_args.get("raw_data", [])
             # If raw_data is not provided, try to extract from query
             if not raw_data:
-                # Simple extraction: find numbers in query
-                import re
-
-                numbers = re.findall(r"\b\d+\.?\d*\b", tool_query)
-                if numbers and any(kw in tool_query.lower() for kw in ["vẽ", "biểu đồ", "chart", "plot", "graph", "đồ thị"]):
-                    # Convert to list of dict format for standalone visualization
-                    try:
-                        # Format as [{"value": 10}, {"value": 20}, {"value": 30}]
-                        # or [{"label": "A", "value": 10}, ...] if labels are provided
-                        raw_data = [{"value": float(n)} for n in numbers]
-                    except ValueError:
-                        raw_data = []
+                # Delegate extraction to helper — clean separation
+                raw_data = _extract_inline_data_from_query(tool_query)
 
             if not raw_data:
                 # No data found, return error
@@ -1392,11 +1778,65 @@ def leader_agent(state: AgentState) -> AgentState:
                 tool_result = _run_traced_substep(
                     "leader_tool_create_visualization",
                     {"user_query": tool_query, "step_count": state.get("step_count", 0)},
-                    lambda viz_task_state=viz_task_state: standalone_visualization_worker(
+                    lambda viz_task_state=viz_task_state: inline_data_worker(
                         viz_task_state
                     ),
                     observation_type="tool",
                 )
+
+            # Auto-finalize if visualization succeeded — compose answer from viz metadata only
+            viz_result = tool_result.get("visualization", {})
+            if isinstance(viz_result, dict) and viz_result.get("success"):
+                viz_answer = (
+                    f"Đã tạo biểu đồ {viz_result.get('chart_type', 'chart')} thành công."
+                )
+                payload = {
+                    "answer": viz_answer,
+                    "evidence": [
+                        f"intent=visualization",
+                        f"chart_type={viz_result.get('chart_type', 'unknown')}",
+                        f"viz_success=true",
+                    ],
+                    "confidence": "high",
+                    "used_tools": used_high_level_tools + ["create_visualization"],
+                    "generated_sql": "",
+                    "error_categories": [],
+                    "step_count": state.get("step_count", 0) + step,
+                    "total_token_usage": total_token_usage,
+                    "total_cost_usd": round(total_cost_usd, 8),
+                    "context_type": state.get("context_type", "default"),
+                    "sql_rows": [],
+                    "sql_row_count": 0,
+                    "visualization": viz_result,
+                    "result_metadata": None,
+                }
+                artifacts.append(_make_artifact("create_visualization", tool_result, "success"))
+                leader_tool_history.append(
+                    {
+                        "tool": "create_visualization",
+                        "status": "ok",
+                        "reason": "auto_finalize_on_success",
+                        "source": "leader_agent",
+                    }
+                )
+                return {
+                    "final_answer": viz_answer,
+                    "final_payload": payload,
+                    "response_mode": "answer",
+                    "intent": "mixed",
+                    "intent_reason": "visualization_auto_finalize",
+                    "errors": [],
+                    "confidence": "high",
+                    "step_count": state.get("step_count", 0) + step,
+                    "tool_history": leader_tool_history,
+                    "generated_sql": "",
+                    "validated_sql": "",
+                    "sql_result": {},
+                    "visualization": viz_result,
+                    "result_ref": None,
+                    "artifacts": artifacts,
+                }
+
             # Map visualization result to sql_artifacts format for final answer
             sql_artifacts = {
                 "visualization": tool_result.get("visualization"),
@@ -1409,6 +1849,8 @@ def leader_agent(state: AgentState) -> AgentState:
             }
             inferred_intent = "sql" if inferred_intent == "unknown" else inferred_intent
         elif tool_name == "generate_report":
+            tool_result = {}  # Report is handled by report_subgraph
+            artifacts.append(_make_artifact("generate_report", tool_result, "partial"))
             used_high_level_tools.append(tool_name)
             leader_tool_history.append(
                 {
@@ -1425,6 +1867,7 @@ def leader_agent(state: AgentState) -> AgentState:
                 "critic_iteration": 0,
                 "tool_history": leader_tool_history,
                 "step_count": state.get("step_count", 0) + step,
+                "artifacts": artifacts,
             }
         else:
             break
@@ -1442,48 +1885,169 @@ def leader_agent(state: AgentState) -> AgentState:
             f"[Step {step}] tool={tool_name}\n{_summarize_tool_result(tool_name, tool_result)}"
         )
 
-    fallback_result = ask_sql_analyst_tool(state, query)
-    answer = fallback_result.get("answer_summary", "Không thể hoàn tất phân tích.")
-    payload = {
-        "answer": answer,
-        "evidence": [
-            "intent=sql",
-            f"rows={fallback_result.get('sql_result', {}).get('row_count', 0)}",
-            "context_chunks=0",
-        ],
-        "confidence": fallback_result.get("confidence", "medium"),
-        "used_tools": ["ask_sql_analyst"],
-        "generated_sql": fallback_result.get("validated_sql")
-        or fallback_result.get("generated_sql", ""),
-        "error_categories": [
-            str(item.get("category", "UNKNOWN"))
-            for item in fallback_result.get("errors", [])
-        ],
-        "step_count": state.get("step_count", 0) + 1,
-        "total_token_usage": total_token_usage,
-        "total_cost_usd": round(total_cost_usd, 8),
-        "context_type": state.get("context_type", "default"),
-        "sql_rows": fallback_result.get("sql_result", {}).get("rows", []),
-        "sql_row_count": fallback_result.get("sql_result", {}).get("row_count", 0),
-        "visualization": fallback_result.get("visualization"),
-        "result_metadata": fallback_result.get("result_ref"),
-    }
-    return {
-        "final_answer": answer,
-        "final_payload": payload,
-        "response_mode": "answer",
-        "intent": "sql",
-        "intent_reason": "leader_fallback_sql_analyst",
-        "errors": fallback_result.get("errors", []),
-        "confidence": fallback_result.get("confidence", "medium"),
-        "step_count": state.get("step_count", 0) + 1,
-        "tool_history": leader_tool_history + fallback_result.get("tool_history", []),
-        "generated_sql": fallback_result.get("generated_sql", ""),
-        "validated_sql": fallback_result.get("validated_sql", ""),
-        "sql_result": fallback_result.get("sql_result", {}),
-        "visualization": fallback_result.get("visualization"),
-        "result_ref": fallback_result.get("result_ref"),
-    }
+    # Domain-aware fallback: depends on what tools were already attempted
+    if "create_visualization" in used_high_level_tools:
+        viz = sql_artifacts.get("visualization", {})
+        if viz and isinstance(viz, dict) and viz.get("success"):
+            # Visualization succeeded — compose answer from viz metadata only
+            answer = (
+                f"Đã tạo biểu đồ thành công. "
+                f"Loại: {viz.get('chart_type', 'chart')}"
+            )
+            payload = {
+                "answer": answer,
+                "evidence": [
+                    f"intent=visualization",
+                    f"chart_type={viz.get('chart_type', 'unknown')}",
+                    f"viz_success=true",
+                ],
+                "confidence": "high",
+                "used_tools": used_high_level_tools,
+                "generated_sql": "",
+                "error_categories": [],
+                "step_count": state.get("step_count", 0) + 1,
+                "total_token_usage": total_token_usage,
+                "total_cost_usd": round(total_cost_usd, 8),
+                "context_type": state.get("context_type", "default"),
+                "sql_rows": [],
+                "sql_row_count": 0,
+                "visualization": viz,
+                "result_metadata": None,
+            }
+            return {
+                "final_answer": answer,
+                "final_payload": payload,
+                "response_mode": "answer",
+                "intent": "mixed",
+                "intent_reason": "visualization_auto_finalize",
+                "errors": [],
+                "confidence": "high",
+                "step_count": state.get("step_count", 0) + 1,
+                "tool_history": leader_tool_history,
+                "generated_sql": "",
+                "validated_sql": "",
+                "sql_result": {},
+                "visualization": viz,
+                "result_ref": None,
+                "artifacts": artifacts,
+            }
+        else:
+            # Visualization attempted but failed — return error, don't fall back to SQL
+            viz_error = viz.get("error", "Unknown visualization error") if isinstance(viz, dict) else "Visualization generation failed"
+            return {
+                "final_answer": f"Không thể tạo biểu đồ: {viz_error}",
+                "final_payload": {
+                    "answer": f"Không thể tạo biểu đồ: {viz_error}",
+                    "evidence": [f"intent=visualization", f"viz_success=false"],
+                    "confidence": "low",
+                    "used_tools": used_high_level_tools,
+                    "generated_sql": "",
+                    "error_categories": ["VISUALIZATION_ERROR"],
+                    "step_count": state.get("step_count", 0) + 1,
+                    "total_token_usage": total_token_usage,
+                    "total_cost_usd": round(total_cost_usd, 8),
+                    "context_type": state.get("context_type", "default"),
+                    "sql_rows": [],
+                    "sql_row_count": 0,
+                    "visualization": viz if isinstance(viz, dict) else None,
+                    "result_metadata": None,
+                },
+                "response_mode": "answer",
+                "intent": "mixed",
+                "intent_reason": "visualization_failed_no_fallback",
+                "errors": [{"category": "VISUALIZATION_ERROR", "message": viz_error}],
+                "confidence": "low",
+                "step_count": state.get("step_count", 0) + 1,
+                "tool_history": leader_tool_history,
+                "generated_sql": "",
+                "validated_sql": "",
+                "sql_result": {},
+                "visualization": viz if isinstance(viz, dict) else None,
+                "result_ref": None,
+                "artifacts": artifacts,
+            }
+    elif "retrieve_rag_answer" in used_high_level_tools:
+        # RAG attempted — don't fall back to SQL
+        return {
+            "final_answer": "Không tìm thấy câu trả lời phù hợp trong tài liệu.",
+            "final_payload": {
+                "answer": "Không tìm thấy câu trả lời phù hợp trong tài liệu.",
+                "evidence": ["intent=rag", "rag_attempted=true"],
+                "confidence": "low",
+                "used_tools": used_high_level_tools,
+                "generated_sql": "",
+                "error_categories": ["RAG_IRRELEVANT_CONTEXT"],
+                "step_count": state.get("step_count", 0) + 1,
+                "total_token_usage": total_token_usage,
+                "total_cost_usd": round(total_cost_usd, 8),
+                "context_type": state.get("context_type", "default"),
+                "sql_rows": [],
+                "sql_row_count": 0,
+                "visualization": None,
+                "result_metadata": None,
+            },
+            "response_mode": "answer",
+            "intent": "rag",
+            "intent_reason": "rag_no_fallback",
+            "errors": [{"category": "RAG_IRRELEVANT_CONTEXT", "message": "No relevant context found"}],
+            "confidence": "low",
+            "step_count": state.get("step_count", 0) + 1,
+            "tool_history": leader_tool_history,
+            "generated_sql": "",
+            "validated_sql": "",
+            "sql_result": {},
+            "visualization": None,
+            "result_ref": None,
+            "artifacts": artifacts,
+        }
+    else:
+        # No specific tool attempted — last resort fallback to SQL (only for truly unknown cases)
+        fallback_result = ask_sql_analyst_tool(state, query)
+        # Build artifact for the fallback SQL call
+        fallback_artifact = _make_artifact("ask_sql_analyst", fallback_result, "success" if not fallback_result.get("errors") else "partial")
+        fallback_artifacts = artifacts + [fallback_artifact]
+        answer = fallback_result.get("answer_summary", "Không thể hoàn tất phân tích.")
+        payload = {
+            "answer": answer,
+            "evidence": [
+                "intent=sql",
+                f"rows={fallback_result.get('sql_result', {}).get('row_count', 0)}",
+                "context_chunks=0",
+            ],
+            "confidence": fallback_result.get("confidence", "medium"),
+            "used_tools": ["ask_sql_analyst"],
+            "generated_sql": fallback_result.get("validated_sql")
+            or fallback_result.get("generated_sql", ""),
+            "error_categories": [
+                str(item.get("category", "UNKNOWN"))
+                for item in fallback_result.get("errors", [])
+            ],
+            "step_count": state.get("step_count", 0) + 1,
+            "total_token_usage": total_token_usage,
+            "total_cost_usd": round(total_cost_usd, 8),
+            "context_type": state.get("context_type", "default"),
+            "sql_rows": fallback_result.get("sql_result", {}).get("rows", []),
+            "sql_row_count": fallback_result.get("sql_result", {}).get("row_count", 0),
+            "visualization": fallback_result.get("visualization"),
+            "result_metadata": fallback_result.get("result_ref"),
+        }
+        return {
+            "final_answer": answer,
+            "final_payload": payload,
+            "response_mode": "answer",
+            "intent": "sql",
+            "intent_reason": "leader_fallback_sql_analyst",
+            "errors": fallback_result.get("errors", []),
+            "confidence": fallback_result.get("confidence", "medium"),
+            "step_count": state.get("step_count", 0) + 1,
+            "tool_history": leader_tool_history + fallback_result.get("tool_history", []),
+            "generated_sql": fallback_result.get("generated_sql", ""),
+            "validated_sql": fallback_result.get("validated_sql", ""),
+            "sql_result": fallback_result.get("sql_result", {}),
+            "visualization": fallback_result.get("visualization"),
+            "result_ref": fallback_result.get("result_ref"),
+            "artifacts": fallback_artifacts,
+        }
 
 
 # =============================================================================

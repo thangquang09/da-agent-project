@@ -13,6 +13,7 @@ import json
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,17 @@ from app.logger import logger
 FULL_DATA_THRESHOLD = 100
 DEFAULT_TTL_HOURS = 24
 RESULTS_DIR = Path(__file__).parent.parent.parent / "data" / "results"
+
+
+def _decimal_to_serializable(value: Any) -> Any:
+    """Convert Decimal to float so json.dumps / Jsonb can serialize it."""
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, dict):
+        return {k: _decimal_to_serializable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_decimal_to_serializable(v) for v in value]
+    return value
 
 
 class ResultStore:
@@ -87,9 +99,9 @@ class ResultStore:
 
         stats = self._compute_summary_stats(rows, columns)
 
-        columns_json = Jsonb(columns)
-        sample_json = Jsonb(sample_rows)
-        stats_json = Jsonb(stats)
+        columns_json = Jsonb(_decimal_to_serializable(columns))
+        sample_json = Jsonb(_decimal_to_serializable(sample_rows))
+        stats_json = Jsonb(_decimal_to_serializable(stats))
 
         expires_at = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
         full_data_path: str | None = None
@@ -180,7 +192,7 @@ class ResultStore:
         file_path = thread_dir / f"{result_id}.json"
 
         with open(file_path, "w") as f:
-            json.dump(rows, f, default=str)
+            json.dump(_decimal_to_serializable(rows), f, ensure_ascii=False)
 
         return str(file_path)
 

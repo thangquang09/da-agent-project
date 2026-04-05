@@ -12,10 +12,43 @@ ReportStatus = Literal["planning", "executing", "writing", "critiquing", "done",
 TaskType = Literal[
     "sql_query", "data_analysis", "context_lookup", "standalone_visualization"
 ]
-# Router sets "direct" or "planned" (whether to invoke task_planner).
-# Task planner sets "single", "parallel", or "linear" (how the plan is executed).
-# Both layers are active; future refactor could split into RouterMode | PlannerMode.
-ExecutionMode = Literal["single", "parallel", "linear", "direct", "planned"]
+
+
+# ============================================================================
+# v4 Task Grounder Types
+# ============================================================================
+
+
+class TaskProfile(TypedDict, total=False):
+    """Structured task profile produced by Task Grounder.
+
+    Replaces the flat intent/context_type/needs_semantic_context fields
+    with a single typed profile.
+    """
+
+    task_mode: Literal["simple", "mixed", "ambiguous"]
+    data_source: Literal["inline_data", "uploaded_table", "database", "knowledge", "mixed"]
+    required_capabilities: list[Literal["sql", "rag", "visualization", "report"]]
+    followup_mode: Literal["fresh_query", "followup", "refine_previous_result"]
+    confidence: Literal["high", "medium", "low"]
+    reasoning: str  # Why this classification was chosen
+
+
+class WorkerArtifact(TypedDict, total=False):
+    """Standardized output from any worker.
+
+    All workers return this schema so the supervisor and evaluator
+    consume typed artifacts instead of ad-hoc dicts.
+    """
+
+    artifact_type: Literal["sql_result", "rag_context", "chart", "report_draft"]
+    status: Literal["success", "failed", "partial"]
+    payload: dict[str, Any]
+    evidence: dict[str, Any]
+    terminal: bool
+    recommended_next_action: Literal[
+        "finalize", "visualize", "retry_sql", "ask_rag", "clarify", "none"
+    ]
 
 
 class TaskState(TypedDict, total=False):
@@ -74,7 +107,6 @@ class AgentState(TypedDict, total=False):
     target_db_path: str
     intent: Intent
     intent_reason: str
-    messages: Annotated[list[dict[str, Any]], operator.add]
     schema_context: str
     user_semantic_context: str
     context_type: ContextType
@@ -94,21 +126,18 @@ class AgentState(TypedDict, total=False):
     step_count: int
     confidence: Confidence
     run_id: str
-    expected_keywords: list[str]
-    file_cache: dict[str, Any]  # Session-level CSV cache: hash_key -> metadata
     skipped_tables: list[str]  # Tables skipped due to caching
     table_contexts: dict[
         str, str
     ]  # table_name → user-provided business context (from pair upload)
     xml_database_context: str  # Full <database_context> XML block for SQL agent
-    sql_retry_count: int  # SQL self-correction retry counter (0-2)
-    sql_last_error: str | None  # Error message from last SQL failure
-    # Plan-and-Execute additions
-    task_plan: list[TaskState]  # Output from task_planner
     task_results: Annotated[list[TaskState], operator.add]  # Fan-in from workers
-    aggregate_analysis: dict[str, Any]  # Combined analysis from parallel tasks
-    execution_mode: ExecutionMode  # Router decision: single/parallel/linear
     visualization: dict[str, Any]  # Visualization data from nested sequential execution
+    # Grounding Group (v4) — set by task_grounder node
+    artifacts: Annotated[list[WorkerArtifact], operator.add]  # Worker artifacts accumulated
+    task_profile: TaskProfile  # Grounded task profile from grounder
+    artifact_evaluation: dict[str, Any]  # Decision from artifact_evaluator node
+    clarification_question: str  # Human question from clarify decision; empty = no clarification needed
     # Session memory fields
     thread_id: str  # Thread identifier for memory scoping
     session_context: str  # Injected context from conversation memory
@@ -150,11 +179,10 @@ class GraphOutputState(TypedDict, total=False):
     run_id: str
     context_type: ContextType
     needs_semantic_context: bool
-    task_plan: list[TaskState]
-    execution_mode: ExecutionMode
-    aggregate_analysis: dict[str, Any]
+    task_results: list[TaskState]
     tool_history: list[dict[str, Any]]
     response_mode: ResponseMode
+    artifact_evaluation: dict[str, Any]
 
 
 class ReportSection(TypedDict, total=False):

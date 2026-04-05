@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
+import sqlglot
 
 from app.config import load_settings
 from app.logger import logger
@@ -60,21 +61,66 @@ def _sanitize_sql(sql: str) -> str:
 def _extract_cte_names(sql: str) -> set[str]:
     """Return lower-cased CTE names defined in a WITH clause.
 
-    Handles:
+    Uses sqlglot AST parsing for correctness with:
     - Simple CTEs: WITH cte1 AS (...)
     - Recursive CTEs: WITH RECURSIVE cte1 AS (...)
-    - Chained CTEs: WITH cte1 AS (...), cte2 AS (...), cte3 AS (...)
+    - Chained CTEs: WITH cte1 AS (...), cte2 AS (...)
+    - Quoted identifiers: WITH "MyCTE" AS (...)
+    - Column aliases are NOT CTEs (handled separately)
     """
-    names = set()
+    try:
+        parsed = sqlglot.parse_one(sql, read="postgres")
+        cte_names: set[str] = set()
+        for cte in parsed.find_all(sqlglot.exp.CTE):
+            alias = cte.alias
+            if alias:
+                cte_names.add(alias.lower())
+        return cte_names
+    except sqlglot.errors.ParseError:
+        # Fallback to regex for unparseable SQL
+        return _extract_cte_names_regex(sql)
 
-    # Find initial CTE after WITH (handles RECURSIVE keyword)
+
+def _extract_table_names(sql: str) -> set[str]:
+    """Extract lower-cased table names referenced in SQL using AST parsing.
+
+    Handles:
+    - FROM table_name
+    - FROM "quoted_table"
+    - JOIN schema.table (uses table name only)
+    - Subquery references
+    - Aliased tables (extracts original name)
+    """
+    try:
+        parsed = sqlglot.parse_one(sql, read="postgres")
+        table_names: set[str] = set()
+        for table in parsed.find_all(sqlglot.exp.Table):
+            name = table.name
+            if name:
+                table_names.add(name.lower())
+        return table_names
+    except sqlglot.errors.ParseError:
+        # Fallback to regex
+        return _extract_table_names_regex(sql)
+
+
+def _extract_table_names_regex(sql: str) -> set[str]:
+    """Fallback regex extraction for unparseable SQL."""
+    names: set[str] = set()
+    for quoted_name, unquoted_name in TABLE_TOKEN_PATTERN.findall(sql):
+        name = quoted_name or unquoted_name
+        if name:
+            names.add(name.lower())
+    return names
+
+
+def _extract_cte_names_regex(sql: str) -> set[str]:
+    """Fallback regex extraction for CTE names (unparseable SQL)."""
+    names: set[str] = set()
     for match in CTE_NAME_PATTERN.finditer(sql):
         names.add(match.group(1).lower())
-
-    # Find chained CTEs after commas
     for match in CTE_CHAIN_PATTERN.finditer(sql):
         names.add(match.group(1).lower())
-
     return names
 
 
@@ -125,11 +171,7 @@ def validate_sql(
         # Main application: use PostgreSQL
         table_names = {tbl.lower() for tbl in list_tables()}
 
-    detected_tables = []
-    for quoted_name, unquoted_name in TABLE_TOKEN_PATTERN.findall(sanitized_sql):
-        table_name = quoted_name or unquoted_name
-        if table_name:
-            detected_tables.append(table_name.lower())
+    detected_tables = sorted(list(_extract_table_names(sanitized_sql)))
     cte_names = _extract_cte_names(sanitized_sql)
 
     if not sanitized_sql:

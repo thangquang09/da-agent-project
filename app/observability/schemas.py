@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -62,6 +62,12 @@ class RunTraceRecord:
     total_token_usage: int | None = None
     total_cost_usd: float | None = None
     final_confidence: str | None = None
+    # v4: Grounded task info (replaces intent-based routing)
+    task_profile: dict[str, Any] | None = None  # TaskProfile JSON
+    grounding_confidence: str | None = None  # confidence from Task Grounder
+    # v4: Artifact tracking
+    artifact_count: int = 0
+    artifact_types: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

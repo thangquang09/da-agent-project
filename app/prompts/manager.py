@@ -22,6 +22,7 @@ from app.prompts.report_writer import REPORT_WRITER_PROMPT_DEFINITION
 from app.prompts.router import ROUTER_PROMPT_DEFINITION
 from app.prompts.sql_worker import SQL_WORKER_GENERATION_PROMPT
 from app.prompts.synthesis import SYNTHESIS_PROMPT_DEFINITION
+from app.prompts.task_grounder import TASK_GROUNDER_PROMPT
 from app.prompts.visualization import VISUALIZATION_CODE_GENERATION_PROMPT
 
 
@@ -237,7 +238,15 @@ class PromptManager:
         session_context: str = "",
         xml_database_context: str = "",
         scratchpad: str = "",
+        task_profile: dict[str, Any] | None = None,
     ) -> list[dict[str, str]]:
+        import json
+
+        task_profile_str = (
+            json.dumps(task_profile, ensure_ascii=False, indent=2)
+            if task_profile
+            else ""
+        )
         return self._compile_prompt(
             LEADER_AGENT_PROMPT_DEFINITION,
             {
@@ -245,6 +254,7 @@ class PromptManager:
                 "session_context": session_context or "",
                 "xml_database_context": xml_database_context or "",
                 "scratchpad": scratchpad or "",
+                "task_profile": task_profile_str,
             },
         )
 
@@ -386,6 +396,23 @@ class PromptManager:
                 "keywords_text": keywords_str,
             },
         )
+
+    def task_grounder_messages(
+        self, query: str, session_context: str = ""
+    ) -> list[dict[str, str]]:
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": TASK_GROUNDER_PROMPT.system_prompt},
+        ]
+        if session_context:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": f"[Session Context]\n{session_context}\n\n[Câu hỏi hiện tại]\n{query}",
+                }
+            )
+        else:
+            messages.append({"role": "user", "content": query})
+        return messages
 
 
 prompt_manager = PromptManager()

@@ -6,12 +6,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.config import load_settings
 from app.graph import (
     build_sql_v3_graph,
     new_run_config,
     to_langgraph_config,
 )
-from app.logger import logger
+from app.logger import ensure_debug_file_sink, logger
 from app.observability import RunTracer, reset_current_tracer, set_current_tracer
 
 
@@ -43,12 +44,17 @@ def run_query(
     user_semantic_context: str | None = None,
     uploaded_files: list[str] | None = None,
     uploaded_file_data: list[dict[str, Any]] | None = None,
-    expected_keywords: list[str] | None = None,
+    expected_keywords: list[str] | None = None,  # Deprecated: eval-only field
     version: str = "v3",
     thread_id: str | None = None,
 ) -> dict:
     if version != "v3":
         raise ValueError(f"Unsupported graph version: {version}")
+
+    settings = load_settings()
+    if settings.debug_log_path:
+        ensure_debug_file_sink(settings.debug_log_path, settings.debug_log_level)
+
     graph = build_sql_v3_graph()
     run_cfg = new_run_config(recursion_limit=recursion_limit, thread_id=thread_id)
     tracer = RunTracer(
@@ -67,8 +73,6 @@ def run_query(
         graph_input["uploaded_files"] = uploaded_files
     if uploaded_file_data:
         graph_input["uploaded_file_data"] = uploaded_file_data
-    if expected_keywords:
-        graph_input["expected_keywords"] = expected_keywords
     # Pass thread_id to graph input for session memory
     if thread_id:
         graph_input["thread_id"] = thread_id

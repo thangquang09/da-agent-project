@@ -69,9 +69,9 @@ def _state_summary(state: dict[str, Any]) -> dict[str, Any]:
     return _prune_empty_fields({
         "user_query": _safe_jsonable(state.get("user_query")),
         "task_id": state.get("task_id"),
-        "intent": state.get("intent"),
         "step_count": state.get("step_count"),
-        "execution_mode": state.get("execution_mode"),
+        "task_profile": _safe_jsonable(state.get("task_profile")),
+        "artifact_count": len(state.get("artifacts", []) or []),
         "has_schema_context": bool(state.get("schema_context")),
         "generated_sql": _safe_jsonable(state.get("generated_sql")),
         "validated_sql": _safe_jsonable(state.get("validated_sql")),
@@ -80,9 +80,6 @@ def _state_summary(state: dict[str, Any]) -> dict[str, Any]:
             if isinstance(state.get("sql_result"), dict)
             else None
         ),
-        "task_count": len(state.get("task_results", []) or [])
-        if isinstance(state.get("task_results"), list)
-        else None,
         "retrieved_context_count": len(state.get("retrieved_context", []) or []),
         "errors": _safe_jsonable(state.get("errors", [])),
     })
@@ -97,8 +94,6 @@ def _output_summary(update: dict[str, Any]) -> dict[str, Any]:
         "intent": update.get("intent"),
         "step_count": update.get("step_count"),
         "status": update.get("status"),
-        "execution_mode": update.get("execution_mode"),
-        "task_count": update.get("task_count"),
         "sql_row_count": (
             update.get("sql_result", {}).get("row_count")
             if isinstance(update.get("sql_result"), dict)
@@ -107,6 +102,18 @@ def _output_summary(update: dict[str, Any]) -> dict[str, Any]:
         "tool_history_delta": len(update.get("tool_history", []) or []),
         "errors_delta": _safe_jsonable(update.get("errors", [])),
         "generated_sql": _safe_jsonable(update.get("generated_sql")),
+        "artifact_type": (
+            update.get("artifact_type")
+            or (update.get("artifacts", [{}])[0].get("artifact_type") if update.get("artifacts") else None)
+        ),
+        "terminal": (
+            update.get("artifact_terminal")
+            or (any(a.get("terminal") for a in update.get("artifacts", [])) if update.get("artifacts") else None)
+        ),
+        "recommended_action": (
+            update.get("artifact_recommended_action")
+            or (update.get("artifacts", [{}])[0].get("recommended_next_action") if update.get("artifacts") else None)
+        ),
     })
 
 
@@ -326,6 +333,17 @@ class RunTracer:
             else:
                 total_cost_usd = round(total_cost_usd, 8)
 
+        artifacts = payload.get("artifacts", []) or []
+        artifact_types = sorted(set(
+            a.get("artifact_type")
+            for a in artifacts
+            if a.get("artifact_type")
+        ))
+        task_profile = payload.get("task_profile")
+        grounding_confidence = (
+            task_profile.get("confidence") if task_profile else None
+        )
+
         run_record = RunTraceRecord(
             record_type="run",
             run_id=self.run_id,
@@ -345,6 +363,10 @@ class RunTracer:
             total_token_usage=total_token_usage,
             total_cost_usd=total_cost_usd,
             final_confidence=str(payload.get("confidence", "unknown")),
+            task_profile=_safe_jsonable(task_profile),
+            grounding_confidence=grounding_confidence,
+            artifact_count=len(artifacts),
+            artifact_types=artifact_types,
         )
         with self._lock:
             self._append_jsonl(run_record.to_dict())
