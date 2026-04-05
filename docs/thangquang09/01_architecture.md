@@ -58,6 +58,8 @@ flowchart TD
     end
 ```
 
+![DA Agent Lab — Hybrid Architecture v3](../_media/architecture_hybrid_v3.png)
+
 ### 9 nodes chính
 
 | Node | File | Obs type | Vai trò |
