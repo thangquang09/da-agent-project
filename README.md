@@ -1,117 +1,68 @@
 # DA Agent Lab
 
-**LangGraph-based Data Analyst Agent** — trả lời business/data questions qua SQL tools, RAG retrieval, và full observability.
+**LangGraph-based Data Analyst Agent** — trả lời business/data questions qua SQL tools, RAG retrieval, Visualization, và Report generation, với full observability.
 
-## Architecture
+![DA Agent Lab — Architecture](docs/_media/architecture_flow.png)
 
-```
-User
- │
- ▼
-Streamlit UI :8501   ──HTTP/SSE──►  FastAPI Backend :8001
-                                          │
-                                          ▼
-                                    LangGraph Agent
-                                    (SQL / RAG / Mixed)
-                                          │
-                                    ┌─────┴──────┐
-                                    │            │
-                              PostgreSQL    ConvMemory
-                              (main data)   (SQLite)
+---
 
-FastMCP Server :8000  (tool surface, independent)
-```
+## What it does
+
+Nhận câu hỏi tiếng Việt hoặc tiếng Anh về business data, tự động:
+
+1. **Phân loại & ground** câu hỏi qua Task Grounder (LLM mini)
+2. **Gọi worker phù hợp**: SQL query, RAG retrieval, Visualization, Report
+3. **Evaluate artifacts** — nếu chưa đủ → gọi thêm worker; nếu ambiguous → hỏi user
+4. **Synthesize câu trả lời** có sức cân, kèm trace đầy đủ
 
 ---
 
 ## Quick Start
 
-### Option A — Local Mode (nhiều terminal)
-
-**Yêu cầu:** Python 3.12+, `uv`
-
 ```bash
 # 1. Cài dependencies
 uv sync
 
-# 2. Start PostgreSQL database
-docker compose up -d postgres
-
-# 3. Seed database (lần đầu)
+# 2. Seed database (lần đầu)
 PYTHONPATH=. python data/seeds/create_seed_db.py
 
-# 4. Terminal 1 — Backend (FastAPI)
+# 3. Backend
 uv run uvicorn backend.main:app --port 8001 --reload
 
-# 5. Terminal 2 — Frontend (Streamlit)
+# 4. Frontend (terminal khác)
 BACKEND_URL=http://localhost:8001 uv run streamlit run streamlit_app.py
 
-# 6. (Optional) Terminal 3 — MCP Server
-uv run python -m mcp_server.server
-
-# 7. (Optional) Terminal 4 — CLI trực tiếp
+# 5. CLI trực tiếp
 uv run python -m app.main "Top 5 sản phẩm bán chạy nhất?"
 ```
 
-**Truy cập:**
 | Service | URL |
 |---------|-----|
 | Streamlit UI | http://localhost:8501 |
 | FastAPI docs | http://localhost:8001/docs |
-| FastAPI health | http://localhost:8001/health |
 | MCP server | http://localhost:8000/mcp |
 
 ---
 
-### Option B — Docker Compose Mode
+## Available Tools
 
-**Yêu cầu:** Docker Engine + Docker Compose v2
+Agent exposed **5 high-level tools** qua Leader Agent tool-calling surface:
 
-**Bước 1 — Cấu hình env:**
-```bash
-cp .env.docker .env.docker.local
-# Mở .env.docker.local và điền các giá trị:
-#   LLM_API_URL=...
-#   LLM_API_KEY=...
-#   E2B_API_KEY=...  (nếu dùng visualization)
-```
+| Tool | Trigger | What it does |
+|------|---------|-------------|
+| `ask_sql_analyst` | Data questions, counting, ranking, trend, comparison | Schema lookup → SQL generation → validate → execute → analyze |
+| `ask_sql_analyst_parallel` | Multi-part questions (2+ independent sub-queries) | Fan-out parallel SQL workers, merge results |
+| `retrieve_rag_answer` | Business definitions, policy, qualitative context | Vector similarity search in uploaded docs |
+| `create_visualization` | Inline data values in query (e.g. "vẽ biểu đồ 10, 20, 30") | E2B sandbox → Python/Altair chart |
+| `generate_report` | Explicit multi-section report request | 4-phase pipeline: plan → execute → write → critique |
 
-**Bước 2 — Build và chạy:**
-```bash
-docker compose --env-file .env.docker.local up --build
-```
+**Low-level internals (not exposed to user):**
 
-> Lần đầu build tốn ~5-10 phút do download ML deps (torch, sentence-transformers).
-> Các lần sau dùng cache, chỉ ~30 giây.
-
-**Bước 3 — Truy cập (giống Local Mode):**
-| Service | URL |
-|---------|-----|
-| Streamlit UI | http://localhost:8501 |
-| FastAPI docs | http://localhost:8001/docs |
-| FastAPI health | http://localhost:8001/health |
-| MCP server | http://localhost:8000/mcp |
-
-**Các lệnh Docker thường dùng:**
-```bash
-# Dừng tất cả
-docker compose --env-file .env.docker.local down
-
-# Xem logs
-docker compose logs -f backend      # Backend logs
-docker compose logs -f frontend     # Streamlit logs
-docker compose logs -f              # Tất cả
-
-# Restart một service
-docker compose --env-file .env.docker.local restart backend
-
-# Rebuild sau khi sửa code
-docker compose --env-file .env.docker.local up --build backend
-
-# Reset hoàn toàn (xóa data volumes)
-docker compose down -v   # ⚠️ xóa toàn bộ SQLite data
-docker compose --env-file .env.docker.local up --build
-```
+| Tool | File | Purpose |
+|------|------|---------|
+| `validate_sql_query` | `app/tools/validate_sql.py` | AST-based SELECT-only validation + regex block |
+| `get_schema_overview` | `app/tools/get_schema.py` | Database schema introspection |
+| `ConversationMemoryStore` | `app/memory/store.py` | SQLite session persistence |
 
 ---
 
@@ -119,31 +70,24 @@ docker compose --env-file .env.docker.local up --build
 
 ```bash
 # Tests
-uv run pytest                                       # All tests
-uv run pytest tests/test_backend_api.py -v          # Backend API tests
-uv run pytest tests/test_sql_tools.py -v            # SQL tools
+uv run pytest                                        # All tests
+uv run pytest tests/test_sql_tools.py -v             # SQL tools
 uv run pytest -k "memory" -v                        # Memory tests
-uv run pytest --cov=app --cov-report=term-missing   # Coverage
+uv run pytest --cov=app --cov-report=term-missing  # Coverage
 
 # Evaluation
-uv run python evals/runner.py                       # Full eval suite
+uv run python evals/runner.py                        # Full eval suite
 
 # Database
-docker compose up -d postgres                        # Start PostgreSQL
-PYTHONPATH=. python data/seeds/create_seed_db.py     # Re-seed database
+PYTHONPATH=. python data/seeds/create_seed_db.py      # Re-seed
 docker exec da-agent-postgres psql -U postgres -c "\dt"  # List tables
 
-# API smoke tests (backend phải đang chạy)
+# API smoke tests
 curl http://localhost:8001/health
 curl -X POST http://localhost:8001/query \
   -H "Content-Type: application/json" \
   -d '{"query": "DAU 7 ngày gần đây?", "thread_id": "test-001"}'
-
-# SSE streaming test
-curl -N "http://localhost:8001/query/stream?q=DAU+hom+nay&thread_id=test"
-
-# Thread history
-curl http://localhost:8001/threads/test-001/history
+curl -N "http://localhost:8001/query/stream?q=DAU&thread_id=test"
 ```
 
 ---
@@ -152,17 +96,13 @@ curl http://localhost:8001/threads/test-001/history
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `DATABASE_URL` | ✅ | `postgresql://postgres:postgres@localhost:5432/postgres` | PostgreSQL connection string |
+| `DATABASE_URL` | ✅ | `postgresql://postgres:postgres@localhost:5432/postgres` | PostgreSQL |
 | `LLM_API_URL` | ✅ | — | LLM API endpoint |
 | `LLM_API_KEY` | ✅ | — | API key |
 | `E2B_API_KEY` | ❌ | — | E2B sandbox (visualization) |
-| `BACKEND_URL` | ❌ | `http://localhost:8001` | Backend URL (Streamlit) |
-| `TRACE_JSONL_PATH` | ❌ | `evals/reports/traces.jsonl` | Trace output |
+| `BACKEND_URL` | ❌ | `http://localhost:8001` | Streamlit → Backend |
+| `TRACE_JSONL_PATH` | ❌ | `evals/reports/traces.jsonl` | JSONL trace output |
 | `ENABLE_LANGFUSE` | ❌ | `false` | Langfuse tracing |
-| `ENABLE_MCP_TOOL_CLIENT` | ❌ | `false` | Use MCP tools |
-| `BACKEND_PORT` | ❌ | `8001` | Backend port (Docker) |
-| `FRONTEND_PORT` | ❌ | `8501` | Frontend port (Docker) |
-| `MCP_PORT` | ❌ | `8000` | MCP port (Docker) |
 
 ---
 
@@ -170,87 +110,58 @@ curl http://localhost:8001/threads/test-001/history
 
 ```
 da-agent-project/
-├── app/                    # Agent core (LangGraph, tools, memory)
-│   ├── graph/              # LangGraph nodes, state, graph builders
-│   ├── memory/             # ConversationMemoryStore (SQLite)
-│   ├── observability/      # RunTracer (JSONL + Langfuse)
-│   └── main.py             # run_query() entry point (UI-agnostic)
-├── backend/                # FastAPI backend (HTTP layer)
-│   ├── main.py             # App factory
-│   ├── routers/            # health, query, threads, evals
-│   ├── models/             # Pydantic request/response models
-│   ├── services/           # agent_service, sse_service
-│   └── http_client.py      # HTTP client dùng bởi Streamlit
-├── mcp_server/             # FastMCP server (tool surface)
-├── evals/                  # Evaluation suite
+├── app/
+│   ├── graph/               # LangGraph nodes, state, graph builders
+│   │   ├── graph.py         # build_sql_v3_graph() — 10-node graph
+│   │   ├── nodes.py         # leader_agent, artifact_evaluator, clarify_question_node
+│   │   ├── task_grounder.py # TaskProfile classifier (LLM mini)
+│   │   ├── state.py         # AgentState TypedDict, TaskProfile, WorkerArtifact
+│   │   └── standalone_visualization.py  # E2B sandbox viz worker
+│   ├── memory/              # ConversationMemoryStore (SQLite)
+│   ├── observability/       # RunTracer (JSONL + Langfuse)
+│   ├── prompts/             # All LLM prompt definitions
+│   ├── tools/               # SQL safety, RAG, schema tools
+│   └── main.py             # run_query() — UI-agnostic entry
+├── backend/                 # FastAPI HTTP layer
+├── mcp_server/             # FastMCP tool surface
+├── streamlit_app.py         # Thin Streamlit UI
+├── evals/                   # Evaluation suite
 ├── data/seeds/             # Database seed scripts
 ├── docker/                 # Dockerfiles
-│   ├── backend.Dockerfile
-│   └── frontend.Dockerfile
-├── streamlit_app.py        # Thin Streamlit UI (HTTP calls only)
-├── docker-compose.yml      # Multi-service compose
-├── .env.docker             # Docker env template (copy & fill)
-└── pyproject.toml          # Dependencies (uv)
+└── docs/                   # Architecture & technical docs
+    ├── README.md            # Entry point
+    ├── thangquang09/        # Tiếng Việt — architecture, system design, interview
+    └── _tech_specs/         # English — state model, worker contracts, observability
 ```
 
 ---
 
 ## API Reference
 
-### `GET /health`
-```json
-{"status": "ok", "version": "1.0.0", "graph_version": "v3"}
-```
-
 ### `POST /query`
 ```json
-{
-  "query": "DAU 7 ngày gần đây?",
-  "thread_id": "optional-uuid",
-  "user_semantic_context": "optional",
-  "version": "v3"
-}
+{"query": "DAU 7 ngày gần đây?", "thread_id": "optional-uuid", "version": "v3"}
 ```
 
 ### `GET /query/stream?q=...&thread_id=...`
-SSE streaming. Events:
-- `event: started` — ngay lập tức
-- `event: result` — full payload sau ~7-10s
-- `event: error` — khi lỗi
+SSE streaming: `started` → `result` / `error`
 
-### `POST /query/upload`
-Multipart form: `query`, `thread_id`, `files[]` (CSV)
-
-### `GET /threads/{id}/history?limit=20`
-Lịch sử hội thoại theo thứ tự thời gian.
+### `GET /threads/{id}/history`
+Conversation history by `thread_id`.
 
 ### `DELETE /threads/{id}`
-Xóa conversation memory. Idempotent (204).
-
-### `POST /evals/run`
-Trigger eval suite chạy nền. Trả về ngay.
+Clear conversation memory (idempotent, 204).
 
 ---
 
-## Troubleshooting
+## Architecture Highlights
 
-**Backend offline (Streamlit hiện dấu đỏ):**
-```bash
-curl http://localhost:8001/health
-uv run uvicorn backend.main:app --port 8001 --reload
-```
+**Hybrid Supervisor Pattern** — Leader Agent (LLM) điều phối, Artifact Evaluator (deterministic code) quyết định stop/continue. Không giao hoàn toàn cho LLM.
 
-**Docker: port đã bị dùng:**
-```bash
-lsof -i :8001
-# Override trong .env.docker.local:
-BACKEND_PORT=8002
-```
+**Artifact-based Evaluation** — Mỗi worker trả về `WorkerArtifact` chuẩn hóa: `artifact_type`, `status`, `payload`, `evidence`, `terminal`, `recommended_next_action`.
 
-**Docker: analytics.db chưa có (lần đầu):**
-- Backend tự động seed khi startup. Xem log: `docker compose logs backend`
+**Clarify Interrupt** — Khi `task_profile.confidence == "low"` hoặc `task_mode == "ambiguous"`, graph halt tại `clarify_question_node` và hỏi user. Không đoán sai.
 
-**Xóa data và bắt đầu lại:**
-```bash
-docker compose down -v && docker compose --env-file .env.docker.local up --build
-```
+**SQL Safety** — Chỉ SELECT. Validation qua sqlglot AST + regex block. CTE extraction để tránh injection.
+
+**Observability-first** — `@trace_node` decorator trên mọi node. JSONL trace + Langfuse prompt versioning + trace replay.
