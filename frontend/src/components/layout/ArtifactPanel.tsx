@@ -22,7 +22,11 @@ export function ArtifactPanel() {
   };
 
   const panelWidthClass =
-    content.type === "report" ? "w-[560px] min-w-[560px]" : "w-[480px] min-w-[480px]";
+    content.type === "report"
+      ? "w-[560px] min-w-[560px]"
+      : content.type === "trace"
+      ? "w-[600px] min-w-[600px]"
+      : "w-[480px] min-w-[480px]";
 
   return (
     <aside className={`flex h-full flex-col border-l border-slate-200 bg-slate-50 ${panelWidthClass}`}>
@@ -48,7 +52,7 @@ export function ArtifactPanel() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-5">
+      <div className={`flex-1 min-h-0 ${content.type === "trace" ? "overflow-hidden" : "overflow-y-auto p-5"}`}>
         {content.type === "report" && (
           <ReportView report={content.data as ReportArtifactData} />
         )}

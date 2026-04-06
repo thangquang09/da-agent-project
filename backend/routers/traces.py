@@ -47,6 +47,8 @@ async def get_trace(run_id: str) -> dict[str, Any]:
                 "started_at": node.get("started_at"),
                 "observation_type": node.get("observation_type"),
                 "error_category": node.get("error_category"),
+                "input_summary": node.get("input_summary"),
+                "output_summary": node.get("output_summary"),
             }
         )
 
