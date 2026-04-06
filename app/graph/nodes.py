@@ -988,7 +988,7 @@ def _evaluate_artifacts(state: AgentState) -> AgentState:
         reason = f"ambiguous task (mode={task_mode}, conf={task_confidence})"
     else:
         decision = "continue"
-        reason = f"missing: {missing_types}"
+        reason = "missing: " + ", ".join(sorted(str(item) for item in missing_types))
 
     logger.info(
         "Artifact evaluator: decision={decision}, reason={reason}",
@@ -1549,6 +1549,12 @@ def leader_agent(state: AgentState) -> AgentState:
     # Accumulated WorkerArtifacts — injected into state on each return.
     # Initialize from state so loop-back merges with previous cycle artifacts.
     artifacts: list[dict[str, Any]] = list(state.get("artifacts", []))
+    task_profile = state.get("task_profile") or {}
+    required_caps = {
+        str(cap).strip().lower()
+        for cap in task_profile.get("required_capabilities", [])
+        if str(cap).strip()
+    }
 
     def _make_artifact(
         tool_name: str,
@@ -1598,6 +1604,28 @@ def leader_agent(state: AgentState) -> AgentState:
             },
             "terminal": terminal,
             "recommended_next_action": recommended_action,
+        }
+
+    if "report" in required_caps:
+        tool_query = query.strip() or "Generate a detailed report for the available dataset."
+        tool_result: dict[str, Any] = {}
+        artifacts.append(_make_artifact("generate_report", tool_result, "partial"))
+        leader_tool_history.append(
+            {
+                "tool": "generate_report",
+                "status": "ok",
+                "reason": "task_profile_requires_report",
+                "source": "leader_agent",
+            }
+        )
+        return {
+            "response_mode": "report",
+            "report_request": tool_query,
+            "report_status": "planning",
+            "critic_iteration": 0,
+            "tool_history": leader_tool_history,
+            "step_count": state.get("step_count", 0) + 1,
+            "artifacts": artifacts,
         }
 
     for step in range(1, 6):
@@ -2193,9 +2221,9 @@ def compact_and_save_memory(state: AgentState) -> AgentState:
 
     conv_store = get_conversation_memory_store()
 
-    # Get current turn count
-    current_turn_count = conv_store.get_turn_count(thread_id)
-    turn_number = current_turn_count + 1
+    # Turn numbers must stay monotonic even after conversation compaction prunes
+    # earlier rows, so derive the next value from MAX(turn_number), not COUNT(*).
+    turn_number = conv_store.get_next_turn_number(thread_id)
 
     # Save user turn
     user_turn = ConversationTurn(
@@ -2230,7 +2258,7 @@ def compact_and_save_memory(state: AgentState) -> AgentState:
     conv_store.save_turn(assistant_turn)
 
     # Compact if needed
-    total_turns = turn_number + 1
+    total_turns = conv_store.get_turn_count(thread_id)
     if total_turns > MAX_TURNS_BEFORE_SUMMARY * 2:
         _compact_conversation(conv_store, thread_id)
 

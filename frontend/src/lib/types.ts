@@ -8,11 +8,21 @@ export interface VisualizationResponse {
   error: string | null;
 }
 
+export interface ReportSectionResponse {
+  section_id: string;
+  title: string;
+  insight_markdown: string;
+  chart_image: VisualizationResponse | null;
+  chart_manifest: Record<string, unknown> | null;
+  limitations: string[];
+}
+
 export interface QueryResponse {
   run_id: string;
   thread_id: string;
   answer: string;
   report_markdown: string | null;
+  report_sections: ReportSectionResponse[];
   intent: string;
   intent_reason: string;
   response_mode: string;
@@ -30,6 +40,10 @@ export interface QueryResponse {
   rows: number | null;
   context_chunks: number | null;
   step_count: number;
+  // Fields returned by backend but not in Pydantic model (extra fields):
+  sql_rows?: Record<string, unknown>[];
+  sql_row_count?: number;
+  result_metadata?: Record<string, unknown> | null;
 }
 
 export interface ThreadInfo {
@@ -72,6 +86,11 @@ export interface Message {
 
 export type ArtifactType = "report" | "sql" | "chart" | "trace";
 
+export interface ReportArtifactData {
+  markdown: string;
+  sections: ReportSectionResponse[];
+}
+
 export interface ArtifactContent {
   type: ArtifactType;
   title: string;
@@ -99,19 +118,36 @@ export interface TraceNode {
   latency_ms: number;
   observation_type: string;
   attempt: number;
-  error_category?: string;
+  started_at: string;
+  error_category?: string | null;
+  input_summary?: Record<string, unknown> | null;
+  output_summary?: Record<string, unknown> | null;
 }
 
 export interface TraceData {
+  run_id: string;
   found: boolean;
   run: {
     run_id: string;
+    thread_id: string;
     status: string;
-  };
+    query: string;
+    intent: string;
+    latency_ms: number;
+    total_steps: number;
+    used_tools: string[];
+    total_token_usage: number;
+    total_cost_usd: number;
+    final_confidence: string;
+    started_at: string;
+    ended_at: string;
+  } | null;
+  nodes: TraceNode[];
   execution_flow: TraceNode[];
+  tool_calls: Record<string, unknown>[];
   stats: {
     total_nodes: number;
     error_nodes: number;
-    total_latency_ms: number;
+    total_latency_ms: number | null;
   };
 }

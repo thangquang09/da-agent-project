@@ -56,6 +56,60 @@ body {
   background: #f8fafc;
 }
 
+.report-surface {
+  background:
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.12), transparent 28%),
+    linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+}
+
+.report-hero {
+  background:
+    linear-gradient(135deg, rgba(14, 165, 233, 0.1), rgba(255, 255, 255, 0.8)),
+    linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+}
+
+.report-prose {
+  color: #0f172a;
+}
+
+.report-prose h1 {
+  font-size: 2rem;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+  margin-bottom: 1.25rem;
+}
+
+.report-prose h2 {
+  font-size: 1.2rem;
+  margin-top: 2.25rem;
+  margin-bottom: 0.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e2e8f0;
+}
+
+.report-prose h3 {
+  font-size: 1rem;
+  color: #0f172a;
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.report-prose p,
+.report-prose li {
+  font-size: 0.97rem;
+  line-height: 1.8;
+}
+
+.report-prose ul,
+.report-prose ol {
+  margin-top: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.report-prose strong {
+  color: #020617;
+}
+
 /* Typing animation for assistant "thinking" state */
 @keyframes pulse-dot {
   0%, 80%, 100% { opacity: 0.3; }

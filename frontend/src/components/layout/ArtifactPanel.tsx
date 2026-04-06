@@ -1,6 +1,7 @@
 "use client";
 
 import { useChatStore } from "@/stores/chatStore";
+import type { ReportArtifactData } from "@/lib/types";
 import { X } from "lucide-react";
 import { ReportView } from "@/components/artifact/ReportView";
 import { SqlView } from "@/components/artifact/SqlView";
@@ -20,8 +21,11 @@ export function ArtifactPanel() {
     trace: "Trace",
   };
 
+  const panelWidthClass =
+    content.type === "report" ? "w-[560px] min-w-[560px]" : "w-[480px] min-w-[480px]";
+
   return (
-    <aside className="flex flex-col w-[480px] min-w-[480px] h-full border-l border-slate-200 bg-slate-50">
+    <aside className={`flex h-full flex-col border-l border-slate-200 bg-slate-50 ${panelWidthClass}`}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200 bg-white">
         <div className="flex items-center gap-2">
@@ -46,7 +50,7 @@ export function ArtifactPanel() {
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-5">
         {content.type === "report" && (
-          <ReportView markdown={content.data as string} />
+          <ReportView report={content.data as ReportArtifactData} />
         )}
         {content.type === "sql" && (
           <SqlView sql={content.data as string} />

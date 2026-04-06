@@ -23,6 +23,7 @@ from app.graph.nodes import (
     _evaluate_artifacts,
     artifact_evaluator,
 )
+from app.graph.task_grounder import _normalize_capabilities
 from app.graph.state import AgentState
 from app.prompts.manager import PromptManager
 
@@ -228,6 +229,10 @@ def test_leader_agent_artifacts_preserve_on_loop_back(monkeypatch):
     assert "rag_context" in artifact_types, (
         "Loop-back must preserve existing artifacts"
     )
+
+
+def test_task_grounder_report_capability_overrides_mixed_caps():
+    assert _normalize_capabilities(["sql", "visualization", "report"]) == ["report"]
 
 
 # =============================================================================

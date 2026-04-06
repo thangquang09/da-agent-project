@@ -17,6 +17,10 @@ All LLM prompts are centralized in this folder. Each prompt is defined as a `Pro
 | `fallback.py` | `FALLBACK_ASSISTANT_PROMPT` | Handles unknown/unclassifiable queries |
 | `decomposition.py` | `TASK_DECOMPOSITION_PROMPT` | Decomposes queries into parallelizable sub-tasks |
 | `visualization.py` | `VISUALIZATION_CODE_GENERATION_PROMPT` | Generates Python visualization code |
+| `report_planner.py` | `REPORT_PLANNER_PROMPT` | Plans multi-section report structure and section analysis queries |
+| `report_insight.py` | `REPORT_INSIGHT_PROMPT` | Writes grounded section insights from chart image + computed stats |
+| `report_writer.py` | `REPORT_WRITER_PROMPT` | Assembles the final report from grounded section insights |
+| `report_critic.py` | `REPORT_CRITIC_PROMPT` | Reviews the assembled report for unsupported claims and duplication |
 | `continuity.py` | `CONTINUITY_DETECTION_PROMPT_DEFINITION` | Detects implicit follow-up queries |
 | `evaluation.py` | `GROUNDEDNESS_EVALUATION_PROMPT` | Evaluates answer groundedness |
 
@@ -44,3 +48,10 @@ Prompts use `{{variable}}` syntax for variable substitution. Conditional blocks 
 ## Langfuse Integration
 
 `PromptManager` fetches prompts from Langfuse when available, with local fallbacks. Set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` environment variables to enable.
+
+## Report Prompt Roles
+
+- `report_planner` defines report sections and scoped analysis queries.
+- `report_insight` is the only report-stage prompt that sees chart images; it may reason visually but must cite numbers from `computed_stats.json`.
+- `report_writer` is an assembler, not a freeform author. It should preserve grounded section insights and avoid inventing new sections or numbers.
+- `report_critic` validates that the assembled report stays supported by section evidence and should force revision when quantitative or comparative claims are not grounded.

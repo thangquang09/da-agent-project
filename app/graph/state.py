@@ -8,7 +8,9 @@ Intent = Literal["sql", "rag", "mixed", "unknown"]
 Confidence = Literal["high", "medium", "low"]
 ContextType = Literal["user_provided", "csv_auto", "mixed", "default"]
 ResponseMode = Literal["answer", "report"]
-ReportStatus = Literal["planning", "executing", "writing", "critiquing", "done", "failed"]
+ReportStatus = Literal[
+    "planning", "executing", "insighting", "writing", "critiquing", "done", "failed"
+]
 TaskType = Literal[
     "sql_query", "data_analysis", "context_lookup", "standalone_visualization"
 ]
@@ -86,6 +88,7 @@ class TaskState(TypedDict, total=False):
 class AnswerPayload(TypedDict, total=False):
     answer: str
     report_markdown: str | None
+    report_sections: list[dict[str, Any]]
     evidence: list[str]
     confidence: Confidence
     used_tools: list[str]
@@ -196,8 +199,18 @@ class ReportSection(TypedDict, total=False):
     analysis_query: str
     sql_result: dict[str, Any]
     result_ref: dict[str, Any] | None
+    raw_result_ref: dict[str, Any] | None
     visualization: dict[str, Any] | None
+    sandbox_analysis: dict[str, Any] | None
+    computed_stats: dict[str, Any] | None
+    chart_image: dict[str, Any] | None
+    chart_html: str | None
+    chart_manifest: dict[str, Any] | None
     narrative: str
+    insight_markdown: str
+    insight_citations: list[dict[str, Any]]
+    limitations: list[str]
+    analysis_status: Literal["pending", "done", "failed"]
     status: Literal["pending", "done", "failed"]
     error: str | None
     generated_sql: str

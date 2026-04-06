@@ -20,11 +20,18 @@ interface AssistantMessageProps {
 export function AssistantMessage({ message }: AssistantMessageProps) {
   const openArtifact = useChatStore((s) => s.openArtifact);
   const result = message.result;
+  const isReportResponse = result?.response_mode === "report" && !!result?.report_markdown;
 
   const hasReport = !!result?.report_markdown;
   const hasSql = !!result?.generated_sql;
   const hasChart = !!result?.visualization?.image_data;
   const hasTrace = !!result?.run_id;
+  const reportArtifactData = result?.report_markdown
+    ? {
+        markdown: result.report_markdown,
+        sections: result.report_sections ?? [],
+      }
+    : null;
 
   return (
     <div className="flex justify-start">
@@ -49,7 +56,25 @@ export function AssistantMessage({ message }: AssistantMessageProps) {
             ) : message.status === "failed" ? (
               <p className="text-sm text-red-500">{message.content}</p>
             ) : (
-              <MarkdownRenderer content={message.content} />
+              <div className={isReportResponse ? "space-y-3" : undefined}>
+                <MarkdownRenderer content={message.content} />
+                {isReportResponse && (
+                  <button
+                    onClick={() =>
+                      openArtifact({
+                        type: "report",
+                        title: "Report",
+                        data: reportArtifactData,
+                        messageId: message.id,
+                      })
+                    }
+                    className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 transition-colors"
+                  >
+                    <FileText size={15} />
+                    Mở Report
+                  </button>
+                )}
+              </div>
             )}
           </div>
 
@@ -64,7 +89,7 @@ export function AssistantMessage({ message }: AssistantMessageProps) {
                     openArtifact({
                       type: "report",
                       title: "Report",
-                      data: result.report_markdown,
+                      data: reportArtifactData,
                       messageId: message.id,
                     })
                   }

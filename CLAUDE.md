@@ -29,6 +29,7 @@ Trả lời business/data questions qua SQL tools, RAG retrieval, Visualization,
 - **Database**: PostgreSQL (schemas: `public`, `agent`, `user_data`)
 - **LLM orchestration**: LangGraph (10-node graph, 3 routing decisions)
 - **Frontend**: Next.js web chat (:3000) + Streamlit UI (:8501) → FastAPI backend
+- **Sandboxing**: Configurable `docker | e2b | none` for visualization/report compute, default `docker`
 - **Observability**: JSONL traces + Langfuse
 
 ---
@@ -94,12 +95,12 @@ User (Next.js / Streamlit / CLI / API)
         +-- process_uploaded_files  →  Parse + register tables
         +-- inject_session_context  →  Load conversation history
         +-- task_grounder           →  LLM mini: TaskProfile (mode, source, capabilities, confidence)
-        +-- leader_agent            →  5-step tool-calling loop (SQL, RAG, viz, report)
+        +-- leader_agent            →  Tool routing with deterministic report dispatch
         +-- artifact_evaluator     →  Deterministic: finalize / continue / retry / wait_for_user
         +-- clarify_question_node  →  Interrupt: halt if confidence=low or mode=ambiguous
         +-- capture_action_node    →  Save last_action, conversation_turn
         +-- compact_and_save_memory →  Persist to PostgreSQL (agent schema)
-        +-- report_subgraph        →  4-phase: plan → execute → write → critique
+        +-- report_subgraph        →  6-phase: plan → SQL+sandbox execute → grounded insight → assemble → critique → finalize
         v
   Synthesized answer + trace (JSONL + Langfuse)
 ```
@@ -111,8 +112,8 @@ User (Next.js / Streamlit / CLI / API)
 | `ask_sql_analyst` | `app/tools/` | Schema → SQL → validate → execute → analyze |
 | `ask_sql_analyst_parallel` | `app/tools/` | Fan-out parallel SQL workers |
 | `retrieve_rag_answer` | `app/tools/retrieve_rag_answer.py` | Vector similarity search |
-| `create_visualization` | `app/graph/standalone_visualization.py` | E2B sandbox → Altair chart |
-| `generate_report` | `app/graph/report_subgraph.py` | Report pipeline: plan → execute → write → critique |
+| `create_visualization` | `app/graph/standalone_visualization.py` | Configurable sandbox (`docker | e2b | none`) → chart artifact |
+| `generate_report` | `app/graph/report_subgraph.py` | Grounded report pipeline with SQL → sandbox stats/chart → insight → assemble |
 | `validate_sql_query` | `app/tools/validate_sql.py` | AST-based SELECT-only validation |
 | `get_schema_overview` | `app/tools/get_schema.py` | DB schema introspection |
 
@@ -133,8 +134,16 @@ User (Next.js / Streamlit / CLI / API)
 | Hỏi giá trị, ranking, trend | `sql` | "DAU hôm qua?" |
 | Hỏi định nghĩa, business rule | `rag` | "Retention D1 là gì?" |
 | Cần cả data lẫn context | `mixed` | "Retention giảm từ lúc nào và metric này tính ra sao?" |
+| Cần báo cáo dài, nhiều section, có biểu đồ | `report` | "Viết báo cáo chi tiết về bộ data này" |
 
 Route bằng structured output (enum), không phải free-form text.
+
+### Report grounding
+
+- Report requests are normalized to `required_capabilities=["report"]` and dispatched directly into `report_subgraph`.
+- Report sections run through `SQL -> sandbox compute/viz -> insight generation`.
+- Insight nodes can inspect the chart image for qualitative reasoning, but every numeric claim must come from `computed_stats.json`.
+- Final chat answer for report mode is intentionally short; the full document and section charts are rendered in the right-side Report artifact panel.
 
 ---
 
@@ -201,7 +210,10 @@ Có → good change. Không → probably a distraction.
 | `DATABASE_URL` | Yes | `postgresql://postgres:postgres@localhost:5432/postgres` | PostgreSQL |
 | `LLM_API_URL` | Yes | — | LLM API endpoint |
 | `LLM_API_KEY` | Yes | — | API key |
-| `E2B_API_KEY` | No | — | E2B sandbox (visualization) |
+| `TYPE_OF_SANDBOX` | No | `docker` | Sandbox backend for visualization/report compute: `docker`, `e2b`, or `none` |
+| `DOCKER_SANDBOX_IMAGE` | No | `da-agent-sandbox:latest` | Docker image used for sandbox execution |
+| `DOCKER_SANDBOX_BASE_IMAGE` | No | `python:3.11-slim` | Base image used when bootstrapping the Docker sandbox image |
+| `E2B_API_KEY` | No | — | E2B sandbox key when `TYPE_OF_SANDBOX=e2b` |
 | `BACKEND_URL` | No | `http://localhost:8001` | Streamlit → Backend |
 | `ENABLE_LANGFUSE` | No | `false` | Langfuse tracing |
 

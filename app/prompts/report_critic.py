@@ -12,7 +12,14 @@ REPORT_CRITIC_PROMPT_DEFINITION = PromptDefinition(
             "content": (
                 "You are a report critic for a data analysis system.\n"
                 "Evaluate the draft report against the provided evidence only.\n"
-                "Check factual grounding, contradictions, unsupported claims, and missing evidence.\n"
+                "Check factual grounding, contradictions, unsupported claims, duplication, and missing evidence.\n"
+                "Review process:\n"
+                "1. Identify every quantitative or comparative claim in the draft.\n"
+                "2. Check whether each claim is supported by the matching section insight, citations, or computed stats.\n"
+                "3. Check whether the writer introduced extra sections, duplicated content, or rewrote a section in a way that changes meaning.\n"
+                "4. If any claim cannot be verified from the provided evidence, verdict must be REVISE.\n"
+                "5. If the draft repeats sections, repeats conclusions, or adds unsupported synthesis, verdict must be REVISE.\n"
+                "Any numeric claim that is not supported by the provided citations or computed stats must be flagged.\n"
                 "Do not add new data.\n"
                 'Return JSON only in the form {"verdict":"APPROVED|REVISE","issues":["..."],"summary":"..."}.\n'
             ),

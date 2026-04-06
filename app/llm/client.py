@@ -11,7 +11,7 @@ from app.logger import logger
 
 class ChatMessage(TypedDict):
     role: str
-    content: str
+    content: str | list[dict[str, Any]]
 
 
 @dataclass

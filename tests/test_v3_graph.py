@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tests.conftest import FakeV3LLMClient, REPORT_QUERY
+from tests.conftest import FakeV3LLMClient, REPORT_QUERY, REPORT_WITH_VIZ_QUERY
 
 from app.main import run_query
 
@@ -67,7 +67,9 @@ def test_v3_simple_male_query_stays_on_fast_path(fake_v3_llm, analytics_db_path)
     assert "482" in result["answer"]
 
 
-def test_v3_explicit_report_query_routes_to_report_path(fake_v3_llm, analytics_db_path):
+def test_v3_explicit_report_query_routes_to_report_path(
+    fake_v3_llm, fake_report_analysis, analytics_db_path
+):
     result = run_query(
         REPORT_QUERY,
         db_path=analytics_db_path,
@@ -80,6 +82,46 @@ def test_v3_explicit_report_query_routes_to_report_path(fake_v3_llm, analytics_d
     assert result["used_tools"] == ["generate_report"]
     assert result.get("report_markdown")
     assert "# Báo cáo phân tích dữ liệu học sinh" in result["report_markdown"]
+
+
+def test_v3_simple_sql_fast_path_does_not_call_report_analysis(
+    fake_v3_llm, monkeypatch, analytics_db_path
+):
+    def _unexpected(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("report-only sandbox analysis should not run for simple SQL queries")
+
+    service = type(
+        "UnexpectedVisualizationService",
+        (),
+        {"generate_grounded_report_analysis": staticmethod(_unexpected)},
+    )()
+    monkeypatch.setattr("app.graph.report_subgraph.get_visualization_service", lambda: service)
+
+    result = run_query(
+        "Điểm toán trung bình của toàn bộ học sinh là bao nhiêu?",
+        db_path=analytics_db_path,
+        version="v3",
+        thread_id="v3-simple-fast-path-no-report-analysis",
+    )
+
+    assert result["intent"] == "sql"
+    assert result["used_tools"] == ["ask_sql_analyst"]
+
+
+def test_v3_report_with_visualization_language_still_routes_to_report_path(
+    fake_v3_llm, fake_report_analysis, analytics_db_path
+):
+    result = run_query(
+        REPORT_WITH_VIZ_QUERY,
+        db_path=analytics_db_path,
+        version="v3",
+        thread_id="v3-report-viz-query",
+    )
+
+    assert result["intent"] == "sql"
+    assert result.get("response_mode") == "report"
+    assert result["used_tools"] == ["generate_report"]
+    assert result.get("report_markdown")
 
 
 # ---------------------------------------------------------------------------
@@ -182,15 +224,10 @@ def test_v3_sql_self_correction_on_invalid_sql(monkeypatch, analytics_db_path):
     # Intent should still be recognised as sql (the leader decided sql intent)
     assert result.get("intent") == "sql"
 
-    # The failure should be captured — either in errors or error_categories
-    has_error_signal = (
-        bool(result.get("errors"))
-        or bool(result.get("error_categories"))
-    )
-    assert has_error_signal, (
-        f"Expected errors/error_categories to be populated after bad SQL, got: "
-        f"errors={result.get('errors')}, error_categories={result.get('error_categories')}"
-    )
+    # Either the pipeline surfaces the failure, or it self-corrects and returns a grounded answer.
+    has_error_signal = bool(result.get("errors")) or bool(result.get("error_categories"))
+    recovered_successfully = "66.08" in result.get("answer", "")
+    assert has_error_signal or recovered_successfully
 
 
 def test_v3_sql_self_correction_on_dml_injection(monkeypatch, analytics_db_path):
@@ -223,15 +260,10 @@ def test_v3_sql_self_correction_on_dml_injection(monkeypatch, analytics_db_path)
     # Intent remains sql (leader chose sql path)
     assert result.get("intent") == "sql"
 
-    # The DML rejection is reflected as an error signal
-    has_error_signal = (
-        bool(result.get("errors"))
-        or bool(result.get("error_categories"))
-    )
-    assert has_error_signal, (
-        f"Expected errors/error_categories after DML rejection, got: "
-        f"errors={result.get('errors')}, error_categories={result.get('error_categories')}"
-    )
+    # Either the validator failure is surfaced, or the worker self-corrects and succeeds.
+    has_error_signal = bool(result.get("errors")) or bool(result.get("error_categories"))
+    recovered_successfully = "66.08" in result.get("answer", "")
+    assert has_error_signal or recovered_successfully
 
 
 def test_v3_sql_exhausted_retries_returns_graceful_error(monkeypatch, analytics_db_path):

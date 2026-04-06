@@ -8,6 +8,7 @@ from app.prompts.evaluation import GROUNDEDNESS_EVALUATION_PROMPT
 from app.prompts.fallback import FALLBACK_ASSISTANT_PROMPT
 from app.prompts.leader import LEADER_AGENT_PROMPT_DEFINITION
 from app.prompts.report_critic import REPORT_CRITIC_PROMPT_DEFINITION
+from app.prompts.report_insight import REPORT_INSIGHT_PROMPT_DEFINITION
 from app.prompts.report_planner import REPORT_PLANNER_PROMPT_DEFINITION
 from app.prompts.report_writer import REPORT_WRITER_PROMPT_DEFINITION
 from app.prompts.manager import PromptManager, prompt_manager
@@ -30,6 +31,7 @@ __all__ = [
     "FALLBACK_ASSISTANT_PROMPT",
     "LEADER_AGENT_PROMPT_DEFINITION",
     "REPORT_PLANNER_PROMPT_DEFINITION",
+    "REPORT_INSIGHT_PROMPT_DEFINITION",
     "REPORT_WRITER_PROMPT_DEFINITION",
     "REPORT_CRITIC_PROMPT_DEFINITION",
     "TASK_DECOMPOSITION_PROMPT",

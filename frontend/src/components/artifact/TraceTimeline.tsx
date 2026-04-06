@@ -75,7 +75,7 @@ export function TraceTimeline({ runId }: TraceTimelineProps) {
         />
         <StatCard
           label="Latency"
-          value={`${(stats.total_latency_ms / 1000).toFixed(1)}s`}
+          value={stats.total_latency_ms != null ? `${(stats.total_latency_ms / 1000).toFixed(1)}s` : "—"}
         />
       </div>
 

@@ -186,6 +186,24 @@ class ConversationMemoryStore:
             result = cursor.fetchone()
         return result[0] if result else 0
 
+    def get_next_turn_number(self, thread_id: str) -> int:
+        """Return the next monotonic turn number for a thread.
+
+        This uses ``MAX(turn_number)`` instead of ``COUNT(*)`` so numbering
+        remains unique even after old turns are pruned during compaction.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT COALESCE(MAX(turn_number), 0)
+                FROM agent.conversation_memory
+                WHERE thread_id = %s
+                """,
+                (thread_id,),
+            )
+            result = cursor.fetchone()
+        return (result[0] if result else 0) + 1
+
     def update_summary(self, summary: ConversationSummary) -> None:
         """Upsert conversation summary."""
         with self._get_connection() as conn:
@@ -264,13 +282,41 @@ class ConversationMemoryStore:
         return deleted
 
     def list_threads(self, limit: int = 50) -> list[dict[str, Any]]:
-        """List all conversation threads, ordered by most recently updated."""
+        """List all conversation threads, ordered by most recently updated.
+
+        Queries conversation_memory directly for turn counts and timestamps,
+        then left-joins conversation_summary for summary data. Falls back to
+        the first user message as a preview when no summary exists.
+        """
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """
-                SELECT thread_id, summary, turn_count, last_updated, key_entities
-                FROM agent.conversation_summary
-                ORDER BY last_updated DESC
+                SELECT
+                    m.thread_id,
+                    s.summary,
+                    m.turn_count,
+                    m.last_updated,
+                    COALESCE(s.key_entities, '[]') AS key_entities,
+                    preview.first_content
+                FROM (
+                    SELECT
+                        thread_id,
+                        COUNT(*) AS turn_count,
+                        MAX(timestamp) AS last_updated
+                    FROM agent.conversation_memory
+                    GROUP BY thread_id
+                ) m
+                LEFT JOIN agent.conversation_summary s
+                    ON m.thread_id = s.thread_id
+                LEFT JOIN (
+                    SELECT DISTINCT ON (thread_id)
+                        thread_id,
+                        content AS first_content
+                    FROM agent.conversation_memory
+                    WHERE role = 'user'
+                    ORDER BY thread_id, turn_number ASC
+                ) preview ON m.thread_id = preview.thread_id
+                ORDER BY m.last_updated DESC
                 LIMIT %s
                 """,
                 (limit,),
@@ -280,7 +326,7 @@ class ConversationMemoryStore:
         return [
             {
                 "thread_id": row[0],
-                "summary": row[1],
+                "summary": row[1] or (row[5][:120] + ("..." if row[5] and len(row[5]) > 120 else "") if row[5] else None),
                 "turn_count": row[2],
                 "last_updated": row[3].isoformat() if hasattr(row[3], "isoformat") else str(row[3]),
                 "key_entities": row[4] if row[4] else [],

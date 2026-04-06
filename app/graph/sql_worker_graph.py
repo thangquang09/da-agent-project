@@ -13,6 +13,7 @@ from app.llm import LLMClient
 from app.logger import logger
 from app.prompts import prompt_manager
 from app.tools import query_sql, validate_sql
+from app.tools.get_schema import get_schema_overview
 from app.tools.visualization import (
     get_visualization_service,
     is_visualization_available,

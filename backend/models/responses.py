@@ -15,6 +15,15 @@ class VisualizationResponse(BaseModel):
     error: str | None = None
 
 
+class ReportSectionResponse(BaseModel):
+    section_id: str = ""
+    title: str = ""
+    insight_markdown: str = ""
+    chart_image: VisualizationResponse | None = None
+    chart_manifest: dict[str, Any] | None = None
+    limitations: list[str] = []
+
+
 class QueryResponse(BaseModel):
     """
     HTTP response shape for all query endpoints.
@@ -27,6 +36,7 @@ class QueryResponse(BaseModel):
     thread_id: str = ""
     answer: str = ""
     report_markdown: str | None = None
+    report_sections: list[ReportSectionResponse] = []
     intent: str = "unknown"
     intent_reason: str = ""
     response_mode: str = "answer"

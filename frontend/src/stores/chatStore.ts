@@ -22,6 +22,13 @@ function now(): string {
   return new Date().toISOString();
 }
 
+function buildAssistantContent(result: QueryResponse): string {
+  if (result.response_mode === "report" && result.report_markdown) {
+    return "Đây là report của bạn. Bấm vào nút Report để xem bản trình bày đầy đủ.";
+  }
+  return result.answer;
+}
+
 interface ChatStore {
   // ── Threads ──────────────────────────────────────────────────────────
   threads: ThreadInfo[];
@@ -92,7 +99,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const messages: Message[] = turns.map((t) => ({
         id: `turn-${t.turn_number}`,
         role: t.role as "user" | "assistant",
-        content: t.content,
+        content: t.content || t.result_summary || "",
         timestamp: t.timestamp,
         status: "done" as const,
       }));
@@ -152,7 +159,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             m.id === assistantMsg.id
               ? {
                   ...m,
-                  content: result.answer,
+                  content: buildAssistantContent(result),
                   result,
                   status: "done" as const,
                 }
@@ -217,7 +224,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       set((s) => ({
         messages: s.messages.map((m) =>
           m.id === assistantMsg.id
-            ? { ...m, content: result.answer, result, status: "done" as const }
+            ? {
+                ...m,
+                content: buildAssistantContent(result),
+                result,
+                status: "done" as const,
+              }
             : m
         ),
         isStreaming: false,

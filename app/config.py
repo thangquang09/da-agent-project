@@ -68,6 +68,12 @@ class Settings:
     model_report_planner: str
     model_report_writer: str
     model_report_critic: str
+    type_of_sandbox: str
+    docker_sandbox_image: str
+    docker_sandbox_base_image: str
+    docker_sandbox_bootstrap_command: str
+    docker_sandbox_timeout_seconds: int
+    docker_sandbox_workdir: str
     # Debug file sink — always active, defaults to logs/DEBUG.log
     debug_log_path: str
     debug_log_level: str
@@ -103,7 +109,7 @@ def load_settings() -> Settings:
     model_leader = os.getenv("MODEL_LEADER", default_model)
     model_router = os.getenv("MODEL_ROUTER", default_router_model)
     model_preclassifier = os.getenv(
-        "MODEL_PRECLASSIFIER", "gh/gpt-4o-mini"
+        "MODEL_PRECLASSIFIER", default_router_model
     )  # Lightweight classifier model
     model_synthesis = os.getenv("MODEL_SYNTHESIS", default_synthesis_model)
     model_sql_generation = os.getenv("MODEL_SQL_GENERATION", default_model)
@@ -116,6 +122,7 @@ def load_settings() -> Settings:
     model_report_planner = os.getenv("MODEL_REPORT_PLANNER", model_leader)
     model_report_writer = os.getenv("MODEL_REPORT_WRITER", model_synthesis)
     model_report_critic = os.getenv("MODEL_REPORT_CRITIC", model_leader)
+    type_of_sandbox = os.getenv("TYPE_OF_SANDBOX", "docker").strip().lower() or "docker"
 
     settings = Settings(
         llm_api_url=os.getenv(
@@ -169,6 +176,23 @@ def load_settings() -> Settings:
         model_report_planner=model_report_planner,
         model_report_writer=model_report_writer,
         model_report_critic=model_report_critic,
+        type_of_sandbox=type_of_sandbox,
+        docker_sandbox_image=os.getenv(
+            "DOCKER_SANDBOX_IMAGE",
+            "da-agent-sandbox:latest",
+        ),
+        docker_sandbox_base_image=os.getenv(
+            "DOCKER_SANDBOX_BASE_IMAGE",
+            "python:3.11-slim",
+        ),
+        docker_sandbox_bootstrap_command=os.getenv(
+            "DOCKER_SANDBOX_BOOTSTRAP_COMMAND",
+            "python -m pip install --quiet pandas matplotlib seaborn ipython pillow",
+        ),
+        docker_sandbox_timeout_seconds=_env_int(
+            os.getenv("DOCKER_SANDBOX_TIMEOUT_SECONDS"), 180
+        ),
+        docker_sandbox_workdir=os.getenv("DOCKER_SANDBOX_WORKDIR", "/workspace"),
         # Debug file sink — always active, defaults to logs/DEBUG.log
         debug_log_path=os.getenv(
             "DEBUG_LOG_PATH", str(PROJECT_ROOT / "logs" / "DEBUG.log")

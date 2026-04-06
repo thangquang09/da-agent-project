@@ -26,6 +26,22 @@ def _extract_first_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _normalize_capabilities(raw_caps: Any) -> list[str]:
+    if not isinstance(raw_caps, list):
+        return ["sql"]
+
+    ordered: list[str] = []
+    for item in raw_caps:
+        cap = str(item).strip().lower()
+        if cap and cap not in ordered:
+            ordered.append(cap)
+
+    if "report" in ordered:
+        return ["report"]
+
+    return ordered or ["sql"]
+
+
 def task_grounder(state: AgentState) -> AgentState:
     """Classify user query into a structured TaskProfile.
 
@@ -72,7 +88,9 @@ def task_grounder(state: AgentState) -> AgentState:
             task_profile: TaskProfile = {
                 "task_mode": str(parsed.get("task_mode", "simple")),
                 "data_source": str(parsed.get("data_source", "database")),
-                "required_capabilities": parsed.get("required_capabilities", ["sql"]),
+                "required_capabilities": _normalize_capabilities(
+                    parsed.get("required_capabilities", ["sql"])
+                ),
                 "followup_mode": str(parsed.get("followup_mode", "fresh_query")),
                 "confidence": str(parsed.get("confidence", "medium")),
                 "reasoning": str(parsed.get("reasoning", "")),

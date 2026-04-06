@@ -19,7 +19,7 @@ Three-panel layout (`src/app/page.tsx`):
 |-------|-----------|-------|
 | Left sidebar | `Sidebar` | 280px — thread history |
 | Center chat | `ChatPanel` | flex — messages + input |
-| Right artifact | `ArtifactPanel` | 480px — report/SQL/chart/trace |
+| Right artifact | `ArtifactPanel` | 480px default, 560px for report artifacts |
 
 ## State
 
@@ -27,6 +27,12 @@ Single Zustand store (`src/stores/chatStore.ts`) manages:
 - Thread list, active thread, messages
 - Artifact panel (open/close/content)
 - File uploads, streaming state
+
+## Report UX
+
+- Report-mode assistant bubbles stay short and point users to the `Report` artifact instead of dumping the full document into chat.
+- The right-side report panel renders the report as a document surface, not raw markdown.
+- If backend returns `report_sections[].chart_image`, `ReportView` tries to inject section charts under matching H2 sections and falls back to an appendix-style block for unmatched charts.
 
 ## API
 

@@ -12,6 +12,11 @@ export interface StreamCallbacks {
 /**
  * Open an SSE connection to `GET /query/stream`.
  *
+ * Backend sends NAMED SSE events:
+ *   event: started  → data: {"event":"started","node":null,"data":{"query":"..."}}
+ *   event: result   → data: {"event":"result","node":null,"data":{...QueryResponse}}
+ *   event: error    → data: {"event":"error","node":null,"data":{"message":"...","category":"..."}}
+ *
  * Returns a cleanup function that closes the EventSource.
  */
 export function streamQuery(
@@ -31,42 +36,39 @@ export function streamQuery(
 
   const source = new EventSource(`${API_URL}/query/stream?${params}`);
 
-  source.onmessage = (ev) => {
+  // Must use addEventListener for named events — onmessage only fires for
+  // untyped events (no "event:" line in the SSE frame).
+  source.addEventListener("started", () => {
+    callbacks.onStarted?.();
+  });
+
+  source.addEventListener("result", (ev: MessageEvent) => {
     try {
       const payload = JSON.parse(ev.data) as {
         event: string;
-        data: Record<string, unknown>;
+        data: QueryResponse;
       };
-
-      switch (payload.event) {
-        case "started":
-          callbacks.onStarted?.();
-          break;
-        case "result":
-          callbacks.onResult?.(payload.data as unknown as QueryResponse);
-          source.close();
-          callbacks.onClose?.();
-          break;
-        case "error":
-          callbacks.onError?.(
-            (payload.data as { error?: string }).error ?? "Unknown error"
-          );
-          source.close();
-          callbacks.onClose?.();
-          break;
-      }
+      callbacks.onResult?.(payload.data);
     } catch {
-      callbacks.onError?.("Failed to parse SSE event");
-      source.close();
-      callbacks.onClose?.();
+      callbacks.onError?.("Failed to parse SSE result event");
     }
-  };
-
-  source.onerror = () => {
-    callbacks.onError?.("Connection lost");
     source.close();
     callbacks.onClose?.();
-  };
+  });
+
+  source.addEventListener("error", (ev: MessageEvent) => {
+    try {
+      const payload = JSON.parse(ev.data) as {
+        data: { message?: string; category?: string };
+      };
+      callbacks.onError?.(payload.data?.message ?? "Unknown error");
+    } catch {
+      // Also fires on connection failure (ev.data may be null)
+      callbacks.onError?.("Connection lost");
+    }
+    source.close();
+    callbacks.onClose?.();
+  });
 
   return () => {
     source.close();

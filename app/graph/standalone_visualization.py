@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import base64
-import csv
-import io
 from typing import Any
 
 from app.graph.state import TaskState
@@ -108,50 +105,32 @@ def inline_data_worker(task_state: TaskState) -> dict[str, Any]:
                 "artifact_recommended_action": "clarify",
             }
 
-        # Step 2: Upload raw data as CSV to E2B sandbox
-        csv_content = _convert_to_csv(raw_data)
+        # Step 2: Execute visualization in the configured sandbox
+        normalized_rows = _normalize_raw_data(raw_data)
         service = get_visualization_service()
-        sbx = service._get_sandbox()
-        data_path = "/home/user/query_data.csv"
-        sbx.files.write(data_path, csv_content.encode("utf-8"))
+        result = service.generate_visualization(
+            data_rows=normalized_rows,
+            user_query=query,
+            python_code=python_code,
+        )
 
-        # Step 3: Execute visualization code
-        execution = sbx.run_code(python_code)
-
-        if execution.error:
-            logger.error(f"Standalone visualization execution error: {execution.error}")
+        if not result.success:
+            logger.error(
+                "Standalone visualization execution error: {error}",
+                error=result.error,
+            )
             return {
                 "visualization": {
                     "success": False,
-                    "error": f"{execution.error.name}: {execution.error.value}",
-                    "code_executed": python_code,
+                    "error": result.error,
+                    "code_executed": result.code_executed,
                 },
                 "status": "failed",
                 # WorkerArtifact fields
                 "artifact_type": "chart",
                 "artifact_status": "failed",
-                "artifact_payload": {"error": f"{execution.error.name}: {execution.error.value}"},
-                "artifact_evidence": {"source": "code_execution", "error_type": execution.error.name},
-                "artifact_terminal": False,
-                "artifact_recommended_action": "clarify",
-            }
-
-        # Step 4: Extract image
-        image_data, image_format = _extract_image(execution)
-
-        if not image_data:
-            return {
-                "visualization": {
-                    "success": False,
-                    "error": "No chart generated. Code must use plt.show()",
-                    "code_executed": python_code,
-                },
-                "status": "failed",
-                # WorkerArtifact fields
-                "artifact_type": "chart",
-                "artifact_status": "failed",
-                "artifact_payload": {"error": "No chart generated"},
-                "artifact_evidence": {"source": "image_extraction"},
+                "artifact_payload": {"error": result.error},
+                "artifact_evidence": {"source": "code_execution"},
                 "artifact_terminal": False,
                 "artifact_recommended_action": "clarify",
             }
@@ -159,10 +138,10 @@ def inline_data_worker(task_state: TaskState) -> dict[str, Any]:
         return {
             "visualization": {
                 "success": True,
-                "image_data": image_data,
-                "image_format": image_format,
-                "code_executed": python_code,
-                "execution_time_ms": 0.0,
+                "image_data": result.image_data,
+                "image_format": result.image_format,
+                "code_executed": result.code_executed,
+                "execution_time_ms": result.execution_time_ms,
                 "terminal": True,
                 "recommended_next_action": "finalize",
             },
@@ -171,14 +150,14 @@ def inline_data_worker(task_state: TaskState) -> dict[str, Any]:
             "artifact_type": "chart",
             "artifact_status": "success",
             "artifact_payload": {
-                "image_data": image_data,
-                "image_format": image_format,
+                "image_data": result.image_data,
+                "image_format": result.image_format,
                 "chart_type": "unknown",  # Would need LLM to determine
-                "normalized_rows": len(raw_data),
+                "normalized_rows": len(normalized_rows),
             },
             "artifact_evidence": {
                 "source": "inline_data",
-                "normalized_rows": len(raw_data),
+                "normalized_rows": len(normalized_rows),
             },
             "artifact_terminal": True,
             "artifact_recommended_action": "finalize",
@@ -279,29 +258,6 @@ def _generate_standalone_visualization_code(
             error=str(exc),
         )
         return None
-
-
-def _convert_to_csv(raw_data: list[dict[str, Any]]) -> str:
-    """Convert raw data to CSV format."""
-    if not raw_data:
-        return ""
-
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=raw_data[0].keys())
-    writer.writeheader()
-    writer.writerows(raw_data)
-    return output.getvalue()
-
-
-def _extract_image(execution: Any) -> tuple[bytes | None, str]:
-    """Extract PNG image from execution results."""
-    for result in execution.results:
-        if result.png:
-            return base64.b64decode(result.png), "png"
-        if result.jpeg:
-            return base64.b64decode(result.jpeg), "jpeg"
-    return None, ""
-
 
 # Backward compatibility alias
 standalone_visualization_worker = inline_data_worker

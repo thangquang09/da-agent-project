@@ -17,6 +17,7 @@ from app.prompts.evaluation import GROUNDEDNESS_EVALUATION_PROMPT
 from app.prompts.fallback import FALLBACK_ASSISTANT_PROMPT
 from app.prompts.leader import LEADER_AGENT_PROMPT_DEFINITION
 from app.prompts.report_critic import REPORT_CRITIC_PROMPT_DEFINITION
+from app.prompts.report_insight import REPORT_INSIGHT_PROMPT_DEFINITION
 from app.prompts.report_planner import REPORT_PLANNER_PROMPT_DEFINITION
 from app.prompts.report_writer import REPORT_WRITER_PROMPT_DEFINITION
 from app.prompts.router import ROUTER_PROMPT_DEFINITION
@@ -311,6 +312,12 @@ class PromptManager:
                 "section_results": section_results,
                 "report_draft": report_draft,
             },
+        )
+
+    def report_insight_system_messages(self) -> list[dict[str, str]]:
+        return self._compile_prompt(
+            REPORT_INSIGHT_PROMPT_DEFINITION,
+            {},
         )
 
     def sql_worker_messages(
