@@ -6,9 +6,11 @@ from app.tools.result_store import ResultStore
 
 
 def test_result_store_make_json_safe_converts_decimal() -> None:
-    store = ResultStore()
+    from app.tools.result_store import _decimal_to_serializable
 
-    safe = store._make_json_safe(  # noqa: SLF001
+    from decimal import Decimal
+
+    safe = _decimal_to_serializable(
         {
             "value": Decimal("66.082"),
             "rows": [{"avg": Decimal("1.5")}],

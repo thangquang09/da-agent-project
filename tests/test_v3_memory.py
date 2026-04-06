@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from app.config import load_settings
 from app.graph.nodes import compact_and_save_memory, inject_session_context
 from app.memory.conversation_store import (
     ConversationMemoryStore,
@@ -10,13 +11,16 @@ from app.memory.conversation_store import (
 )
 
 
-def test_inject_session_context_returns_recent_turns_summary_and_last_action(monkeypatch, tmp_path):
-    memory_db = tmp_path / "conversation_memory.db"
-    store = ConversationMemoryStore(db_path=memory_db)
+def test_inject_session_context_returns_recent_turns_summary_and_last_action(monkeypatch):
+    settings = load_settings()
+    store = ConversationMemoryStore(db_url=settings.database_url)
     monkeypatch.setattr(
         "app.memory.conversation_store.get_conversation_memory_store",
         lambda: store,
     )
+
+    # Clean up test thread to avoid UNIQUE violations from previous runs
+    store.clear_thread("memory-thread")
 
     store.update_summary(
         ConversationSummary(
@@ -73,9 +77,9 @@ def test_inject_session_context_returns_recent_turns_summary_and_last_action(mon
     assert update["last_action"]["action_type"] == "sql"
 
 
-def test_compact_and_save_memory_persists_last_action(monkeypatch, tmp_path):
-    memory_db = tmp_path / "conversation_memory.db"
-    store = ConversationMemoryStore(db_path=memory_db)
+def test_compact_and_save_memory_persists_last_action(monkeypatch):
+    settings = load_settings()
+    store = ConversationMemoryStore(db_url=settings.database_url)
     monkeypatch.setattr(
         "app.memory.conversation_store.get_conversation_memory_store",
         lambda: store,

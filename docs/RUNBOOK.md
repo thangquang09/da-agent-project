@@ -52,7 +52,7 @@ PYTHONPATH=. python data/seeds/create_seed_db.py
 ```
 
 ### Tests failing with "Unknown table" errors
-If running in WSL, ensure paths are correctly normalized. Spider eval cases use POSIX-style paths to locate SQLite database files (Spider uses SQLite, not PostgreSQL).
+If running in WSL, ensure paths are correctly normalized. Spider eval cases use POSIX-style paths to locate SQLite database files (Spider benchmark uses SQLite, not PostgreSQL).
 
 ### Langfuse Prompt Fetching Warnings
 You may see warnings like `Langfuse.get_prompt() got an unexpected keyword argument 'labels'`. Non-blocking — system falls back to local prompt templates.
@@ -64,9 +64,8 @@ Check terminal output for LangGraph execution errors. Run with `uv run streamlit
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| Main database | PostgreSQL 15 (Docker) | User data, uploaded CSVs, query results |
+| Main database | PostgreSQL 15 (Docker) | User data (`user_data` schema), agent state (`agent` schema), query results |
 | Spider eval databases | SQLite (files) | Spider benchmark evaluation only |
-| Conversation memory | SQLite (local) | Session history |
 
 ## Monitoring
 

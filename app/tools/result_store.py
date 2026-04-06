@@ -50,10 +50,13 @@ class ResultStore:
         return psycopg.connect(settings.database_url)
 
     def _ensure_table_exists(self) -> None:
-        """Ensure the result_store table exists in PostgreSQL."""
+        """Ensure the result_store table exists in agent schema."""
+        from data.migrations.create_schemas import run as ensure_schemas
+        ensure_schemas()
+
         with self._get_connection() as conn:
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS result_store (
+                CREATE TABLE IF NOT EXISTS agent.result_store (
                     result_id TEXT PRIMARY KEY,
                     run_id TEXT,
                     thread_id TEXT,
@@ -68,13 +71,12 @@ class ResultStore:
                     expires_at TIMESTAMPTZ
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_result_store_expires_at ON result_store(expires_at);
-                CREATE INDEX IF NOT EXISTS idx_result_store_run_id ON result_store(run_id);
+                CREATE INDEX IF NOT EXISTS idx_result_store_expires_at ON agent.result_store(expires_at);
+                CREATE INDEX IF NOT EXISTS idx_result_store_run_id ON agent.result_store(run_id);
             """)
-            # Create index on auto-expired results cleanup
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_result_store_created_at
-                ON result_store(created_at);
+                ON agent.result_store(created_at);
             """)
 
     def save_result(
@@ -112,7 +114,7 @@ class ResultStore:
         with self._get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO result_store
+                INSERT INTO agent.result_store
                     (result_id, run_id, thread_id, sql, db_path, row_count,
                      columns, sample_rows, summary_stats, full_data_path, expires_at)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)

@@ -26,7 +26,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 Trả lời business/data questions qua SQL tools, RAG retrieval, Visualization, Report generation, và full observability.
 
 - **Runtime**: `uv` virtualenv (`.venv`)
-- **Database**: PostgreSQL + SQLite local warehouse
+- **Database**: PostgreSQL (schemas: `public`, `agent`, `user_data`)
 - **LLM orchestration**: LangGraph (10-node graph, 3 routing decisions)
 - **Frontend**: Next.js web chat (:3000) + Streamlit UI (:8501) → FastAPI backend
 - **Observability**: JSONL traces + Langfuse
@@ -98,7 +98,7 @@ User (Next.js / Streamlit / CLI / API)
         +-- artifact_evaluator     →  Deterministic: finalize / continue / retry / wait_for_user
         +-- clarify_question_node  →  Interrupt: halt if confidence=low or mode=ambiguous
         +-- capture_action_node    →  Save last_action, conversation_turn
-        +-- compact_and_save_memory →  Persist to SQLite session store
+        +-- compact_and_save_memory →  Persist to PostgreSQL (agent schema)
         +-- report_subgraph        →  4-phase: plan → execute → write → critique
         v
   Synthesized answer + trace (JSONL + Langfuse)

@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import threading
-from contextlib import contextmanager
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
+import psycopg
+from psycopg.types.json import Jsonb
+
+from app.config import load_settings
 from app.logger import logger
 
 
@@ -25,7 +26,7 @@ class ConversationTurn:
     result_summary: str | None
     entities: list[str]
     timestamp: str
-    last_action_json: str | None = None  # JSON-serialized last_action for continuity
+    last_action_json: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -45,113 +46,80 @@ class ConversationSummary:
         return asdict(self)
 
 
+_CREATE_TABLES_SQL = """
+CREATE TABLE IF NOT EXISTS agent.conversation_memory (
+    id SERIAL PRIMARY KEY,
+    thread_id TEXT NOT NULL,
+    turn_number INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    intent TEXT,
+    sql_generated TEXT,
+    result_summary TEXT,
+    entities JSONB DEFAULT '[]',
+    timestamp TIMESTAMPTZ NOT NULL,
+    last_action_json JSONB,
+    UNIQUE(thread_id, turn_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_conv_thread ON agent.conversation_memory(thread_id);
+CREATE INDEX IF NOT EXISTS idx_conv_timestamp ON agent.conversation_memory(timestamp);
+
+CREATE TABLE IF NOT EXISTS agent.conversation_summary (
+    thread_id TEXT PRIMARY KEY,
+    summary TEXT NOT NULL,
+    turn_count INTEGER NOT NULL,
+    last_updated TIMESTAMPTZ NOT NULL,
+    key_entities JSONB DEFAULT '[]'
+);
+"""
+
+
 class ConversationMemoryStore:
-    """SQLite-backed conversation memory for session continuity.
+    """PostgreSQL-backed conversation memory for session continuity.
 
-    Uses a single persistent connection (both for in-memory and file-based
-    databases) to avoid connection leaks. ``row_factory`` is set once at
-    creation so every cursor returns ``sqlite3.Row`` objects consistently.
+    Stores conversation turns and summaries in the ``agent`` schema.
+    Each operation opens a short-lived connection from psycopg (thread-safe).
     """
 
-    CREATE_TABLES_SQL = """
-    CREATE TABLE IF NOT EXISTS conversation_memory (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        thread_id TEXT NOT NULL,
-        turn_number INTEGER NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        intent TEXT,
-        sql_generated TEXT,
-        result_summary TEXT,
-        entities TEXT,
-        timestamp TEXT NOT NULL,
-        last_action_json TEXT,
-        UNIQUE(thread_id, turn_number)
-    );
+    def __init__(self, db_url: str | None = None):
+        self._db_url = db_url
+        self._ensure_tables()
 
-    CREATE INDEX IF NOT EXISTS idx_conv_thread ON conversation_memory(thread_id);
-    CREATE INDEX IF NOT EXISTS idx_conv_timestamp ON conversation_memory(timestamp);
+    def _get_connection(self):
+        url = self._db_url or load_settings().database_url
+        return psycopg.connect(url)
 
-    CREATE TABLE IF NOT EXISTS conversation_summary (
-        thread_id TEXT PRIMARY KEY,
-        summary TEXT NOT NULL,
-        turn_count INTEGER NOT NULL,
-        last_updated TEXT NOT NULL,
-        key_entities TEXT
-    );
-    """
+    def _ensure_tables(self) -> None:
+        """Create agent schema + tables if they don't exist."""
+        # First ensure schemas exist
+        from data.migrations.create_schemas import run as ensure_schemas
 
-    MIGRATE_ADD_LAST_ACTION_SQL = """
-    ALTER TABLE conversation_memory ADD COLUMN last_action_json TEXT;
-    """
+        ensure_schemas()
 
-    def __init__(self, db_path: str | Path | None = None):
-        if db_path is None:
-            db_path = (
-                Path(__file__).resolve().parents[2]
-                / "data"
-                / "warehouse"
-                / "conversation_memory.db"
-            )
-        self.db_path = Path(db_path)
-
-        # Single persistent connection for both in-memory and file-based DBs.
-        if str(self.db_path) == ":memory:":
-            self._conn = sqlite3.connect(":memory:", check_same_thread=False)
-        else:
-            self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
-
-        # Set row_factory once at creation to avoid side-effects.
-        self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(self.CREATE_TABLES_SQL)
-
-        # Migration: Add last_action_json column if it doesn't exist
-        try:
-            self._conn.execute(self.MIGRATE_ADD_LAST_ACTION_SQL)
-            self._conn.commit()
-            logger.debug("Added last_action_json column to conversation_memory")
-        except sqlite3.OperationalError:
-            # Column already exists, ignore
-            pass
-
-        label = ":memory:" if str(self.db_path) == ":memory:" else str(self.db_path)
-        logger.info("Conversation memory store initialized at {path}", path=label)
-
-    # ------------------------------------------------------------------
-    # Connection helpers
-    # ------------------------------------------------------------------
-
-    @contextmanager
-    def _connection(self) -> Generator[sqlite3.Connection, None, None]:
-        """Yield the persistent connection (context manager for clarity)."""
-        yield self._conn
+        with self._get_connection() as conn:
+            conn.execute(_CREATE_TABLES_SQL)
+            conn.commit()
+        logger.info("Conversation memory store initialized (PostgreSQL)")
 
     def close(self) -> None:
-        """Explicitly close the underlying database connection."""
-        if self._conn:
-            self._conn.close()
-            logger.debug("Conversation memory store connection closed")
-
-    def __del__(self) -> None:
-        try:
-            self.close()
-        except Exception:  # noqa: BLE001 – best-effort cleanup
-            pass
+        """No-op — connections are short-lived."""
+        pass
 
     # ------------------------------------------------------------------
     # CRUD operations
     # ------------------------------------------------------------------
 
     def save_turn(self, turn: ConversationTurn) -> int:
-        """Save a conversation turn."""
-        with self._connection() as conn:
+        """Save a conversation turn. Returns the record id."""
+        with self._get_connection() as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO conversation_memory (
+                INSERT INTO agent.conversation_memory (
                     thread_id, turn_number, role, content, intent,
                     sql_generated, result_summary, entities, timestamp, last_action_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
                 """,
                 (
                     turn.thread_id,
@@ -161,13 +129,13 @@ class ConversationMemoryStore:
                     turn.intent,
                     turn.sql_generated,
                     turn.result_summary,
-                    json.dumps(turn.entities),
+                    Jsonb(turn.entities),
                     turn.timestamp,
-                    turn.last_action_json,
+                    Jsonb(json.loads(turn.last_action_json)) if turn.last_action_json else None,
                 ),
             )
+            record_id = cursor.fetchone()[0]
             conn.commit()
-            record_id = cursor.lastrowid or 0
         logger.debug(
             "Saved conversation turn: thread={thread}, turn={turn}",
             thread=turn.thread_id,
@@ -179,13 +147,13 @@ class ConversationMemoryStore:
         self, thread_id: str, limit: int = 10
     ) -> list[ConversationTurn]:
         """Get recent turns for a conversation thread in chronological order."""
-        with self._connection() as conn:
+        with self._get_connection() as conn:
             cursor = conn.execute(
                 """
-                SELECT * FROM conversation_memory
-                WHERE thread_id = ?
+                SELECT * FROM agent.conversation_memory
+                WHERE thread_id = %s
                 ORDER BY turn_number DESC
-                LIMIT ?
+                LIMIT %s
                 """,
                 (thread_id, limit),
             )
@@ -193,18 +161,16 @@ class ConversationMemoryStore:
 
         turns = [
             ConversationTurn(
-                thread_id=row["thread_id"],
-                turn_number=row["turn_number"],
-                role=row["role"],
-                content=row["content"],
-                intent=row["intent"],
-                sql_generated=row["sql_generated"],
-                result_summary=row["result_summary"],
-                entities=json.loads(row["entities"]) if row["entities"] else [],
-                timestamp=row["timestamp"],
-                last_action_json=row["last_action_json"]
-                if "last_action_json" in row.keys()
-                else None,
+                thread_id=row[1],
+                turn_number=row[2],
+                role=row[3],
+                content=row[4],
+                intent=row[5],
+                sql_generated=row[6],
+                result_summary=row[7],
+                entities=row[8] if row[8] else [],
+                timestamp=row[9].isoformat() if hasattr(row[9], "isoformat") else str(row[9]),
+                last_action_json=json.dumps(row[10]) if row[10] else None,
             )
             for row in reversed(rows)
         ]
@@ -212,33 +178,33 @@ class ConversationMemoryStore:
 
     def get_turn_count(self, thread_id: str) -> int:
         """Get total number of turns for a thread."""
-        with self._connection() as conn:
+        with self._get_connection() as conn:
             cursor = conn.execute(
-                "SELECT COUNT(*) as cnt FROM conversation_memory WHERE thread_id = ?",
+                "SELECT COUNT(*) as cnt FROM agent.conversation_memory WHERE thread_id = %s",
                 (thread_id,),
             )
             result = cursor.fetchone()
-        return result["cnt"] if result else 0
+        return result[0] if result else 0
 
     def update_summary(self, summary: ConversationSummary) -> None:
         """Upsert conversation summary."""
-        with self._connection() as conn:
+        with self._get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO conversation_summary (thread_id, summary, turn_count, last_updated, key_entities)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO agent.conversation_summary (thread_id, summary, turn_count, last_updated, key_entities)
+                VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT(thread_id) DO UPDATE SET
-                    summary = excluded.summary,
-                    turn_count = excluded.turn_count,
-                    last_updated = excluded.last_updated,
-                    key_entities = excluded.key_entities
+                    summary = EXCLUDED.summary,
+                    turn_count = EXCLUDED.turn_count,
+                    last_updated = EXCLUDED.last_updated,
+                    key_entities = EXCLUDED.key_entities
                 """,
                 (
                     summary.thread_id,
                     summary.summary,
                     summary.turn_count,
                     summary.last_updated,
-                    json.dumps(summary.key_entities),
+                    Jsonb(summary.key_entities),
                 ),
             )
             conn.commit()
@@ -250,9 +216,9 @@ class ConversationMemoryStore:
 
     def get_summary(self, thread_id: str) -> ConversationSummary | None:
         """Get conversation summary for a thread."""
-        with self._connection() as conn:
+        with self._get_connection() as conn:
             cursor = conn.execute(
-                "SELECT * FROM conversation_summary WHERE thread_id = ?",
+                "SELECT * FROM agent.conversation_summary WHERE thread_id = %s",
                 (thread_id,),
             )
             row = cursor.fetchone()
@@ -261,11 +227,11 @@ class ConversationMemoryStore:
             return None
 
         return ConversationSummary(
-            thread_id=row["thread_id"],
-            summary=row["summary"],
-            turn_count=row["turn_count"],
-            last_updated=row["last_updated"],
-            key_entities=json.loads(row["key_entities"]) if row["key_entities"] else [],
+            thread_id=row[0],
+            summary=row[1],
+            turn_count=row[2],
+            last_updated=row[3].isoformat() if hasattr(row[3], "isoformat") else str(row[3]),
+            key_entities=row[4] if row[4] else [],
         )
 
     def delete_old_turns(self, thread_id: str, keep_last_n: int) -> int:
@@ -273,21 +239,21 @@ class ConversationMemoryStore:
 
         Returns the number of rows deleted.
         """
-        with self._connection() as conn:
+        with self._get_connection() as conn:
             cursor = conn.execute(
                 """
-                DELETE FROM conversation_memory
-                WHERE thread_id = ? AND id NOT IN (
-                    SELECT id FROM conversation_memory
-                    WHERE thread_id = ?
+                DELETE FROM agent.conversation_memory
+                WHERE thread_id = %s AND id NOT IN (
+                    SELECT id FROM agent.conversation_memory
+                    WHERE thread_id = %s
                     ORDER BY turn_number DESC
-                    LIMIT ?
+                    LIMIT %s
                 )
                 """,
                 (thread_id, thread_id, keep_last_n),
             )
-            conn.commit()
             deleted = cursor.rowcount
+            conn.commit()
         if deleted:
             logger.info(
                 "Pruned {deleted} old turns for thread={thread} (kept last {keep})",
@@ -297,15 +263,40 @@ class ConversationMemoryStore:
             )
         return deleted
 
+    def list_threads(self, limit: int = 50) -> list[dict[str, Any]]:
+        """List all conversation threads, ordered by most recently updated."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT thread_id, summary, turn_count, last_updated, key_entities
+                FROM agent.conversation_summary
+                ORDER BY last_updated DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cursor.fetchall()
+
+        return [
+            {
+                "thread_id": row[0],
+                "summary": row[1],
+                "turn_count": row[2],
+                "last_updated": row[3].isoformat() if hasattr(row[3], "isoformat") else str(row[3]),
+                "key_entities": row[4] if row[4] else [],
+            }
+            for row in rows
+        ]
+
     def clear_thread(self, thread_id: str) -> None:
         """Clear all memory for a thread (useful for testing)."""
-        with self._connection() as conn:
+        with self._get_connection() as conn:
             conn.execute(
-                "DELETE FROM conversation_memory WHERE thread_id = ?",
+                "DELETE FROM agent.conversation_memory WHERE thread_id = %s",
                 (thread_id,),
             )
             conn.execute(
-                "DELETE FROM conversation_summary WHERE thread_id = ?",
+                "DELETE FROM agent.conversation_summary WHERE thread_id = %s",
                 (thread_id,),
             )
             conn.commit()
@@ -325,7 +316,6 @@ def get_conversation_memory_store() -> ConversationMemoryStore:
     global _conversation_memory_store
     if _conversation_memory_store is None:
         with _singleton_lock:
-            # Double-checked locking
             if _conversation_memory_store is None:
                 _conversation_memory_store = ConversationMemoryStore()
     return _conversation_memory_store

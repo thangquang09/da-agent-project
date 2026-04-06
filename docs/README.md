@@ -20,7 +20,7 @@ DA Agent Lab — Hybrid Architecture v3
 | `artifact_evaluator`      | Evaluator  | Deterministic: finalize / continue / retry / **wait_for_user**      |
 | `clarify_question_node`   | Interrupt  | Halt → show `[CLARIFY]` question → **END** (no memory save)         |
 | `capture_action_node`     | Memory     | Save `last_action`, `conversation_turn`                             |
-| `compact_and_save_memory` | Memory     | Persist to SQLite session store                                     |
+| `compact_and_save_memory` | Memory     | Persist to PostgreSQL (agent schema)                                |
 | `report_subgraph`         | Subgraph   | 4-phase: plan → execute → write → critique                          |
 
 

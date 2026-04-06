@@ -288,14 +288,24 @@ def reset_settings_cache():
 def clean_test_conversation_memory():
     """Clear all test thread IDs before every test.
 
-    Prevents UNIQUE constraint violations in conversation_memory when the
-    same thread_id accumulates turns across repeated test runs.
+    Ensures agent schemas exist and clears test thread data
+    from PostgreSQL-backed conversation memory.
     """
+    try:
+        from data.migrations.create_schemas import run as ensure_schemas
+        ensure_schemas()
+    except Exception:  # noqa: BLE001
+        pass
+
     from app.memory.conversation_store import get_conversation_memory_store
 
-    store = get_conversation_memory_store()
-    for tid in _TEST_THREAD_IDS:
-        store.clear_thread(tid)
+    try:
+        store = get_conversation_memory_store()
+        for tid in _TEST_THREAD_IDS:
+            store.clear_thread(tid)
+    except Exception:  # noqa: BLE001
+        # If Postgres is unavailable, skip silently
+        pass
     yield
 
 
@@ -308,5 +318,10 @@ def fake_v3_llm(monkeypatch):
 
 
 @pytest.fixture
-def analytics_db_path() -> str:
-    return str(Path("data/warehouse/analytics.db"))
+def analytics_db_path() -> None:
+    """Legacy fixture — no longer uses SQLite file.
+
+    Returns None so tests that pass this to graph nodes get the default
+    PostgreSQL connection via DATABASE_URL.
+    """
+    return None

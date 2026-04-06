@@ -27,7 +27,7 @@ async def run_query_async(
 
     Thread-safety notes:
     - RunTracer uses ContextVar → isolated per executor thread.
-    - ConversationMemoryStore singleton uses check_same_thread=False SQLite.
+    - ConversationMemoryStore singleton uses PostgreSQL with per-operation connections.
     - build_sql_v3_graph() creates a fresh graph per call → no cross-request state.
     """
     # Decode base64 file data coming from JSON body uploads

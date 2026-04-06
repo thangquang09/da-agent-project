@@ -15,7 +15,7 @@ Only present at graph entry via `GraphInputState`.
 | Field | Type | Purpose |
 |-------|------|---------|
 | `user_query` | `str` | Raw user question |
-| `target_db_path` | `str` | Path to SQLite or PostgreSQL warehouse |
+| `target_db_path` | `str` | Optional: path to SQLite eval DB (Spider), or None for PostgreSQL |
 | `user_semantic_context` | `str` | User-provided domain context |
 | `uploaded_files` | `list[str]` | File paths from file upload |
 | `uploaded_file_data` | `list[dict]` | Parsed file contents |

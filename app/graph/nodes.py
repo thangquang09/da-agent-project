@@ -2066,7 +2066,8 @@ def inject_session_context(state: AgentState) -> AgentState:
     for better intent classification, especially for follow-up questions.
 
     Retrieves:
-    - Recent conversation turns from SQLite
+    - Recent conversation turns from PostgreSQL (agent.conversation_memory)
+    - Conversation summary if exists
     - Conversation summary if exists
     - last_action from most recent assistant turn
 
@@ -2164,7 +2165,7 @@ def compact_and_save_memory(state: AgentState) -> AgentState:
 
     This node runs at the END of the graph, after synthesize_answer.
 
-    - Saves current turn to SQLite
+    - Saves current turn to PostgreSQL
     - Generates/updates summary if turn_count > threshold
     """
     thread_id = state.get("thread_id")
