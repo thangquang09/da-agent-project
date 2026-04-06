@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +11,7 @@ from psycopg.types.json import Jsonb
 
 from app.config import load_settings
 from app.logger import logger
-from app.tools.csv_profiler import CSVProfileResult, generate_schema_sql, profile_csv
+from app.tools.csv_profiler import CSVProfileResult, _parse_datetime, generate_schema_sql, profile_csv
 from app.tools.csv_validator import CSVValidationResult, validate_csv
 
 
@@ -238,12 +237,16 @@ def _convert_row_values(row: dict[str, str], profile: CSVProfileResult) -> list[
             except (ValueError, TypeError):
                 values.append(None)
         elif col.dtype == "datetime":
-            try:
-                # Parse ISO datetime strings
-                dt = datetime.fromisoformat(str(raw_value).replace("Z", "+00:00"))
-                values.append(dt)
-            except (ValueError, TypeError):
-                # Fall back to string if parsing fails
+            parsed = _parse_datetime(str(raw_value))
+            if parsed is not None:
+                values.append(parsed)
+            else:
+                # Unrecognised format — store as text to avoid silent NULL insertion.
+                logger.warning(
+                    "Could not parse datetime value {value!r} for column {col} — storing as text",
+                    value=raw_value,
+                    col=col.name,
+                )
                 values.append(str(raw_value))
         else:
             # Text type - keep as string

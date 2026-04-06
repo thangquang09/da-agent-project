@@ -588,7 +588,6 @@ def process_uploaded_files(state: AgentState) -> AgentState:
     from tempfile import NamedTemporaryFile
 
     from app.tools.auto_register import auto_register_csv
-    from app.tools.check_table_exists import table_exists
     from app.utils.file_hash import compute_file_hash
 
     uploaded_file_data = state.get("uploaded_file_data", [])
@@ -635,7 +634,9 @@ def process_uploaded_files(state: AgentState) -> AgentState:
         table_name = Path(filename).stem
         cache_key = f"postgres::{table_name}::{file_hash}"
 
-        # Check session cache first
+        # Check session cache first — cache_key encodes both table name AND file hash,
+        # so a same-name file with different content will have a different key and
+        # fall through to full re-registration.
         if cache_key in file_cache:
             logger.info(
                 "Cache hit for {filename} (table: {table}), skipping re-registration",
@@ -656,32 +657,11 @@ def process_uploaded_files(state: AgentState) -> AgentState:
             )
             continue
 
-        # Check if table exists in DB (might be from previous session)
-        if table_exists(table_name):
-            logger.info(
-                "Table {table} exists in DB, adding to cache",
-                table=table_name,
-            )
-            file_cache[cache_key] = {
-                "table_name": table_name,
-                "row_count": 0,  # Unknown without full scan
-                "columns": 0,  # Unknown without schema inspection
-                "cached_at": datetime.now().isoformat(),
-                "source": "db_check",
-            }
-            registered_tables.append(table_name)
-            table_contexts[table_name] = file_context  # preserve user context
-            skipped_tables.append(table_name)
-            tool_history_entries.append(
-                {
-                    "tool": "auto_register_csv",
-                    "status": "cached",
-                    "file": filename,
-                    "table": table_name,
-                    "source": "db_check",
-                }
-            )
-            continue
+        # Cache miss — this file (or a new version of it) was not seen this session.
+        # We intentionally do NOT skip based on table_exists() here: if the user
+        # uploads a file with the same name but different content, we must
+        # re-register to keep the table in sync. auto_register_csv() issues
+        # DROP TABLE IF EXISTS before CREATE TABLE, so stale data is replaced.
 
         # Not cached - proceed with full registration
         try:

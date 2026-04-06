@@ -41,6 +41,47 @@ class CSVProfileResult:
     file_size_bytes: int
 
 
+# Common datetime format patterns tried in order (most specific first).
+# fromisoformat handles ISO 8601 family; the rest cover regional/spreadsheet formats.
+_DATETIME_FORMATS = [
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d",
+    "%d/%m/%Y %H:%M:%S",
+    "%d/%m/%Y",
+    "%m/%d/%Y %H:%M:%S",
+    "%m/%d/%Y",
+    "%d-%m-%Y %H:%M:%S",
+    "%d-%m-%Y",
+    "%Y/%m/%d %H:%M:%S",
+    "%Y/%m/%d",
+    "%d.%m.%Y",
+    "%d.%m.%Y %H:%M:%S",
+]
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    """Try to parse *value* as a datetime using multiple common formats.
+
+    Returns a ``datetime`` on success, ``None`` if no format matches.
+    Checks ISO 8601 (via ``fromisoformat``) first, then the extended
+    ``_DATETIME_FORMATS`` list.
+    """
+    clean = value.strip().replace("Z", "+00:00")
+    # Fast path: ISO 8601 / RFC 3339
+    try:
+        return datetime.fromisoformat(clean)
+    except (ValueError, TypeError):
+        pass
+    # Extended format list
+    for fmt in _DATETIME_FORMATS:
+        try:
+            return datetime.strptime(clean, fmt)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
 def _infer_dtype(values: list[Any]) -> str:
     """Infer column dtype from sample values."""
     non_null = [v for v in values if v is not None and str(v).strip() != ""]
@@ -61,12 +102,9 @@ def _infer_dtype(values: list[Any]) -> str:
     except (ValueError, TypeError):
         pass
 
-    try:
-        for v in non_null[:10]:
-            datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    # Datetime: all sampled non-null values must parse successfully.
+    if all(_parse_datetime(str(v)) is not None for v in non_null[:10]):
         return "datetime"
-    except (ValueError, TypeError):
-        pass
 
     return "text"
 
