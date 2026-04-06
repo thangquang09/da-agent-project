@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 > **QUAN TRỌNG — Đọc trước khi bắt đầu làm việc.**
 
-- **CLAUDE.md phải dưới 300 dòng.** Nếu vượt, tách nội dung ra file riêng trong `docs/`.
+- **CLAUDE.md phải dưới 500 dòng.** Nếu vượt, tách nội dung ra file riêng trong `docs/`.
 - **KHÔNG** nhét nội dung chi tiết vào file này. Chỉ giữ tóm tắt + link.
 - **Cập nhật docs sau mọi commit tính năng mới.** Code thay đổi → docs thay đổi theo.
   - Tính năng mới / thay đổi → cập nhật `docs/README.md`, `docs/thangquang09/01_architecture.md`, `docs/thangquang09/02_system_design.md` nếu liên quan.
@@ -14,6 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
   - Prompt thay đổi → cập nhật `app/prompts/CLAUDE.md`.
   - CLAUDE.md chỉ cập nhật khi có thay đổi về kiến trúc tổng thể, cấu trúc thư mục, hoặc entry points.
 - **Không có aspirational docs.** Mọi tài liệu phải đúng với code hiện tại.
+- Tư duy code tuyệt đối không được tạo các rule-base ở node quan trọng, bởi vì dự án là ChatBot ngôn ngữ tự nhiên, rule base không thể handle hết trường hợp và rất dễ dẫn tới các bugs fallback.
 
 > **Docs entry point**: `docs/README.md` — mục lục chi tiết của toàn bộ documentation.
 

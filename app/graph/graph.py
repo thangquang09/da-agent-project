@@ -6,6 +6,7 @@ from langgraph.graph import END, START, StateGraph
 from app.graph.nodes import (
     artifact_evaluator,
     capture_action_node,
+    chitchat_response_node,
     clarify_question_node,
     compact_and_save_memory,
     inject_session_context,
@@ -75,6 +76,10 @@ def build_sql_v3_graph(checkpointer=None):
         _instrument_node("leader_agent", leader_agent, "agent"),
     )
     builder.add_node(
+        "chitchat_response_node",
+        _instrument_node("chitchat_response_node", chitchat_response_node, "agent"),
+    )
+    builder.add_node(
         "artifact_evaluator",
         _instrument_node("artifact_evaluator", artifact_evaluator, "agent"),
     )
@@ -95,7 +100,14 @@ def build_sql_v3_graph(checkpointer=None):
     builder.add_edge(START, "process_uploaded_files")
     builder.add_edge("process_uploaded_files", "inject_session_context")
     builder.add_edge("inject_session_context", "task_grounder")
-    builder.add_edge("task_grounder", "leader_agent")
+    builder.add_conditional_edges(
+        "task_grounder",
+        _route_after_grounder,
+        {
+            "leader_agent": "leader_agent",
+            "chitchat_response_node": "chitchat_response_node",
+        },
+    )
     builder.add_edge("leader_agent", "artifact_evaluator")
     builder.add_conditional_edges(
         "artifact_evaluator",
@@ -108,11 +120,27 @@ def build_sql_v3_graph(checkpointer=None):
         },
     )
     builder.add_edge("report_subgraph", "capture_action_node")
+    builder.add_edge("chitchat_response_node", "capture_action_node")
     builder.add_edge("capture_action_node", "compact_and_save_memory")
     builder.add_edge("compact_and_save_memory", END)
     builder.add_edge("clarify_question_node", END)
 
     return builder.compile(checkpointer=checkpointer or InMemorySaver())
+
+
+def _route_after_grounder(state: AgentState) -> str:
+    """Route after task_grounder.
+
+    - chitchat → chitchat_response_node (skip leader_agent entirely)
+    - anything else → leader_agent (normal pipeline)
+    """
+    task_profile = state.get("task_profile") or {}
+    task_mode = task_profile.get("task_mode", "simple")
+
+    if task_mode == "chitchat":
+        return "chitchat_response_node"
+
+    return "leader_agent"
 
 
 def _route_after_leader(state: AgentState) -> str:

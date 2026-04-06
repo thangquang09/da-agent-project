@@ -28,8 +28,8 @@ class TaskProfile(TypedDict, total=False):
     with a single typed profile.
     """
 
-    task_mode: Literal["simple", "mixed", "ambiguous"]
-    data_source: Literal["inline_data", "uploaded_table", "database", "knowledge", "mixed"]
+    task_mode: Literal["simple", "mixed", "ambiguous", "chitchat"]
+    data_source: Literal["inline_data", "uploaded_table", "database", "knowledge", "mixed", "none"]
     required_capabilities: list[Literal["sql", "rag", "visualization", "report"]]
     followup_mode: Literal["fresh_query", "followup", "refine_previous_result"]
     confidence: Literal["high", "medium", "low"]

@@ -26,7 +26,11 @@ def _extract_first_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _normalize_capabilities(raw_caps: Any) -> list[str]:
+def _normalize_capabilities(raw_caps: Any, *, task_mode: str = "") -> list[str]:
+    # Chitchat intentionally has no capabilities
+    if task_mode == "chitchat":
+        return []
+
     if not isinstance(raw_caps, list):
         return ["sql"]
 
@@ -89,7 +93,8 @@ def task_grounder(state: AgentState) -> AgentState:
                 "task_mode": str(parsed.get("task_mode", "simple")),
                 "data_source": str(parsed.get("data_source", "database")),
                 "required_capabilities": _normalize_capabilities(
-                    parsed.get("required_capabilities", ["sql"])
+                    parsed.get("required_capabilities", ["sql"]),
+                    task_mode=str(parsed.get("task_mode", "simple")),
                 ),
                 "followup_mode": str(parsed.get("followup_mode", "fresh_query")),
                 "confidence": str(parsed.get("confidence", "medium")),

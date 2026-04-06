@@ -434,10 +434,12 @@ class E2BVisualizationService:
 
         try:
             data_path = self._upload_data(data_rows, "report_section_data.csv")
+            column_types = self._infer_column_types_from_rows(data_rows)
             code_to_run = self._generate_report_analysis_code(
                 data_path=data_path,
                 user_query=user_query,
                 section_title=section_title,
+                column_types=column_types,
             )
 
             logger.info("Executing grounded report analysis in E2B sandbox")
@@ -521,16 +523,50 @@ class E2BVisualizationService:
         template_fn = templates.get(chart_type, templates["auto"])
         return template_fn(data_path, user_query, columns_info, data_sample)
 
+    @staticmethod
+    def _infer_column_types_from_rows(data_rows: list[dict[str, Any]]) -> dict[str, str]:
+        """Infer column types from Python values in the first non-null row.
+
+        Returns a mapping of column_name → "integer"|"float"|"datetime"|"text".
+        This is used to seed pd.read_csv(dtype=...) in the sandbox so that
+        integer columns are never mis-detected as datetimes.
+        """
+        if not data_rows:
+            return {}
+        col_types: dict[str, str] = {}
+        for row in data_rows[:20]:  # sample up to 20 rows for robustness
+            for col, val in row.items():
+                if col in col_types:
+                    continue
+                if val is None or val == "":
+                    continue
+                if isinstance(val, bool):
+                    col_types[col] = "text"
+                elif isinstance(val, int):
+                    col_types[col] = "integer"
+                elif isinstance(val, float):
+                    col_types[col] = "float"
+                else:
+                    # String — check if it looks like a date
+                    s = str(val).strip()
+                    if len(s) >= 8 and ("-" in s or "/" in s) and any(c.isdigit() for c in s):
+                        col_types[col] = "datetime"
+                    else:
+                        col_types[col] = "text"
+        return col_types
+
     def _generate_report_analysis_code(
         self,
         data_path: str,
         user_query: str,
         section_title: str,
+        column_types: dict[str, str] | None = None,
     ) -> str:
         """Return deterministic Python code for report-only grounded analysis."""
         query_json = json.dumps(user_query, ensure_ascii=False)
         title_json = json.dumps(section_title, ensure_ascii=False)
         data_path_json = json.dumps(data_path)
+        column_types_json = json.dumps(column_types or {})
         return f'''import base64
 import io
 import json
@@ -544,9 +580,30 @@ from IPython.display import HTML, JSON, display
 QUERY = {query_json}
 SECTION_TITLE = {title_json}
 DATA_PATH = {data_path_json}
+COLUMN_TYPES = {column_types_json}
 
 sns.set_style("whitegrid")
-df = pd.read_csv(DATA_PATH)
+
+# Build dtype mapping from known types (integer/float) so pandas
+# never mis-parses numeric columns as datetime objects.
+_dtype_map = {{}}
+_parse_dates = []
+for _col, _ctype in COLUMN_TYPES.items():
+    if _ctype == "integer":
+        _dtype_map[_col] = "Int64"   # nullable integer — handles missing values
+    elif _ctype == "float":
+        _dtype_map[_col] = "float64"
+    elif _ctype == "datetime":
+        _parse_dates.append(_col)
+    else:
+        _dtype_map[_col] = "object"
+
+df = pd.read_csv(DATA_PATH, dtype=_dtype_map if _dtype_map else None, parse_dates=_parse_dates if _parse_dates else False)
+
+# Convert Int64 (nullable) to regular int64 where fully non-null to simplify downstream ops
+for _col in df.columns:
+    if pd.api.types.is_integer_dtype(df[_col]):
+        df[_col] = df[_col].astype("int64", errors="ignore")
 
 
 def normalize_number(value):
@@ -589,8 +646,27 @@ def metric_entry(value, label=None):
     return entry
 
 
-def detect_datetime_column(frame):
+def detect_datetime_column(frame, known_types=None):
+    """Find a datetime column.
+
+    If *known_types* is provided (from COLUMN_TYPES hint), only columns whose
+    type is explicitly marked as "datetime" are considered — integer/float
+    columns are never probed with pd.to_datetime, preventing false positives.
+    When no hint is available we fall back to the previous heuristic but skip
+    numeric columns.
+    """
+    if known_types:
+        # Use authoritative type hint: only look at columns marked as datetime
+        for col in frame.columns:
+            if known_types.get(col) == "datetime":
+                series = pd.to_datetime(frame[col], errors="coerce")
+                if series.notna().sum() >= max(2, len(frame) // 2):
+                    return col, series
+        return None, None
+    # Fallback heuristic — skip numeric columns to avoid false positives
     for col in frame.columns:
+        if pd.api.types.is_numeric_dtype(frame[col]):
+            continue
         series = pd.to_datetime(frame[col], errors="coerce")
         if series.notna().sum() >= max(2, len(frame) // 2):
             return col, series
@@ -600,7 +676,7 @@ def detect_datetime_column(frame):
 numeric_cols = [
     col for col in df.columns if pd.api.types.is_numeric_dtype(df[col])
 ]
-datetime_col, datetime_series = detect_datetime_column(df)
+datetime_col, datetime_series = detect_datetime_column(df, known_types=COLUMN_TYPES)
 category_cols = [col for col in df.columns if col not in numeric_cols]
 
 stats = {{
@@ -1342,10 +1418,12 @@ class DockerVisualizationService(E2BVisualizationService):
             )
 
         data_path = "report_section_data.csv"
+        column_types = self._infer_column_types_from_rows(data_rows)
         code_to_run = self._generate_report_analysis_code(
             data_path=str(Path(self.workdir) / data_path),
             user_query=user_query,
             section_title=section_title,
+            column_types=column_types,
         )
         command = self._compose_container_command("report_analysis.py")
         files = {
