@@ -855,6 +855,84 @@ def _generate_clarification_question(
         )
 
 
+def chitchat_response_node(state: AgentState) -> AgentState:
+    """Handle chitchat queries (greetings, casual conversation).
+
+    Generates a friendly conversational response via LLM, bypassing
+    the full SQL/analysis pipeline. Flows directly to capture_action_node.
+    """
+    query = state.get("user_query", "")
+    session_context = state.get("session_context", "")
+
+    system_prompt = (
+        "Bạn là trợ lý phân tích dữ liệu thân thiện. "
+        "Người dùng đang chào hỏi hoặc nói chuyện phiếm — không phải hỏi về dữ liệu. "
+        "Hãy trả lời ngắn gọn, thân thiện, và nhắc nhẹ rằng bạn sẵn sàng giúp phân tích dữ liệu khi cần."
+    )
+
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": system_prompt},
+    ]
+    if session_context:
+        messages.append(
+            {
+                "role": "user",
+                "content": f"[Session Context]\n{session_context}\n\n{query}",
+            }
+        )
+    else:
+        messages.append({"role": "user", "content": query})
+
+    llm_usage = None
+    llm_cost_usd = None
+    answer = ""
+
+    try:
+        client = LLMClient.from_env()
+        settings = load_settings()
+        response = client.chat_completion(
+            messages=messages,
+            model=settings.model_preclassifier,  # lightweight model
+            temperature=0.7,
+            stream=False,
+        )
+        answer = (
+            response.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+        llm_usage = response.get("_usage_normalized")
+        llm_cost_usd = response.get("_cost_usd_estimate")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Chitchat LLM failed: {error}", error=str(exc))
+        answer = "Xin chào! Tôi là trợ lý phân tích dữ liệu. Bạn cần hỗ trợ gì về dữ liệu không?"
+
+    logger.info("Chitchat response generated ({length} chars)", length=len(answer))
+
+    return {
+        "final_answer": answer,
+        "final_payload": {
+            "answer": answer,
+            "confidence": "high",
+            "used_tools": [],
+            "evidence": [],
+            "step_count": state.get("step_count", 0) + 1,
+        },
+        "confidence": "high",
+        "step_count": state.get("step_count", 0) + 1,
+        "tool_history": [
+            {
+                "tool": "chitchat_response_node",
+                "status": "ok",
+                "answer_length": len(answer),
+                "token_usage": llm_usage,
+                "cost_usd": llm_cost_usd,
+            }
+        ],
+    }
+
+
 def clarify_question_node(state: AgentState) -> AgentState:
     """Graph node that halts execution and surfaces a clarification question to the user.
 
