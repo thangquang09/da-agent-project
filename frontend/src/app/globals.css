@@ -12,7 +12,13 @@ body {
   color: #0f172a;
 }
 
-/* Custom scrollbar — thin, unobtrusive */
+/* ─── Dark mode base ─────────────────────────────────────────────────────────── */
+.dark body {
+  background: #020617;
+  color: #f1f5f9;
+}
+
+/* ─── Scrollbar ──────────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -27,8 +33,14 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
 }
+.dark ::-webkit-scrollbar-thumb {
+  background: #334155;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
 
-/* Markdown content styles */
+/* ─── Markdown prose ─────────────────────────────────────────────────────────── */
 .prose pre {
   border-radius: 8px;
   overflow-x: auto;
@@ -56,10 +68,37 @@ body {
   background: #f8fafc;
 }
 
+.dark .prose table th,
+.dark .prose table td {
+  border-color: #334155;
+}
+
+.dark .prose table th {
+  background: #1e293b;
+  color: #e2e8f0;
+}
+
+.dark .prose table tr:nth-child(even) {
+  background: #0f172a;
+}
+
+/* ─── highlight.js dark override ─────────────────────────────────────────────── */
+.dark .hljs {
+  background: #1e293b;
+  color: #e2e8f0;
+}
+
+/* ─── Report surfaces ────────────────────────────────────────────────────────── */
 .report-surface {
   background:
     radial-gradient(circle at top right, rgba(14, 165, 233, 0.12), transparent 28%),
     linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+}
+
+.dark .report-surface {
+  background:
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.06), transparent 28%),
+    linear-gradient(180deg, #0f172a 0%, #020617 100%);
 }
 
 .report-hero {
@@ -68,8 +107,18 @@ body {
     linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
 }
 
+.dark .report-hero {
+  background:
+    linear-gradient(135deg, rgba(14, 165, 233, 0.05), rgba(15, 23, 42, 0.9)),
+    linear-gradient(180deg, #0f172a 0%, #020617 100%);
+}
+
 .report-prose {
   color: #0f172a;
+}
+
+.dark .report-prose {
+  color: #f1f5f9;
 }
 
 .report-prose h1 {
@@ -87,11 +136,19 @@ body {
   border-top: 1px solid #e2e8f0;
 }
 
+.dark .report-prose h2 {
+  border-top-color: #334155;
+}
+
 .report-prose h3 {
   font-size: 1rem;
   color: #0f172a;
   margin-top: 1.25rem;
   margin-bottom: 0.5rem;
+}
+
+.dark .report-prose h3 {
+  color: #f1f5f9;
 }
 
 .report-prose p,
@@ -110,7 +167,11 @@ body {
   color: #020617;
 }
 
-/* Typing animation for assistant "thinking" state */
+.dark .report-prose strong {
+  color: #f8fafc;
+}
+
+/* ─── Typing animation ───────────────────────────────────────────────────────── */
 @keyframes pulse-dot {
   0%, 80%, 100% { opacity: 0.3; }
   40% { opacity: 1; }

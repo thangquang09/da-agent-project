@@ -84,18 +84,18 @@ function ReportSectionChart({ section }: { section: ReportSectionResponse }) {
   if (!image?.image_data) return null;
 
   return (
-    <figure className="mt-5 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+    <figure className="mt-5 overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm">
+      <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
         <ImageIcon size={14} />
         Visualization
       </div>
       <img
         src={`data:image/${image.image_format || "png"};base64,${image.image_data}`}
         alt={section.title || "Report visualization"}
-        className="w-full h-auto bg-white"
+        className="w-full h-auto bg-white dark:bg-slate-900"
       />
       {section.title && (
-        <figcaption className="border-t border-slate-100 px-4 py-3 text-sm text-slate-500">
+        <figcaption className="border-t border-slate-100 dark:border-slate-800 px-4 py-3 text-sm text-slate-500 dark:text-slate-400">
           {section.title}
         </figcaption>
       )}
@@ -108,13 +108,13 @@ export function ReportView({ report }: ReportViewProps) {
   const sections = report.sections ?? [];
   const usedSectionIds = new Set<string>();
   return (
-    <article className="report-surface overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-      <div className="report-hero border-b border-slate-200 px-6 py-6">
-        <div className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-white/80 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">
+    <article className="report-surface overflow-hidden rounded-[28px] border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-[0_20px_60px_rgba(15,23,42,0.08)] dark:shadow-[0_20px_60px_rgba(100,116,139,175,0.04)]">
+      <div className="report-hero border-b border-slate-200 dark:border-slate-700 px-6 py-6">
+        <div className="inline-flex items-center gap-2 rounded-full border border-sky-200 dark:border-sky-800 bg-white/80 dark:bg-slate-800/80 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-sky-700 dark:text-sky-300">
           <FileText size={14} />
           Report
         </div>
-        <p className="mt-4 max-w-xl text-sm leading-6 text-slate-600">
+        <p className="mt-4 max-w-xl text-sm leading-6 text-slate-600 dark:text-slate-400">
           Bản trình bày đầy đủ của báo cáo được render riêng khỏi khung chat để dễ đọc, rà soát và đối chiếu.
         </p>
       </div>
@@ -134,8 +134,8 @@ export function ReportView({ report }: ReportViewProps) {
           {sections
             .filter((section) => !usedSectionIds.has(section.section_id))
             .map((section) => (
-              <section key={section.section_id} className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 p-4">
-                <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+              <section key={section.section_id} className="rounded-2xl border border-dashed border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/50 p-4">
+                <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
                   Additional Visualization
                 </p>
                 <ReportSectionChart section={section} />

@@ -36,8 +36,8 @@ export function AssistantMessage({ message }: AssistantMessageProps) {
   return (
     <div className="flex justify-start">
       <div className="flex items-start gap-2.5 max-w-[85%]">
-        <div className="w-7 h-7 rounded-full bg-emerald-50 flex items-center justify-center shrink-0 mt-1">
-          <Bot size={15} className="text-emerald-600" />
+        <div className="w-7 h-7 rounded-full bg-emerald-50 dark:bg-emerald-950/50 flex items-center justify-center shrink-0 mt-1">
+          <Bot size={15} className="text-emerald-600 dark:text-emerald-400" />
         </div>
 
         <div className="space-y-2">
@@ -47,7 +47,7 @@ export function AssistantMessage({ message }: AssistantMessageProps) {
           )}
 
           {/* Content */}
-          <div className="bg-slate-50 border border-slate-100 px-4 py-3 rounded-2xl rounded-tl-md">
+          <div className="bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-700 px-4 py-3 rounded-2xl rounded-tl-md">
             {message.status === "thinking" ? (
               <div className="flex items-center gap-2 text-sm text-slate-400">
                 <LoadingDots />
@@ -68,7 +68,7 @@ export function AssistantMessage({ message }: AssistantMessageProps) {
                         messageId: message.id,
                       })
                     }
-                    className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 transition-colors"
+                    className="inline-flex items-center gap-2 rounded-xl bg-slate-900 dark:bg-slate-700 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 dark:hover:bg-slate-600 transition-colors"
                   >
                     <FileText size={15} />
                     Mở Report
@@ -157,7 +157,7 @@ function ArtifactButton({
   return (
     <button
       onClick={onClick}
-      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 hover:border-slate-300 transition-colors"
+      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 hover:border-slate-300 dark:hover:border-slate-600 transition-colors"
     >
       {icon}
       {label}

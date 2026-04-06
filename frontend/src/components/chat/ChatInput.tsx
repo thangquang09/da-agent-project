@@ -66,19 +66,19 @@ export function ChatInput() {
   };
 
   return (
-    <div className="border-t border-slate-200 bg-white px-4 py-3">
+    <div className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-4 py-3">
       {/* Attached files */}
       {uploadedFiles.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-2">
           {uploadedFiles.map((f) => (
             <span
               key={f.id}
-              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-lg bg-slate-100 text-slate-600"
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
             >
               📎 {f.name}
               <button
                 onClick={() => removeFile(f.id)}
-                className="p-0.5 rounded hover:bg-slate-200"
+                className="p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700"
               >
                 <X size={12} />
               </button>
@@ -90,7 +90,7 @@ export function ChatInput() {
       {/* Input row */}
       <div className="flex items-end gap-2 max-w-3xl mx-auto">
         {/* File upload */}
-        <label className="p-2 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 cursor-pointer transition-colors">
+        <label className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 cursor-pointer transition-colors">
           <Paperclip size={18} />
           <input
             type="file"
@@ -111,14 +111,14 @@ export function ChatInput() {
           placeholder="Ask a data question..."
           rows={1}
           disabled={isStreaming}
-          className="flex-1 resize-none rounded-xl border border-slate-200 px-4 py-2.5 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400 placeholder:text-slate-400 disabled:opacity-50"
+          className="flex-1 resize-none rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 px-4 py-2.5 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400 placeholder:text-slate-400 dark:placeholder:text-slate-500 disabled:opacity-50"
         />
 
         {/* Send button */}
         <button
           onClick={handleSend}
           disabled={!input.trim() || isStreaming}
-          className="p-2.5 rounded-xl bg-indigo-500 text-white hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          className="p-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-600 dark:bg-indigo-600 dark:hover:bg-indigo-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           <Send size={16} />
         </button>

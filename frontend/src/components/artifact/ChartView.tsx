@@ -7,14 +7,14 @@ interface ChartViewProps {
 export function ChartView({ imageData }: ChartViewProps) {
   if (!imageData) {
     return (
-      <div className="text-sm text-slate-400 text-center py-10">
+      <div className="text-sm text-slate-400 dark:text-slate-500 text-center py-10">
         No chart data available
       </div>
     );
   }
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+    <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm p-4">
       <img
         src={`data:image/png;base64,${imageData}`}
         alt="Visualization"

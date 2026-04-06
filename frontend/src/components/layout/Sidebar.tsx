@@ -2,11 +2,15 @@
 
 import { useEffect } from "react";
 import { useChatStore } from "@/stores/chatStore";
+import { useThemeStore } from "@/stores/themeStore";
 import {
   Plus,
   MessageSquare,
   Trash2,
   PanelLeftClose,
+  Sun,
+  Moon,
+  Monitor,
 } from "lucide-react";
 
 export function Sidebar() {
@@ -18,9 +22,23 @@ export function Sidebar() {
   const deleteThread = useChatStore((s) => s.deleteThread);
   const toggleSidebar = useChatStore((s) => s.toggleSidebar);
 
+  const theme = useThemeStore((s) => s.theme);
+  const setTheme = useThemeStore((s) => s.setTheme);
+
   useEffect(() => {
     fetchThreads();
   }, [fetchThreads]);
+
+  const cycleTheme = () => {
+    const next = theme === "light" ? "dark" : theme === "dark" ? "system" : "light";
+    setTheme(next);
+  };
+
+  const ThemeIcon =
+    theme === "dark" ? Moon : theme === "light" ? Sun : Monitor;
+
+  const themeLabel =
+    theme === "dark" ? "Dark" : theme === "light" ? "Light" : "System";
 
   return (
     <aside className="flex flex-col w-[280px] min-w-[280px] h-full bg-slate-900 text-slate-200">
@@ -95,8 +113,18 @@ export function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="px-4 py-3 border-t border-slate-700/50 text-[11px] text-slate-500">
-        LangGraph v3 &middot; Hybrid Agent
+      <div className="px-3 py-3 border-t border-slate-700/50 flex items-center justify-between">
+        <span className="text-[11px] text-slate-500">
+          LangGraph v3 &middot; Hybrid Agent
+        </span>
+        <button
+          onClick={cycleTheme}
+          title={`Theme: ${themeLabel} (click to cycle)`}
+          className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition-colors"
+        >
+          <ThemeIcon size={13} />
+          <span>{themeLabel}</span>
+        </button>
       </div>
     </aside>
   );

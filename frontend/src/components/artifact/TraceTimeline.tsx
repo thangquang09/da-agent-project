@@ -25,10 +25,10 @@ function friendlyNodeName(name: string): string {
 }
 
 const OBS_COLOR: Record<string, string> = {
-  agent: "text-blue-600",
-  memory: "text-purple-600",
-  tool: "text-amber-600",
-  chain: "text-teal-600",
+  agent: "text-blue-600 dark:text-blue-400",
+  memory: "text-purple-600 dark:text-purple-400",
+  tool: "text-amber-600 dark:text-amber-400",
+  chain: "text-teal-600 dark:text-teal-400",
 };
 
 // ─── Stats bar ────────────────────────────────────────────────────────────────
@@ -36,7 +36,7 @@ const OBS_COLOR: Record<string, string> = {
 function StatsBar({ trace }: { trace: TraceData }) {
   const { stats } = trace;
   return (
-    <div className="grid grid-cols-3 gap-2 px-3 py-2 bg-slate-50 border-b border-slate-100">
+    <div className="grid grid-cols-3 gap-2 px-3 py-2 bg-slate-50 dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800">
       <StatCard
         label="Nodes"
         value={String(stats.total_nodes)}
@@ -70,13 +70,13 @@ function StatCard({
 }) {
   const valClass =
     highlight === "red"
-      ? "text-red-600 font-semibold"
+      ? "text-red-600 dark:text-red-400 font-semibold"
       : highlight === "green"
-      ? "text-green-600 font-semibold"
-      : "text-slate-700 font-semibold";
+      ? "text-green-600 dark:text-green-400 font-semibold"
+      : "text-slate-700 dark:text-slate-200 font-semibold";
   return (
-    <div className="rounded-md bg-white border border-slate-100 px-2 py-1.5 flex flex-col gap-0.5">
-      <div className="flex items-center gap-1 text-slate-400 text-[10px]">
+    <div className="rounded-md bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 px-2 py-1.5 flex flex-col gap-0.5">
+      <div className="flex items-center gap-1 text-slate-400 dark:text-slate-500 text-[10px]">
         {icon}
         <span className="uppercase tracking-wide">{label}</span>
       </div>
@@ -90,14 +90,14 @@ function StatCard({
 function TimelineView({ nodes }: { nodes: TraceNode[] }) {
   if (nodes.length === 0) {
     return (
-      <div className="py-10 text-center text-sm text-slate-400">
+      <div className="py-10 text-center text-sm text-slate-400 dark:text-slate-500">
         No node records found
       </div>
     );
   }
 
   return (
-    <div className="divide-y divide-slate-100">
+    <div className="divide-y divide-slate-100 dark:divide-slate-800">
       {nodes.map((node, i) => (
         <TimelineRow key={`${node.node}-${i}`} node={node} />
       ))}
@@ -107,10 +107,10 @@ function TimelineView({ nodes }: { nodes: TraceNode[] }) {
 
 function TimelineRow({ node }: { node: TraceNode }) {
   const isError = node.status === "error";
-  const obsClass = OBS_COLOR[node.observation_type] ?? "text-slate-500";
+  const obsClass = OBS_COLOR[node.observation_type] ?? "text-slate-500 dark:text-slate-400";
 
   return (
-    <div className={`px-3 py-2 flex items-center gap-2 text-xs ${isError ? "bg-red-50" : ""}`}>
+    <div className={`px-3 py-2 flex items-center gap-2 text-xs ${isError ? "bg-red-50 dark:bg-red-950/30" : ""}`}>
       {isError ? (
         <XCircle size={14} className="text-red-500 shrink-0" />
       ) : (
@@ -118,7 +118,7 @@ function TimelineRow({ node }: { node: TraceNode }) {
       )}
 
       <div className="flex-1 min-w-0">
-        <span className="font-medium text-slate-700 truncate block">
+        <span className="font-medium text-slate-700 dark:text-slate-200 truncate block">
           {friendlyNodeName(node.node)}
         </span>
         <div className="flex items-center gap-1.5 mt-0.5">
@@ -126,19 +126,19 @@ function TimelineRow({ node }: { node: TraceNode }) {
             {node.observation_type}
           </span>
           {node.attempt > 1 && (
-            <span className="text-[10px] px-1 rounded bg-amber-100 text-amber-700">
+            <span className="text-[10px] px-1 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300">
               attempt {node.attempt}
             </span>
           )}
           {node.error_category && (
-            <span className="text-[10px] px-1 rounded bg-red-100 text-red-700 truncate max-w-[100px]">
+            <span className="text-[10px] px-1 rounded bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 truncate max-w-[100px]">
               {node.error_category}
             </span>
           )}
         </div>
       </div>
 
-      <span className="text-slate-400 shrink-0 flex items-center gap-0.5">
+      <span className="text-slate-400 dark:text-slate-500 shrink-0 flex items-center gap-0.5">
         <Clock size={10} />
         {formatMs(node.latency_ms)}
       </span>
@@ -152,15 +152,15 @@ type Tab = "graph" | "timeline";
 
 function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
   return (
-    <div className="flex border-b border-slate-100 bg-white">
+    <div className="flex border-b border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900">
       {(["graph", "timeline"] as Tab[]).map((t) => (
         <button
           key={t}
           onClick={() => onChange(t)}
           className={`flex items-center gap-1.5 px-4 py-2 text-xs font-medium transition-colors ${
             active === t
-              ? "border-b-2 border-blue-500 text-blue-600"
-              : "text-slate-500 hover:text-slate-700"
+              ? "border-b-2 border-blue-500 text-blue-600 dark:text-blue-400"
+              : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
           }`}
         >
           {t === "graph" ? (
@@ -198,8 +198,8 @@ export function TraceTimeline({ runId }: TraceTimelineProps) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-32 text-sm text-slate-400">
-        <div className="animate-spin rounded-full h-5 w-5 border-2 border-slate-200 border-t-blue-500 mr-2" />
+      <div className="flex items-center justify-center h-32 text-sm text-slate-400 dark:text-slate-500">
+        <div className="animate-spin rounded-full h-5 w-5 border-2 border-slate-200 dark:border-slate-700 border-t-blue-500 mr-2" />
         Loading trace…
       </div>
     );
@@ -207,7 +207,7 @@ export function TraceTimeline({ runId }: TraceTimelineProps) {
 
   if (error || !trace || !trace.found) {
     return (
-      <div className="flex flex-col items-center justify-center h-32 gap-1 text-sm text-slate-400">
+      <div className="flex flex-col items-center justify-center h-32 gap-1 text-sm text-slate-400 dark:text-slate-500">
         <AlertCircle size={20} />
         <span>{error ?? "Trace not found"}</span>
       </div>

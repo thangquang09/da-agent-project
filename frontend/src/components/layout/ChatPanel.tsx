@@ -12,19 +12,19 @@ export function ChatPanel() {
   const activeThreadId = useChatStore((s) => s.activeThreadId);
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 h-full bg-white">
+    <div className="flex-1 flex flex-col min-w-0 h-full bg-white dark:bg-slate-950">
       {/* Top bar */}
-      <header className="flex items-center gap-3 px-4 py-2.5 border-b border-slate-200">
+      <header className="flex items-center gap-3 px-4 py-2.5 border-b border-slate-200 dark:border-slate-800">
         {!sidebarOpen && (
           <button
             onClick={toggleSidebar}
-            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition-colors"
+            className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors"
             aria-label="Open sidebar"
           >
             <PanelLeftOpen size={18} />
           </button>
         )}
-        <h2 className="text-sm font-medium text-slate-600">
+        <h2 className="text-sm font-medium text-slate-600 dark:text-slate-300">
           {activeThreadId
             ? `Thread ${activeThreadId.slice(0, 8)}...`
             : "DA Agent Lab"}
@@ -49,13 +49,13 @@ export function ChatPanel() {
 function EmptyState() {
   return (
     <div className="flex flex-col items-center justify-center h-full text-center px-8">
-      <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mb-5">
-        <PanelRightOpen size={24} className="text-indigo-500" />
+      <div className="w-14 h-14 rounded-2xl bg-indigo-50 dark:bg-indigo-950/50 flex items-center justify-center mb-5">
+        <PanelRightOpen size={24} className="text-indigo-500 dark:text-indigo-400" />
       </div>
-      <h3 className="text-lg font-semibold text-slate-800 mb-2">
+      <h3 className="text-lg font-semibold text-slate-800 dark:text-slate-100 mb-2">
         DA Agent Lab
       </h3>
-      <p className="text-sm text-slate-500 max-w-md leading-relaxed">
+      <p className="text-sm text-slate-500 dark:text-slate-400 max-w-md leading-relaxed">
         Ask a data question in Vietnamese or English. The agent will query your
         database, retrieve context, generate visualizations, or write reports.
       </p>
@@ -69,7 +69,7 @@ function EmptyState() {
           <button
             key={q}
             onClick={() => useChatStore.getState().sendMessage(q)}
-            className="px-3.5 py-2 text-sm rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300 transition-colors"
+            className="px-3.5 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-600 transition-colors"
           >
             {q}
           </button>

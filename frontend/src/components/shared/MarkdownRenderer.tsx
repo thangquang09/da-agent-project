@@ -24,7 +24,7 @@ const components: Components = {
     if (isInline) {
       return (
         <code
-          className="bg-slate-100 text-slate-800 px-1.5 py-0.5 rounded text-[0.85em] font-mono"
+          className="bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-200 px-1.5 py-0.5 rounded text-[0.85em] font-mono"
           {...props}
         >
           {children}
@@ -39,7 +39,7 @@ const components: Components = {
   },
   a: ({ children, ...props }) => (
     <a
-      className="text-indigo-600 hover:text-indigo-800 underline underline-offset-2"
+      className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 underline underline-offset-2"
       target="_blank"
       rel="noopener noreferrer"
       {...props}
@@ -51,7 +51,7 @@ const components: Components = {
 
 export function MarkdownRenderer({ content, className }: MarkdownRendererProps) {
   return (
-    <div className={`prose prose-slate prose-sm max-w-none ${className ?? ""}`}>
+    <div className={`prose prose-slate prose-sm dark:prose-invert max-w-none ${className ?? ""}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
