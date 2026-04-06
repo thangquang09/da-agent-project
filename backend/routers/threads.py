@@ -9,6 +9,14 @@ from backend.models.responses import ConversationTurnResponse, ThreadInfo
 router = APIRouter(prefix="/threads", tags=["threads"])
 
 
+@router.get("", response_model=list[ThreadInfo])
+async def list_threads(limit: int = 50) -> list[ThreadInfo]:
+    """List all conversation threads, ordered by most recently updated."""
+    store = get_conversation_memory_store()
+    rows = store.list_threads(limit=limit)
+    return [ThreadInfo(**row) for row in rows]
+
+
 @router.get("/{thread_id}", response_model=ThreadInfo)
 async def get_thread(thread_id: str) -> ThreadInfo:
     """Get thread summary info. Returns 404 if the thread has no turns."""

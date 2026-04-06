@@ -1,14 +1,21 @@
 # CLAUDE.md
 
+This file provides guidance to Claude Code (claude.ai/code) when working with this repository.
+
 ## Documentation rules
 
 > **QUAN TRỌNG — Đọc trước khi bắt đầu làm việc.**
 
-- Luôn cập nhật documentation sau khi implement xong một feature.
-- **KHÔNG** nhét nội dung chi tiết vào file này. File này chỉ chứa tóm tắt + link.
-- Khi cần ghi lại kiến trúc mới, design decision, hoặc research → tạo/cập nhật file riêng trong `docs/` rồi link từ đây.
-- Khi cần thêm convention mới → cập nhật `docs/CODE_STYLE.md`, không thêm vào đây.
-- Giữ file này **dưới 300 dòng**. Nếu vượt, tách nội dung ra file riêng.
+- **CLAUDE.md phải dưới 300 dòng.** Nếu vượt, tách nội dung ra file riêng trong `docs/`.
+- **KHÔNG** nhét nội dung chi tiết vào file này. Chỉ giữ tóm tắt + link.
+- **Cập nhật docs sau mọi commit tính năng mới.** Code thay đổi → docs thay đổi theo.
+  - Tính năng mới / thay đổi → cập nhật `docs/README.md`, `docs/thangquang09/01_architecture.md`, `docs/thangquang09/02_system_design.md` nếu liên quan.
+  - Convention mới → cập nhật `docs/CODE_STYLE.md`.
+  - Prompt thay đổi → cập nhật `app/prompts/CLAUDE.md`.
+  - CLAUDE.md chỉ cập nhật khi có thay đổi về kiến trúc tổng thể, cấu trúc thư mục, hoặc entry points.
+- **Không có aspirational docs.** Mọi tài liệu phải đúng với code hiện tại.
+
+> **Docs entry point**: `docs/README.md` — mục lục chi tiết của toàn bộ documentation.
 
 ---
 
@@ -16,11 +23,12 @@
 
 **DA Agent Lab** — A LangGraph-based Data Analyst Agent.
 
-Trả lời business/data questions qua SQL tools, RAG retrieval, deterministic analysis, và full observability.
+Trả lời business/data questions qua SQL tools, RAG retrieval, Visualization, Report generation, và full observability.
 
 - **Runtime**: `uv` virtualenv (`.venv`)
-- **Database**: SQLite local warehouse
-- **LLM orchestration**: LangGraph
+- **Database**: PostgreSQL + SQLite local warehouse
+- **LLM orchestration**: LangGraph (10-node graph, 3 routing decisions)
+- **Frontend**: Next.js web chat (:3000) + Streamlit UI (:8501) → FastAPI backend
 - **Observability**: JSONL traces + Langfuse
 
 ---
@@ -37,74 +45,94 @@ Trả lời business/data questions qua SQL tools, RAG retrieval, deterministic 
 ## Quick reference — Dev commands
 
 ```bash
-# Run
-streamlit run streamlit_app.py    # Streamlit UI
-python -m app.main                # CLI
-python -m mcp_server.server       # MCP server
+# Run (Backend + Frontend)
+uv run uvicorn backend.main:app --port 8001 --reload     # Backend API
+BACKEND_URL=http://localhost:8001 uv run streamlit run streamlit_app.py  # Streamlit UI
+uv run python -m app.main "Top 5 sản phẩm bán chạy?"      # CLI direct
+
+# Frontend (Next.js — primary UI)
+cd frontend && npm run dev                                 # Dev server at :3000
+cd frontend && npm run build && npm start                  # Production build
 
 # Test
-pytest                                          # All tests
-pytest tests/test_sql_tools.py -v               # Single file
-pytest -k "validate_sql"                        # Pattern match
-pytest --cov=app --cov-report=term-missing      # Coverage
-
-# Data
-python data/seeds/create_seed_db.py             # Seed database
+uv run pytest                                              # All tests
+uv run pytest tests/test_sql_tools.py -v                   # Single file
+uv run pytest -k "memory" -v                               # Pattern match
+uv run pytest --cov=app --cov-report=term-missing           # Coverage
 
 # Eval
-python evals/runner.py                          # Run eval suite
+uv run python evals/runner.py                              # Full eval suite
+
+# Data
+PYTHONPATH=. python data/seeds/create_seed_db.py           # Seed database
+
+# Docker
+docker compose up -d                                       # Start infra
+docker exec da-agent-postgres psql -U postgres -c "\dt"    # List tables
 ```
+
+| Service | URL |
+|---------|-----|
+| Next.js UI (primary) | http://localhost:3000 |
+| Streamlit UI (legacy) | http://localhost:8501 |
+| FastAPI docs | http://localhost:8001/docs |
+| MCP server | http://localhost:8000/mcp |
 
 ---
 
 ## Architecture overview
 
 ```text
-User (CLI / Streamlit)
+User (Next.js / Streamlit / CLI / API)
         |
         v
-  LangGraph StateGraph
-        |
-        +-- detect_context_type
-        +-- route_intent  →  sql | rag | mixed | unknown
-        |       |
-        |       +→ sql  → get_schema → generate_sql → validate → execute → analyze
-        |       +→ rag  → retrieve_context
-        |       +→ unknown → synthesize (LLM fallback)
+  FastAPI Backend (:8001)
         |
         v
-  synthesize_answer
+  LangGraph StateGraph (10 nodes)
         |
+        +-- process_uploaded_files  →  Parse + register tables
+        +-- inject_session_context  →  Load conversation history
+        +-- task_grounder           →  LLM mini: TaskProfile (mode, source, capabilities, confidence)
+        +-- leader_agent            →  5-step tool-calling loop (SQL, RAG, viz, report)
+        +-- artifact_evaluator     →  Deterministic: finalize / continue / retry / wait_for_user
+        +-- clarify_question_node  →  Interrupt: halt if confidence=low or mode=ambiguous
+        +-- capture_action_node    →  Save last_action, conversation_turn
+        +-- compact_and_save_memory →  Persist to SQLite session store
+        +-- report_subgraph        →  4-phase: plan → execute → write → critique
         v
-  Trace (JSONL + Langfuse)
+  Synthesized answer + trace (JSONL + Langfuse)
 ```
 
-> **Chi tiết đầy đủ**: `docs/thangquang09/system_design.md`
-> Bao gồm: state model, node design, tool specs, data strategy, failure taxonomy, eval framework, MCP guidance.
+**Worker tools** (internal, not exposed to user):
+
+| Tool | File | Purpose |
+|------|------|---------|
+| `ask_sql_analyst` | `app/tools/` | Schema → SQL → validate → execute → analyze |
+| `ask_sql_analyst_parallel` | `app/tools/` | Fan-out parallel SQL workers |
+| `retrieve_rag_answer` | `app/tools/retrieve_rag_answer.py` | Vector similarity search |
+| `create_visualization` | `app/graph/standalone_visualization.py` | E2B sandbox → Altair chart |
+| `generate_report` | `app/graph/report_subgraph.py` | Report pipeline: plan → execute → write → critique |
+| `validate_sql_query` | `app/tools/validate_sql.py` | AST-based SELECT-only validation |
+| `get_schema_overview` | `app/tools/get_schema.py` | DB schema introspection |
 
 ---
 
 ## Core principles
 
-1. **Constrained agent** — LLM decides, tools execute, deterministic code analyzes. Không cho LLM tự do hành động ngoài tool surfaces đã định nghĩa.
+1. **Constrained agent** — LLM decides, tools execute, deterministic code analyzes.
+2. **Observability-first** — Each run captured: run_id, routing, tools, SQL, latency, errors. Replayable.
+3. **SQL safety** — Only `SELECT` / CTE allowed. Block: `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, etc. Validate before execute.
+4. **Evaluation-driven** — Measure routing, SQL validity, tool-call correctness, answer quality. Run regression after every change.
+5. **Grounded answers** — No hallucinated numbers. Distinguish DB data vs RAG context vs inference.
 
-2. **Observability-first** — Mỗi run phải capture: run_id, routing decision, used tools, generated SQL, latency, errors. Traces phải replayable.
-
-3. **SQL safety** — Chỉ cho phép `SELECT` / CTE. Block tuyệt đối: `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `TRUNCATE`, `CREATE`, `REPLACE`. Validate trước khi execute.
-
-4. **Evaluation-driven** — Đo routing accuracy, SQL validity, tool-call correctness, answer quality. Chạy regression sau mỗi prompt/tool change.
-
-5. **Grounded answers** — Không bịa số liệu. Phân biệt rõ data từ DB vs context từ RAG vs phân tích suy luận. Thừa nhận uncertainty khi data thiếu.
-
----
-
-## Routing behavior
+### Routing behavior
 
 | Query type | Intent | Example |
 |-----------|--------|---------|
-| Hỏi giá trị, ranking, trend | `sql` | "DAU hôm qua là bao nhiêu?" |
+| Hỏi giá trị, ranking, trend | `sql` | "DAU hôm qua?" |
 | Hỏi định nghĩa, business rule | `rag` | "Retention D1 là gì?" |
-| Cần cả data lẫn context | `mixed` | "Retention giảm từ ngày nào và metric này tính ra sao?" |
+| Cần cả data lẫn context | `mixed` | "Retention giảm từ lúc nào và metric này tính ra sao?" |
 
 Route bằng structured output (enum), không phải free-form text.
 
@@ -112,16 +140,12 @@ Route bằng structured output (enum), không phải free-form text.
 
 ## Implementation priorities
 
-Khi contribute, ưu tiên theo thứ tự:
-
 1. Correctness
 2. Observability
 3. Evaluation
 4. Clarity of architecture
 5. Feature expansion
 6. UI polish
-
-> Chọn implementation nhỏ nhưng đo lường được, hơn là implementation lớn nhưng mơ hồ.
 
 ---
 
@@ -136,8 +160,6 @@ Khi contribute, ưu tiên theo thứ tự:
 
 ## Code conventions
 
-Tóm tắt quan trọng nhất:
-
 - **Logging**: `loguru` only, structured placeholders, never log secrets.
 - **Imports**: `from __future__ import annotations` first, grouped (stdlib → third-party → local).
 - **Types**: modern `|` union syntax, `TypedDict` for state, `Literal` for enums.
@@ -145,6 +167,15 @@ Tóm tắt quan trọng nhất:
 - **Testing**: `pytest` + `monkeypatch` + `conftest.py` fixtures.
 
 > **Chi tiết đầy đủ**: `docs/CODE_STYLE.md`
+
+---
+
+## Available tools
+
+| Tool | Purpose |
+|------|---------|
+| GitHub MCP | Search public code references |
+| NotebookLM MCP | `https://notebooklm.google.com/notebook/5220d387-0fa4-4250-8206-435e684c1c0e` — LLM/Agent knowledge |
 
 ---
 
@@ -163,43 +194,50 @@ Có → good change. Không → probably a distraction.
 
 ---
 
-## Key documentation map
+## Environment Variables
 
-| File | Nội dung |
-|------|----------|
-| `CLAUDE.md` (file này) | Tổng quan, quick ref, principles — **source of truth cho agent** |
-| `docs/thangquang09/system_design.md` | Kiến trúc chi tiết, state model, nodes, tools, eval, data |
-| `docs/CODE_STYLE.md` | Code conventions, naming, patterns |
-| `docs/thangquang09/overview.md` | Project overview |
-| `docs/thangquang09/implementation_todo.md` | Implementation tracking |
-| `docs/research/` | Research notes, datasets, RAG docs, eval pipeline |
-| `app/prompts/CLAUDE.md` | Prompt inventory — all LLM prompts are defined in `app/prompts/` |
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DATABASE_URL` | Yes | `postgresql://postgres:postgres@localhost:5432/postgres` | PostgreSQL |
+| `LLM_API_URL` | Yes | — | LLM API endpoint |
+| `LLM_API_KEY` | Yes | — | API key |
+| `E2B_API_KEY` | No | — | E2B sandbox (visualization) |
+| `BACKEND_URL` | No | `http://localhost:8001` | Streamlit → Backend |
+| `ENABLE_LANGFUSE` | No | `false` | Langfuse tracing |
 
----
-
-## Available tools
-
-- GitHub MCP — tìm kiếm public code tham khảo.
-- NotebookLM MCP — [Notebook link](https://notebooklm.google.com/notebook/5220d387-0fa4-4250-8206-435e684c1c0e) — kiến thức thực tế lẫn lý thuyết về AI Engineer.
+> **Chi tiết đầy đủ**: `docs/ENV.md`
 
 ---
 
-<!-- ClaudeVibeCodeKit -->
-## ClaudeVibeCodeKit
+## Documentation map
 
-### Planning
-When planning complex tasks:
-1. Read `.claude/docs/plan-execution-guide.md` for format guide
-2. Use planning-agent for parallel execution optimization
-3. Output plan according to `.claude/schemas/plan-schema.json`
+| File | Purpose |
+|------|---------|
+| `CLAUDE.md` (this file) | Agent entry point — summary, commands, principles |
+| `docs/README.md` | **Full documentation index** — architecture, tech specs, conventions |
+| `docs/thangquang09/` | Tiếng Việt — architecture, system design, interview Q&A, CV |
+| `docs/_tech_specs/` | English — state model, worker contracts, observability |
+| `docs/CODE_STYLE.md` | Code conventions |
+| `docs/ENV.md` | Environment configuration |
+| `docs/RUNBOOK.md` | Production operational guide |
+| `docs/mcp/` | MCP server documentation |
+| `app/prompts/CLAUDE.md` | Prompt inventory — all LLM prompts defined here |
+| `frontend/CLAUDE.md` | Frontend (Next.js) architecture and commands |
 
-### Available Commands
-- `/research <topic>` - Deep web research
-- `/meeting-notes <name>` - Live meeting notes
-- `/changelog` - Generate changelog
-- `/onboard` - Developer onboarding
-- `/handoff` - Create handoff document for conversation transition
-- `/continue` - Resume work from a handoff document
-- `/watzup` - Check current project status
-- `/social-media-post` - Social content workflow
-<!-- /ClaudeVibeCodeKit -->
+### Reading by role
+
+| Role | Read |
+|------|------|
+| Phỏng vấn viên | `docs/thangquang09/01_architecture.md` + `03_interview_qna.md` |
+| Review code mới | `docs/_tech_specs/01_state_model.md` + `02_worker_contracts.md` |
+| Debug production | `docs/_tech_specs/03_observability.md` |
+| Thay đổi kiến trúc | `docs/_tech_specs/01_state_model.md` → `02_worker_contracts.md` |
+
+### Source of truth
+
+- **Graph flow**: `app/graph/graph.py` → `build_sql_v3_graph()`
+- **State model**: `app/graph/state.py` → `AgentState`, `TaskProfile`, `WorkerArtifact`
+- **Nodes**: `app/graph/nodes.py`
+- **Observability**: `app/observability/tracer.py`
+- **Prompts**: `app/prompts/task_grounder.py`, `app/prompts/leader.py`
+- **Frontend**: `frontend/` — Next.js 16 + Tailwind + Zustand

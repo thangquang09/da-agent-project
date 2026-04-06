@@ -1,0 +1,73 @@
+@import "tailwindcss";
+@import "highlight.js/styles/github.css";
+
+:root {
+  --sidebar-w: 280px;
+  --artifact-w: 480px;
+}
+
+body {
+  font-family: var(--font-geist-sans, system-ui, -apple-system, sans-serif);
+  background: #ffffff;
+  color: #0f172a;
+}
+
+/* Custom scrollbar — thin, unobtrusive */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Markdown content styles */
+.prose pre {
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.prose table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.875rem;
+}
+
+.prose table th,
+.prose table td {
+  border: 1px solid #e2e8f0;
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+
+.prose table th {
+  background: #f1f5f9;
+  font-weight: 600;
+}
+
+.prose table tr:nth-child(even) {
+  background: #f8fafc;
+}
+
+/* Typing animation for assistant "thinking" state */
+@keyframes pulse-dot {
+  0%, 80%, 100% { opacity: 0.3; }
+  40% { opacity: 1; }
+}
+
+.thinking-dots span {
+  animation: pulse-dot 1.4s infinite ease-in-out;
+}
+.thinking-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.thinking-dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}

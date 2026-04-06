@@ -62,7 +62,7 @@ services:
       MCP_HTTP_URL: http://mcp:8000/mcp
       ENABLE_MCP_TOOL_CLIENT: ${ENABLE_MCP_TOOL_CLIENT:-false}
       BACKEND_PORT: "8001"
-      BACKEND_CORS_ORIGINS: "http://localhost:${FRONTEND_PORT:-8501},http://frontend:8501"
+      BACKEND_CORS_ORIGINS: "http://localhost:${FRONTEND_PORT:-3000},http://frontend:3000,http://localhost:${STREAMLIT_PORT:-8501},http://streamlit:8501"
       ENABLE_LANGFUSE: ${ENABLE_LANGFUSE:-false}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
@@ -80,20 +80,37 @@ services:
       - da-agent-net
 
   # ──────────────────────────────────────────────────────────────
-  # Frontend  (Streamlit thin client)
-  # Waits for backend to be healthy before starting
+  # Frontend — Streamlit thin client (legacy)
   # ──────────────────────────────────────────────────────────────
-  frontend:
+  streamlit:
     build:
       context: .
       dockerfile: docker/frontend.Dockerfile
-    container_name: da-agent-frontend
+    container_name: da-agent-streamlit
     ports:
-      - "${FRONTEND_PORT:-8501}:8501"
+      - "${STREAMLIT_PORT:-8501}:8501"
     environment:
-      # Docker DNS: 'backend' resolves to the backend container
       BACKEND_URL: http://backend:8001
       BACKEND_QUERY_TIMEOUT: "120"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - da-agent-net
+
+  # ──────────────────────────────────────────────────────────────
+  # Frontend — Next.js web chat (primary)
+  # ──────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: da-agent-frontend
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://backend:8001
     depends_on:
       backend:
         condition: service_healthy
