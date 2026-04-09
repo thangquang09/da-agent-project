@@ -5,8 +5,12 @@ import type {
   ArtifactContent,
   QueryResponse,
   UploadedFile,
+  ReportSectionResponse,
+  TurnArtifact,
+  TableInfo,
+  UploadStatus,
 } from "@/lib/types";
-import { listThreads, getThreadHistory, deleteThread as deleteThreadAPI } from "@/lib/api";
+import { listThreads, getThreadHistory, getThreadArtifacts, deleteThread as deleteThreadAPI, uploadFiles as uploadFilesAPI, getTables as getTablesAPI } from "@/lib/api";
 import { streamQuery } from "@/lib/sse";
 import { postQueryWithFiles } from "@/lib/api";
 
@@ -46,6 +50,12 @@ interface ChatStore {
   uploadedFiles: UploadedFile[];
   sidebarOpen: boolean;
 
+  // ── Data panel ───────────────────────────────────────────────────────
+  dataPanelOpen: boolean;
+  availableTables: TableInfo[];
+  uploadStatus: UploadStatus;
+  uploadError: string | null;
+
   // ── Actions ──────────────────────────────────────────────────────────
   fetchThreads: () => Promise<void>;
   createThread: () => string;
@@ -63,6 +73,11 @@ interface ChatStore {
   clearFiles: () => void;
 
   toggleSidebar: () => void;
+
+  // ── Data panel actions ───────────────────────────────────────────────
+  toggleDataPanel: () => void;
+  fetchTables: () => Promise<void>;
+  uploadFiles: (files: { name: string; data: ArrayBuffer }[]) => Promise<void>;
 }
 
 export const useChatStore = create<ChatStore>((set, get) => ({
@@ -75,6 +90,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   isStreaming: false,
   uploadedFiles: [],
   sidebarOpen: true,
+  dataPanelOpen: false,
+  availableTables: [],
+  uploadStatus: "idle",
+  uploadError: null,
 
   // ── Thread actions ───────────────────────────────────────────────────
   fetchThreads: async () => {
@@ -96,13 +115,106 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set({ activeThreadId: id, messages: [], artifactOpen: false, artifactContent: null });
     try {
       const turns = await getThreadHistory(id, 50);
-      const messages: Message[] = turns.map((t) => ({
-        id: `turn-${t.turn_number}`,
-        role: t.role as "user" | "assistant",
-        content: t.content || t.result_summary || "",
-        timestamp: t.timestamp,
-        status: "done" as const,
-      }));
+
+      // Build messages with lightweight metadata from turn + last_action_json
+      const messages: Message[] = turns.map((t) => {
+        const msg: Message = {
+          id: `turn-${t.turn_number}`,
+          role: t.role as "user" | "assistant",
+          content: t.content || t.result_summary || "",
+          timestamp: t.timestamp,
+          status: "done" as const,
+        };
+
+        if (t.role === "assistant") {
+          const action = t.last_action_json ?? {};
+          const runId = (action.run_id as string) ?? "";
+          const generatedSql = t.sql_generated ?? (action.generated_sql as string) ?? "";
+
+          if (runId || generatedSql) {
+            msg.result = {
+              run_id: runId,
+              thread_id: id,
+              answer: msg.content,
+              report_markdown: null,
+              report_sections: [],
+              intent: t.intent ?? (action.intent as string) ?? "unknown",
+              intent_reason: "",
+              response_mode: (action.response_mode as string) ?? "answer",
+              confidence: (action.confidence as string) ?? "medium",
+              used_tools: [],
+              generated_sql: generatedSql,
+              evidence: [],
+              error_categories: [],
+              tool_history: [],
+              errors: [],
+              total_token_usage: null,
+              total_cost_usd: null,
+              context_type: "default",
+              visualization: null,
+              rows: null,
+              context_chunks: null,
+              step_count: 0,
+            };
+          }
+        }
+        return msg;
+      });
+
+      // Fetch persisted artifacts (reports, charts) and merge into messages
+      try {
+        const artifacts = await getThreadArtifacts(id);
+        if (artifacts.length > 0) {
+          const byTurn = new Map<number, TurnArtifact[]>();
+          for (const a of artifacts) {
+            const list = byTurn.get(a.turn_number) ?? [];
+            list.push(a);
+            byTurn.set(a.turn_number, list);
+          }
+
+          for (const msg of messages) {
+            if (msg.role !== "assistant") continue;
+            const turnNum = parseInt(msg.id.replace("turn-", ""), 10);
+            const turnArtifacts = byTurn.get(turnNum);
+            if (!turnArtifacts?.length) continue;
+
+            // Ensure msg.result exists
+            if (!msg.result) {
+              msg.result = {
+                run_id: "", thread_id: id, answer: msg.content,
+                report_markdown: null, report_sections: [],
+                intent: "unknown", intent_reason: "",
+                response_mode: "answer", confidence: "medium",
+                used_tools: [], generated_sql: "", evidence: [],
+                error_categories: [], tool_history: [], errors: [],
+                total_token_usage: null, total_cost_usd: null,
+                context_type: "default", visualization: null,
+                rows: null, context_chunks: null, step_count: 0,
+              };
+            }
+
+            for (const a of turnArtifacts) {
+              if (a.artifact_type === "report") {
+                msg.result.response_mode = "report";
+                msg.result.report_markdown = (a.payload.report_markdown as string) ?? null;
+                msg.result.report_sections =
+                  (a.payload.report_sections as ReportSectionResponse[]) ?? [];
+              } else if (a.artifact_type === "chart") {
+                msg.result.visualization = {
+                  success: true,
+                  image_data: (a.payload.image_data as string) ?? null,
+                  image_format: (a.payload.image_format as string) ?? "png",
+                  execution_time_ms: (a.payload.execution_time_ms as number) ?? 0,
+                  error: null,
+                };
+              }
+            }
+          }
+        }
+      } catch {
+        // Artifacts fetch failed — buttons won't show but messages still work
+      }
+
       set({ messages });
     } catch {
       // thread may have no history yet
@@ -270,4 +382,44 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   // ── Sidebar ──────────────────────────────────────────────────────────
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
+
+  // ── Data panel ───────────────────────────────────────────────────────
+  toggleDataPanel: () => set((s) => ({ dataPanelOpen: !s.dataPanelOpen })),
+
+  fetchTables: async () => {
+    try {
+      const response = await getTablesAPI();
+      set({ availableTables: response.tables });
+    } catch {
+      // silently fail
+    }
+  },
+
+  uploadFiles: async (files: { name: string; data: ArrayBuffer }[]) => {
+    set({ uploadStatus: "uploading", uploadError: null });
+
+    try {
+      const response = await uploadFilesAPI(files);
+
+      if (response.errors.length > 0) {
+        set({
+          uploadStatus: "error",
+          uploadError: response.errors.map((e) => `${e.file}: ${e.error}`).join("; "),
+        });
+        return;
+      }
+
+      set({
+        uploadStatus: "success",
+        availableTables: response.tables,
+        uploadError: null,
+      });
+
+      // Auto-refresh tables after upload
+      get().fetchTables();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Upload failed";
+      set({ uploadStatus: "error", uploadError: msg });
+    }
+  },
 }));

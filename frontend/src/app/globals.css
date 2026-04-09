@@ -186,3 +186,40 @@ body {
 .thinking-dots span:nth-child(3) {
   animation-delay: 0.4s;
 }
+
+/* ─── Resize handle for ArtifactPanel ────────────────────────────────────────── */
+.resize-handle {
+  width: 6px;
+  cursor: col-resize;
+  transition: background 0.15s ease;
+}
+
+.resize-handle:hover,
+.resize-handle:active {
+  background: linear-gradient(
+    to right,
+    transparent 0px,
+    rgba(99, 102, 241, 0.35) 2px,
+    rgba(99, 102, 241, 0.35) 4px,
+    transparent 6px
+  );
+}
+
+.resize-handle::after {
+  content: "";
+  position: absolute;
+  left: 1px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 32px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.resize-handle:hover::after,
+.resize-handle:active::after {
+  background: rgba(99, 102, 241, 0.6);
+}
+

@@ -3,11 +3,13 @@
 import { useChatStore } from "@/stores/chatStore";
 import { MessageList } from "@/components/chat/MessageList";
 import { ChatInput } from "@/components/chat/ChatInput";
-import { PanelLeftOpen, PanelRightOpen } from "lucide-react";
+import { PanelLeftOpen, PanelRightOpen, Database } from "lucide-react";
 
 export function ChatPanel() {
   const sidebarOpen = useChatStore((s) => s.sidebarOpen);
   const toggleSidebar = useChatStore((s) => s.toggleSidebar);
+  const dataPanelOpen = useChatStore((s) => s.dataPanelOpen);
+  const toggleDataPanel = useChatStore((s) => s.toggleDataPanel);
   const messages = useChatStore((s) => s.messages);
   const activeThreadId = useChatStore((s) => s.activeThreadId);
 
@@ -24,11 +26,25 @@ export function ChatPanel() {
             <PanelLeftOpen size={18} />
           </button>
         )}
-        <h2 className="text-sm font-medium text-slate-600 dark:text-slate-300">
+        <h2 className="text-sm font-medium text-slate-600 dark:text-slate-300 flex-1">
           {activeThreadId
             ? `Thread ${activeThreadId.slice(0, 8)}...`
             : "DA Agent Lab"}
         </h2>
+        {/* Data panel toggle */}
+        <button
+          onClick={toggleDataPanel}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors ${
+            dataPanelOpen
+              ? "bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400"
+              : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+          }`}
+          aria-label={dataPanelOpen ? "Close data panel" : "Open data panel"}
+          title="Data Management"
+        >
+          <Database size={18} />
+          <span className="text-sm font-medium">Data</span>
+        </button>
       </header>
 
       {/* Messages */}

@@ -64,6 +64,7 @@ export interface ConversationTurn {
   result_summary: string | null;
   entities: string[];
   timestamp: string;
+  last_action_json: Record<string, unknown> | null;
 }
 
 export interface HealthResponse {
@@ -111,6 +112,14 @@ export interface SSEEvent {
   data: Record<string, unknown>;
 }
 
+// Persisted artifact (report, chart) from GET /threads/{id}/artifacts
+export interface TurnArtifact {
+  thread_id: string;
+  turn_number: number;
+  artifact_type: "report" | "chart";
+  payload: Record<string, unknown>;
+}
+
 // Trace data (from GET /traces/{run_id})
 export interface TraceNode {
   node: string;
@@ -151,3 +160,30 @@ export interface TraceData {
     total_latency_ms: number | null;
   };
 }
+
+export interface TableColumn {
+  name: string;
+  type: string;
+  nullable?: boolean;
+  is_primary_key?: boolean;
+}
+
+export interface TableInfo {
+  table_name: string;
+  columns: TableColumn[];
+  row_count?: number;
+  original_file?: string;
+}
+
+export interface UploadResponse {
+  registered_tables: string[];
+  errors: Array<{ file: string; error: string }>;
+  tables: TableInfo[];
+}
+
+export interface TablesResponse {
+  tables: TableInfo[];
+  count: number;
+}
+
+export type UploadStatus = "idle" | "uploading" | "success" | "error";

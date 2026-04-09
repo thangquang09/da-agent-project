@@ -4,6 +4,9 @@ import type {
   ConversationTurn,
   HealthResponse,
   TraceData,
+  TurnArtifact,
+  UploadResponse,
+  TablesResponse,
 } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
@@ -45,6 +48,10 @@ export function getThreadHistory(
   return fetchJSON<ConversationTurn[]>(
     `/threads/${threadId}/history?limit=${limit}`
   );
+}
+
+export function getThreadArtifacts(threadId: string): Promise<TurnArtifact[]> {
+  return fetchJSON<TurnArtifact[]>(`/threads/${threadId}/artifacts`);
 }
 
 export async function deleteThread(threadId: string): Promise<void> {
@@ -109,4 +116,25 @@ export async function postQueryWithFiles(
 
 export function getTrace(runId: string): Promise<TraceData> {
   return fetchJSON<TraceData>(`/traces/${runId}`);
+}
+
+// ─── Data Upload ────────────────────────────────────────────────────────────
+
+export async function uploadFiles(
+  files: { name: string; data: ArrayBuffer }[]
+): Promise<UploadResponse> {
+  const form = new FormData();
+  for (const f of files) {
+    const blob = new Blob([f.data], { type: "text/csv" });
+    form.append("files", blob, f.name);
+  }
+
+  return fetchJSON<UploadResponse>("/data/upload", {
+    method: "POST",
+    body: form,
+  });
+}
+
+export function getTables(): Promise<TablesResponse> {
+  return fetchJSON<TablesResponse>("/data/tables");
 }
