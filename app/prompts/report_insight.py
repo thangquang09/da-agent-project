@@ -23,6 +23,7 @@ REPORT_INSIGHT_PROMPT_DEFINITION = PromptDefinition(
                 "- Do not perform math, estimation, or interpolation.\n"
                 "- Every numeric claim must be copied from computed_stats and cited.\n"
                 "- If a useful number is not present in computed_stats, omit it.\n"
+                "- If the section metadata or semantic_warnings indicate analytical uncertainty, reflect that uncertainty in limitations and avoid strong recommendations.\n"
                 "- Do not repeat the section title as a heading.\n"
                 "- Do not start insight_markdown with #, ##, or ### headings.\n"
                 "- Do not wrap the output in markdown fences.\n"

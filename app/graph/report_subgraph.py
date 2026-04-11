@@ -27,6 +27,17 @@ from app.artifacts.helpers import (
 )
 from app.tools.visualization import get_visualization_service
 
+_ALLOWED_ANALYSIS_TYPES = {
+    "descriptive",
+    "comparative",
+    "trend",
+    "distribution",
+    "composition",
+    "correlation",
+    "cohort",
+    "funnel",
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -139,12 +150,144 @@ def _truncate_text(text: str, max_chars: int = 3000) -> str:
     return text[:max_chars] + "\n... (truncated)"
 
 
+def _normalize_analysis_type(value: Any, *, query: str = "", title: str = "") -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in _ALLOWED_ANALYSIS_TYPES:
+        return normalized
+
+    hint = f"{title} {query}".lower()
+    if any(
+        token in hint
+        for token in ["trend", "over time", "theo thời gian", "month", "year"]
+    ):
+        return "trend"
+    if any(token in hint for token in ["distribution", "phân phối", "histogram"]):
+        return "distribution"
+    if any(
+        token in hint
+        for token in ["compare", "comparison", "vs", "so sánh", "khác biệt"]
+    ):
+        return "comparative"
+    if any(token in hint for token in ["share", "composition", "cơ cấu", "tỷ trọng"]):
+        return "composition"
+    if any(
+        token in hint
+        for token in ["correlation", "relationship", "liên hệ", "tương quan"]
+    ):
+        return "correlation"
+    if any(token in hint for token in ["cohort"]):
+        return "cohort"
+    if any(token in hint for token in ["funnel"]):
+        return "funnel"
+    return "descriptive"
+
+
+def _as_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
 def _first_nonempty_paragraph(text: str) -> str:
     for block in re.split(r"\n\s*\n", text or ""):
         cleaned = block.strip()
         if cleaned:
             return cleaned
     return ""
+
+
+def _is_probably_vietnamese(text: str) -> bool:
+    lowered = (text or "").lower()
+    if re.search(
+        r"[ăâđêôơưáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]",
+        lowered,
+    ):
+        return True
+    return any(
+        token in lowered
+        for token in ["hãy", "báo cáo", "dữ liệu", "phân tích", "tỷ lệ", "cảnh báo"]
+    )
+
+
+def _build_cautious_recommendations(state: AgentState) -> list[str]:
+    recommendations: list[str] = []
+    if any(
+        section.get("semantic_warnings") for section in state.get("report_sections", [])
+    ):
+        recommendations.append(
+            "Xác minh lại metric definition, grain phân tích, và cách tính các tỷ lệ trước khi dùng report này cho quyết định quan trọng."
+        )
+    if any(
+        section.get("section_confidence") == "low"
+        for section in state.get("report_sections", [])
+    ):
+        recommendations.append(
+            "Ưu tiên kiểm tra thêm các section có confidence thấp bằng truy vấn sâu hơn hoặc phân tích thủ công trước khi diễn giải mạnh."
+        )
+    recommendations.append(
+        "Dùng report này như bước mô tả và định hướng điều tra tiếp theo, không coi là bằng chứng nhân quả hay khuyến nghị can thiệp cuối cùng."
+    )
+    return recommendations[:3]
+
+
+def _ensure_report_recommendations(text: str, state: AgentState) -> str:
+    if re.search(r"^##\s+Recommendations\b", text, flags=re.IGNORECASE | re.MULTILINE):
+        return text
+    recommendations = _build_cautious_recommendations(state)
+    if not recommendations:
+        return text
+    lines = [text.rstrip(), "", "## Recommendations", ""]
+    for index, recommendation in enumerate(recommendations, start=1):
+        lines.append(f"{index}. {recommendation}")
+    return "\n".join(lines).strip()
+
+
+def _humanize_semantic_warning(warning: str, *, is_vietnamese: bool) -> str:
+    lowered = warning.lower()
+    if "average-of-averages" in lowered or "avg(" in lowered:
+        return (
+            "cách tính tỷ lệ có thể đang dùng trung bình-của-trung-bình và cần xác minh lại"
+            if is_vietnamese
+            else "the rate calculation may rely on an average-of-averages and should be verified"
+        )
+    if "correlation-style" in lowered or "causal" in lowered:
+        return (
+            "phân tích này chỉ mang tính mô tả tương quan, chưa đủ để diễn giải nhân quả"
+            if is_vietnamese
+            else "this analysis is descriptive and should not be interpreted causally"
+        )
+    if "very small result set" in lowered or "small result set" in lowered:
+        return (
+            "cỡ mẫu của section này nhỏ nên chênh lệch quan sát được có thể kém ổn định"
+            if is_vietnamese
+            else "the section is based on a small result set, so observed differences may be unstable"
+        )
+    cleaned = warning.strip().rstrip(".")
+    return cleaned if not is_vietnamese else cleaned.lower()
+
+
+def _soften_overclaim_language(text: str, *, is_vietnamese: bool) -> str:
+    softened = text
+    if is_vietnamese:
+        replacements = {
+            "ảnh hưởng quyết định đến khả năng sống sót": "có thể liên quan mạnh về mặt mô tả đến khả năng sống sót",
+            "có ảnh hưởng mạnh đến tỷ lệ sống sót": "có liên hệ mô tả rõ với tỷ lệ sống sót",
+            "có ảnh hưởng mạnh đến": "có liên hệ mô tả rõ với",
+            "cho thấy rõ ràng": "gợi ý khá rõ",
+            "xác nhận giả thuyết": "phù hợp với giả thuyết mô tả",
+            "là yếu tố quan trọng ảnh hưởng": "có thể là một yếu tố liên quan đến",
+            "phản ánh rõ ràng": "gợi ý",
+        }
+    else:
+        replacements = {
+            "decisively affected survival": "may be descriptively associated with survival",
+            "strongly affects": "is descriptively associated with",
+            "clearly shows": "suggests",
+            "confirms the hypothesis": "is consistent with the descriptive hypothesis",
+        }
+    for source, target in replacements.items():
+        softened = softened.replace(source, target)
+    return softened
 
 
 def _build_safe_report_markdown(state: AgentState) -> str:
@@ -156,7 +299,10 @@ def _build_safe_report_markdown(state: AgentState) -> str:
     ]
     lines = [f"# {plan_title}", "", "## Tóm tắt tổng quan", ""]
 
-    summary = "Báo cáo dưới đây tổng hợp các phát hiện đã được kiểm chứng theo từng mục phân tích."
+    summary = (
+        "Báo cáo dưới đây chỉ tổng hợp các phát hiện đã được grounding ở từng mục. "
+        "Một số phần diễn giải mức cao đã bị lược bỏ do bản nháp trước đó chưa vượt qua bước phản biện."
+    )
     first_section_paragraph = ""
     if sections:
         first_section_paragraph = _first_nonempty_paragraph(
@@ -184,36 +330,25 @@ def _build_safe_report_markdown(state: AgentState) -> str:
     ]
     lines.extend(["", "## Kết luận", ""])
     lines.append(
-        "Phân tích cho thấy khả năng sống sót thay đổi rõ rệt theo từng nhóm hành khách và từng lát cắt dữ liệu nêu trên."
+        "Các kết luận dưới đây chỉ nên được hiểu là phần tổng hợp an toàn từ những mục đã có evidence trực tiếp."
     )
     if all_limitations:
         lines.append(
-            "Các hạn chế dữ liệu và phạm vi phân tích đã được ghi rõ trong từng mục tương ứng."
+            "Các hạn chế dữ liệu và phạm vi phân tích đã được ghi rõ trong từng mục tương ứng, và cần được xem xét trước khi đưa ra quyết định."
         )
 
-    recommendation_map = {
-        "overall": "Ưu tiên rà soát quy trình sơ tán theo giới tính và hạng vé dựa trên chênh lệch sống sót đã quan sát.",
-        "demographic": "Ưu tiên rà soát quy trình sơ tán theo giới tính và hạng vé dựa trên chênh lệch sống sót đã quan sát.",
-        "socio": "Phân tích sâu hơn mối liên hệ giữa hạng vé, giá vé và khả năng tiếp cận phương tiện cứu sinh.",
-        "class": "Phân tích sâu hơn mối liên hệ giữa hạng vé, giá vé và khả năng tiếp cận phương tiện cứu sinh.",
-        "age": "Bổ sung và kiểm tra dữ liệu tuổi còn thiếu trước khi mở rộng các kết luận theo nhóm tuổi.",
-        "family": "Thiết kế phân tích riêng cho hành khách đi một mình và gia đình đông người để đánh giá rủi ro thoát hiểm.",
-        "embark": "Tách riêng ảnh hưởng của cảng lên tàu với hạng vé để tránh nhầm lẫn giữa cơ cấu hành khách và tỷ lệ sống sót.",
-        "port": "Tách riêng ảnh hưởng của cảng lên tàu với hạng vé để tránh nhầm lẫn giữa cơ cấu hành khách và tỷ lệ sống sót.",
-    }
     recommendations: list[str] = []
-    for section in sections:
-        title = str(section.get("title", "")).lower()
-        for keyword, recommendation in recommendation_map.items():
-            if keyword in title and recommendation not in recommendations:
-                recommendations.append(recommendation)
-                break
-        if len(recommendations) >= 4:
-            break
-    if not recommendations:
+    if all_limitations:
         recommendations.append(
-            "Rà soát lại từng mục phân tích trước khi đưa ra quyết định vận hành hoặc diễn giải nhân quả."
+            "Rà soát kỹ các hạn chế dữ liệu đã được nêu trong từng mục trước khi chuyển các phát hiện này thành quyết định vận hành."
         )
+    if sections:
+        recommendations.append(
+            "Đối chiếu lại các phát hiện quan trọng nhất với metric definition, grain phân tích, và câu hỏi kinh doanh gốc trước khi hành động."
+        )
+    recommendations.append(
+        "Nếu cần quyết định có tác động lớn, hãy chạy thêm phân tích chuyên sâu hoặc kiểm định bổ sung thay vì chỉ dựa vào bản tóm tắt an toàn này."
+    )
 
     lines.extend(["", "## Recommendations", ""])
     for index, recommendation in enumerate(recommendations[:4], start=1):
@@ -245,7 +380,265 @@ def _report_section_payload(section: ReportSection) -> dict[str, Any]:
         ),
         "chart_manifest": section.get("chart_manifest"),
         "limitations": section.get("limitations", []),
+        "analysis_type": section.get("analysis_type", "descriptive"),
+        "semantic_warnings": section.get("semantic_warnings", []),
+        "section_confidence": section.get("section_confidence", "medium"),
     }
+
+
+def _writer_stats_payload(section: ReportSection) -> dict[str, Any] | None:
+    computed_stats = section.get("computed_stats") or {}
+    if not isinstance(computed_stats, dict):
+        return None
+
+    payload: dict[str, Any] = {
+        "row_count": computed_stats.get("row_count"),
+        "metrics": computed_stats.get("metrics", {}),
+        "comparisons": computed_stats.get("comparisons", {}),
+        "rankings": computed_stats.get("rankings", {}),
+        "data_quality": computed_stats.get("data_quality", {}),
+    }
+    grouped_rows = computed_stats.get("grouped_rows")
+    if isinstance(grouped_rows, list) and grouped_rows:
+        payload["grouped_rows"] = grouped_rows[:5]
+        payload["row_bindings"] = computed_stats.get("row_bindings", {})
+    if section.get("semantic_warnings"):
+        payload["semantic_warnings"] = section.get("semantic_warnings", [])
+    if section.get("section_confidence"):
+        payload["section_confidence"] = section.get("section_confidence")
+    return payload
+
+
+def _collect_metric_like_keys(value: Any) -> set[str]:
+    keys: set[str] = set()
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            lowered = str(key).lower()
+            if any(
+                token in lowered for token in ["rate", "ratio", "pct", "percent", "%"]
+            ):
+                keys.add(lowered)
+            keys.update(_collect_metric_like_keys(nested))
+    elif isinstance(value, list):
+        for item in value:
+            keys.update(_collect_metric_like_keys(item))
+    return keys
+
+
+def _validate_section_semantics(section: ReportSection) -> ReportSection:
+    warnings: list[str] = []
+    computed_stats = section.get("computed_stats") or {}
+    if not isinstance(computed_stats, dict):
+        computed_stats = {}
+
+    analysis_type = _normalize_analysis_type(
+        section.get("analysis_type"),
+        query=section.get("analysis_query", ""),
+        title=section.get("title", ""),
+    )
+    query = str(section.get("analysis_query", ""))
+    validated_sql = str(
+        section.get("validated_sql") or section.get("generated_sql", "")
+    )
+    row_count = int(
+        computed_stats.get("row_count")
+        or section.get("sql_result", {}).get("row_count", 0)
+        or 0
+    )
+    grouped_rows = (
+        computed_stats.get("grouped_rows")
+        if isinstance(computed_stats.get("grouped_rows"), list)
+        else []
+    )
+    data_quality = (
+        computed_stats.get("data_quality")
+        if isinstance(computed_stats.get("data_quality"), dict)
+        else {}
+    )
+    chart_manifest = (
+        section.get("chart_manifest")
+        if isinstance(section.get("chart_manifest"), dict)
+        else {}
+    )
+    series = (
+        computed_stats.get("series")
+        if isinstance(computed_stats.get("series"), list)
+        else []
+    )
+
+    for warning in data_quality.get("warnings", []):
+        warning_text = str(warning).strip()
+        if warning_text:
+            warnings.append(warning_text)
+
+    if row_count == 0:
+        warnings.append(
+            "Section returned no rows, so no analytical conclusion should be treated as reliable."
+        )
+    elif row_count < 5:
+        warnings.append(
+            "Section is based on a very small result set; treat differences and recommendations cautiously."
+        )
+
+    if analysis_type == "comparative" and len(grouped_rows) < 2:
+        warnings.append(
+            "Comparative section does not expose at least two grounded groups, so comparisons may be incomplete."
+        )
+    if analysis_type == "trend" and not series:
+        warnings.append(
+            "Trend section lacks an explicit grounded time series, so trend wording should stay conservative."
+        )
+    if analysis_type == "distribution" and not computed_stats.get("metrics"):
+        warnings.append(
+            "Distribution section is missing summary metrics, so distributional interpretation is limited."
+        )
+    if analysis_type == "correlation":
+        warnings.append(
+            "Correlation-style sections remain descriptive here and should not be interpreted as causal evidence."
+        )
+
+    lowered_query = query.lower()
+    if any(
+        token in lowered_query for token in ["rate", "ratio", "%", "percent", "tỷ lệ"]
+    ):
+        if re.search(r"\bavg\s*\(", validated_sql, flags=re.IGNORECASE):
+            warnings.append(
+                "This section appears to use AVG(...) for a rate/ratio-style question; verify that the aggregation is not an average-of-averages mistake."
+            )
+
+    if validated_sql.lower().count(" join ") >= 2 and re.search(
+        r"\b(group by|sum\s*\(|avg\s*\(|count\s*\()", validated_sql, flags=re.IGNORECASE
+    ):
+        warnings.append(
+            "The SQL uses multiple joins with aggregation; verify the intended grain to avoid duplicated-row inflation."
+        )
+
+    metric_like_keys = _collect_metric_like_keys(computed_stats)
+    if metric_like_keys:
+        for key in metric_like_keys:
+            if "pct" in key or "percent" in key or "%" in key:
+                continue
+            # ratio/rate usually expected in [0,1] unless explicitly marked percent
+            for row in grouped_rows[:20]:
+                if isinstance(row, dict) and key in {
+                    str(k).lower() for k in row.keys()
+                }:
+                    for k, v in row.items():
+                        if (
+                            str(k).lower() == key
+                            and isinstance(v, (int, float))
+                            and v > 1
+                        ):
+                            warnings.append(
+                                f"Metric '{k}' exceeds 1.0; confirm whether it is a proportion or should be expressed as a percentage/count instead."
+                            )
+                            break
+
+    if chart_manifest.get("chart_type") == "table" and analysis_type in {
+        "comparative",
+        "trend",
+        "distribution",
+        "composition",
+    }:
+        warnings.append(
+            "Section fell back to a table-style artifact, so visual evidence may be weaker than the analysis type suggests."
+        )
+
+    deduped_warnings: list[str] = []
+    for item in warnings:
+        if item not in deduped_warnings:
+            deduped_warnings.append(item)
+
+    if row_count == 0:
+        semantic_status = "failed"
+        section_confidence = "low"
+    elif len(deduped_warnings) >= 3:
+        semantic_status = "warning"
+        section_confidence = "low"
+    elif deduped_warnings:
+        semantic_status = "warning"
+        section_confidence = "medium"
+    else:
+        semantic_status = "ok"
+        section_confidence = "high"
+
+    return {
+        **section,
+        "analysis_type": analysis_type,
+        "semantic_warnings": deduped_warnings,
+        "semantic_status": semantic_status,
+        "section_confidence": section_confidence,
+    }
+
+
+def _derive_report_confidence(
+    state: AgentState, *, used_safe_fallback: bool
+) -> tuple[str, str]:
+    failed_sections = sum(
+        1
+        for section in state.get("report_sections", [])
+        if section.get("status") == "failed"
+    )
+    total_limitations = sum(
+        len(section.get("limitations", []))
+        for section in state.get("report_sections", [])
+        if isinstance(section.get("limitations"), list)
+    )
+    low_confidence_sections = sum(
+        1
+        for section in state.get("report_sections", [])
+        if section.get("section_confidence") == "low"
+    )
+    semantic_warning_count = sum(
+        len(section.get("semantic_warnings", []))
+        for section in state.get("report_sections", [])
+        if isinstance(section.get("semantic_warnings"), list)
+    )
+    critic_issues = [
+        str(issue).strip()
+        for issue in state.get("critic_issues", [])
+        if str(issue).strip()
+    ]
+
+    reasons: list[str] = []
+    confidence = "high"
+    if used_safe_fallback:
+        confidence = "low"
+        reasons.append(
+            "Writer draft did not pass the critic, so the final report was reduced to a conservative extractive fallback."
+        )
+    elif (
+        failed_sections > 0
+        or critic_issues
+        or low_confidence_sections > 0
+        or semantic_warning_count > 0
+    ):
+        confidence = "medium"
+
+    if failed_sections > 0:
+        reasons.append(f"{failed_sections} section(s) failed during report generation.")
+    if critic_issues:
+        reasons.append(
+            f"Critic flagged {len(critic_issues)} issue(s) that weaken confidence in the synthesized narrative."
+        )
+    if total_limitations > 0:
+        reasons.append(
+            f"The completed sections reported {total_limitations} limitation note(s) that narrow the safe interpretation scope."
+        )
+    if low_confidence_sections > 0:
+        reasons.append(
+            f"{low_confidence_sections} section(s) were marked low-confidence by semantic validation."
+        )
+    if semantic_warning_count > 0:
+        reasons.append(
+            f"Semantic validation emitted {semantic_warning_count} warning(s) about aggregation, grain, or evidence quality."
+        )
+
+    if not reasons:
+        reasons.append(
+            "All completed sections were grounded and the draft passed the critic without flagged issues."
+        )
+    return confidence, " ".join(reasons)
 
 
 def _default_report_plan(query: str) -> ReportPlan:
@@ -257,12 +650,22 @@ def _default_report_plan(query: str) -> ReportPlan:
                 "section_id": "1",
                 "title": "Overview",
                 "analysis_query": query,
+                "analysis_type": "descriptive",
+                "target_metrics": [],
+                "target_dimensions": [],
+                "expected_grain": "dataset",
+                "confidence_notes": "Fallback plan due to missing profiler guidance.",
                 "status": "pending",
             },
             {
                 "section_id": "2",
                 "title": "Key Breakdown",
                 "analysis_query": f"Provide a useful breakdown for: {query}",
+                "analysis_type": "comparative",
+                "target_metrics": [],
+                "target_dimensions": [],
+                "expected_grain": "segment",
+                "confidence_notes": "Fallback plan due to missing profiler guidance.",
                 "status": "pending",
             },
         ],
@@ -311,7 +714,9 @@ def profiler_sampler_node(state: AgentState) -> AgentState:
     uploaded_tables = list(table_contexts.keys())
     if uploaded_tables:
         # Only profile tables that have user-provided business context
-        tables = [t for t in uploaded_tables if t in all_tables or True][:2]
+        tables = [t for t in uploaded_tables if t in all_tables][:2]
+        if not tables:
+            tables = all_tables[:2]
     else:
         tables = all_tables[:2]
 
@@ -578,6 +983,16 @@ def report_planner_node(state: AgentState) -> AgentState:
                 "title": str(raw.get("title", f"Section {idx}")).strip()
                 or f"Section {idx}",
                 "analysis_query": analysis_query,
+                "analysis_type": _normalize_analysis_type(
+                    raw.get("analysis_type"),
+                    query=analysis_query,
+                    title=str(raw.get("title", f"Section {idx}")),
+                ),
+                "target_metrics": _as_string_list(raw.get("target_metrics")),
+                "target_dimensions": _as_string_list(raw.get("target_dimensions")),
+                "expected_grain": str(raw.get("expected_grain", "dataset")).strip()
+                or "dataset",
+                "confidence_notes": str(raw.get("confidence_notes", "")).strip(),
                 "requires_visualization": bool(raw.get("requires_visualization", True)),
                 "section_order": idx,
                 "status": "pending",
@@ -689,8 +1104,13 @@ def _build_report_insight_messages(
         f"Original report request:\n{state.get('report_request') or state.get('user_query', '')}\n\n"
         f"Section title:\n{section.get('title', '')}\n\n"
         f"Section analysis query:\n{section.get('analysis_query', '')}\n\n"
+        f"Section analysis type:\n{section.get('analysis_type', 'descriptive')}\n\n"
+        f"Target metrics:\n{json.dumps(section.get('target_metrics', []), ensure_ascii=False)}\n\n"
+        f"Target dimensions:\n{json.dumps(section.get('target_dimensions', []), ensure_ascii=False)}\n\n"
+        f"Expected grain:\n{section.get('expected_grain', 'dataset')}\n\n"
         f"computed_stats.json:\n{stats_json}\n\n"
         f"chart_manifest.json:\n{manifest_json}\n\n"
+        f"semantic_warnings:\n{json.dumps(section.get('semantic_warnings', []), ensure_ascii=False)}\n\n"
         f"Return JSON only."
     )
     if domain_ctx:
@@ -754,6 +1174,14 @@ def _fallback_section_insight(section: ReportSection) -> ReportSection:
         else None
     ) or []
     limitations = [str(item) for item in warnings if str(item).strip()]
+    semantic_warnings = [
+        str(item).strip()
+        for item in section.get("semantic_warnings", [])
+        if str(item).strip()
+    ]
+    for warning in semantic_warnings:
+        if warning not in limitations:
+            limitations.append(warning)
     insight = (
         f"Dữ liệu cho mục này có {row_count} dòng. "
         f"Các số liệu chi tiết được neo vào computed_stats.json."
@@ -766,6 +1194,105 @@ def _fallback_section_insight(section: ReportSection) -> ReportSection:
         "insight_citations": [{"json_path": "row_count", "value": str(row_count)}],
         "limitations": limitations,
     }
+
+
+def _apply_semantic_caveat(section: ReportSection, state: AgentState) -> ReportSection:
+    warnings = [
+        str(item).strip()
+        for item in section.get("semantic_warnings", [])
+        if str(item).strip()
+    ]
+    if not warnings:
+        return section
+
+    limitations = [
+        str(item).strip()
+        for item in section.get("limitations", [])
+        if str(item).strip()
+    ]
+    for warning in warnings:
+        if warning not in limitations:
+            limitations.append(warning)
+
+    insight_markdown = str(section.get("insight_markdown", "")).strip()
+    is_vietnamese = _is_probably_vietnamese(
+        state.get("report_request") or state.get("user_query", "")
+    )
+    if warnings:
+        insight_markdown = _soften_overclaim_language(
+            insight_markdown, is_vietnamese=is_vietnamese
+        )
+    lower_insight = insight_markdown.lower()
+    has_caveat_language = any(
+        token in lower_insight
+        for token in [
+            "caveat",
+            "thận trọng",
+            "cần xác minh",
+            "giới hạn",
+            "không chứng minh",
+            "descriptive",
+        ]
+    )
+    if not has_caveat_language:
+        warning_excerpt = _humanize_semantic_warning(
+            warnings[0], is_vietnamese=is_vietnamese
+        )
+        if is_vietnamese:
+            caveat_sentence = f"Lưu ý: phát hiện này nên được diễn giải thận trọng vì {warning_excerpt}."
+        else:
+            caveat_sentence = (
+                f"Caveat: interpret this finding cautiously because {warning_excerpt}."
+            )
+        insight_markdown = f"{insight_markdown}\n\n{caveat_sentence}".strip()
+
+    return {
+        **section,
+        "insight_markdown": insight_markdown,
+        "limitations": limitations,
+    }
+
+
+def _deterministic_critic_issues(state: AgentState, report_draft: str) -> list[str]:
+    issues: list[str] = []
+    if not re.search(
+        r"^##\s+Recommendations\b", report_draft, flags=re.IGNORECASE | re.MULTILINE
+    ):
+        issues.append("Draft is missing the required '## Recommendations' section.")
+
+    lower_draft = report_draft.lower()
+    strong_claim_markers = [
+        "yếu tố quyết định",
+        "ảnh hưởng quyết định",
+        "có ảnh hưởng mạnh",
+        "ảnh hưởng rất lớn",
+        "cho thấy",
+        "khẳng định",
+        "proves",
+        "decisive factor",
+    ]
+    caveat_markers = [
+        "thận trọng",
+        "caveat",
+        "giới hạn",
+        "không chứng minh",
+        "descriptive",
+        "cần xác minh",
+    ]
+    if any(marker in lower_draft for marker in strong_claim_markers):
+        warned_sections = [
+            section
+            for section in state.get("report_sections", [])
+            if section.get("semantic_warnings")
+            or section.get("section_confidence") != "high"
+        ]
+        if warned_sections and not any(
+            marker in lower_draft for marker in caveat_markers
+        ):
+            issues.append(
+                "Draft makes strong analytical claims without preserving caveats from semantically weak or warning-heavy sections."
+            )
+    return issues
 
 
 def section_pipeline_node(state: AgentState) -> AgentState:
@@ -807,6 +1334,15 @@ def section_pipeline_node(state: AgentState) -> AgentState:
         "section_id": section_id,
         "title": title,
         "analysis_query": section.get("analysis_query", ""),
+        "analysis_type": _normalize_analysis_type(
+            section.get("analysis_type"),
+            query=section.get("analysis_query", ""),
+            title=title,
+        ),
+        "target_metrics": section.get("target_metrics", []),
+        "target_dimensions": section.get("target_dimensions", []),
+        "expected_grain": section.get("expected_grain", "dataset"),
+        "confidence_notes": section.get("confidence_notes", ""),
         "requires_visualization": bool(section.get("requires_visualization", True)),
         "section_order": section.get("section_order", 0),
         "sql_result": result.get("sql_result", {}),
@@ -814,6 +1350,9 @@ def section_pipeline_node(state: AgentState) -> AgentState:
         "raw_result_ref": result.get("result_ref"),
         "status": status,
         "analysis_status": "failed" if status == "failed" else "pending",
+        "semantic_warnings": [],
+        "semantic_status": "ok",
+        "section_confidence": "high",
         "error": result.get("error"),
         "generated_sql": result.get("generated_sql", ""),
         "validated_sql": result.get("validated_sql", ""),
@@ -886,6 +1425,7 @@ def section_pipeline_node(state: AgentState) -> AgentState:
         "execution_time_ms": analysis.execution_time_ms,
         "error": analysis.error,
     }
+    report_section = _validate_section_semantics(report_section)
 
     # --- Step 3: Insight Generation ---
     settings = load_settings()
@@ -916,8 +1456,10 @@ def section_pipeline_node(state: AgentState) -> AgentState:
             report_section["limitations"] = (
                 limitations if isinstance(limitations, list) else []
             )
+            report_section = _apply_semantic_caveat(report_section, state)
         else:
             report_section = _fallback_section_insight(report_section)
+            report_section = _apply_semantic_caveat(report_section, state)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Report insight generation failed for section {id}: {error}",
@@ -925,6 +1467,7 @@ def section_pipeline_node(state: AgentState) -> AgentState:
             error=str(exc),
         )
         report_section = _fallback_section_insight(report_section)
+        report_section = _apply_semantic_caveat(report_section, state)
 
     return {"_report_sections_raw": [report_section]}
 
@@ -971,8 +1514,14 @@ def _section_writer_payload(section: ReportSection) -> dict[str, Any]:
         "section_id": section.get("section_id"),
         "title": section.get("title"),
         "analysis_query": section.get("analysis_query"),
+        "analysis_type": section.get("analysis_type", "descriptive"),
         "status": section.get("status"),
+        "analysis_status": section.get("analysis_status"),
+        "section_confidence": section.get("section_confidence", "medium"),
         "insight_markdown": _truncate_text(section.get("insight_markdown", ""), 3000),
+        "citations": section.get("insight_citations", []),
+        "computed_stats": _writer_stats_payload(section),
+        "semantic_warnings": section.get("semantic_warnings", []),
         "limitations": section.get("limitations", []),
     }
 
@@ -1019,8 +1568,6 @@ def report_writer_node(state: AgentState) -> AgentState:
     except Exception as exc:  # noqa: BLE001
         logger.warning("Report writer failed: {error}", error=str(exc))
 
-    report_draft = _cleanup_report_markdown(report_draft)
-
     if not report_draft:
         lines = [f"# {state.get('report_plan', {}).get('title', 'Report')}"]
         for section in state.get("report_sections", []):
@@ -1034,6 +1581,9 @@ def report_writer_node(state: AgentState) -> AgentState:
                     section.get("insight_markdown", "Không có insight cho mục này.")
                 )
         report_draft = "\n\n".join(lines)
+
+    report_draft = _cleanup_report_markdown(report_draft)
+    report_draft = _ensure_report_recommendations(report_draft, state)
 
     return {
         "report_draft": report_draft,
@@ -1064,9 +1614,12 @@ def _section_critic_payload(section: ReportSection) -> dict[str, Any]:
         "section_id": section.get("section_id"),
         "title": section.get("title"),
         "status": section.get("status"),
+        "analysis_type": section.get("analysis_type", "descriptive"),
+        "section_confidence": section.get("section_confidence", "medium"),
         "insight_markdown": _truncate_text(section.get("insight_markdown", ""), 3000),
         "citations": section.get("insight_citations", []),
         "computed_stats": stats,
+        "semantic_warnings": section.get("semantic_warnings", []),
         "limitations": section.get("limitations", []),
     }
 
@@ -1116,6 +1669,17 @@ def report_critic_node(state: AgentState) -> AgentState:
     except Exception as exc:  # noqa: BLE001
         logger.warning("Report critic failed: {error}", error=str(exc))
 
+    deterministic_issues = _deterministic_critic_issues(state, report_draft)
+    for issue in deterministic_issues:
+        if issue not in issues:
+            issues.append(issue)
+    if deterministic_issues:
+        verdict = "REVISE"
+        if summary == "Draft is grounded.":
+            summary = (
+                "Draft needs revisions to preserve required caveats and structure."
+            )
+
     feedback = summary
     if issues:
         feedback = f"{summary}\n- " + "\n- ".join(issues)
@@ -1163,13 +1727,17 @@ def _critic_router(state: AgentState) -> Literal["report_writer", "report_finali
 
 def report_finalize_node(state: AgentState) -> AgentState:
     critic_verdict = str(state.get("critic_verdict", "APPROVED")).upper()
-    if critic_verdict == "REVISE":
+    used_safe_fallback = critic_verdict == "REVISE"
+    if used_safe_fallback:
         report_markdown = _build_safe_report_markdown(state)
     else:
         report_markdown = _cleanup_report_markdown(state.get("report_draft", ""))
     plan_title = state.get("report_plan", {}).get("title", "Report")
     errors = state.get("errors", [])
     answer = "Đây là report của bạn. Bấm vào nút Report để xem bản trình bày đầy đủ."
+    confidence, confidence_rationale = _derive_report_confidence(
+        state, used_safe_fallback=used_safe_fallback
+    )
 
     # Save report markdown to disk
     report_dir = Path("reports")
@@ -1198,7 +1766,8 @@ def report_finalize_node(state: AgentState) -> AgentState:
             f"rows={sum(section.get('sql_result', {}).get('row_count', 0) for section in state.get('report_sections', []))}",
             "context_chunks=0",
         ],
-        "confidence": "medium" if errors else "high",
+        "confidence": confidence,
+        "confidence_rationale": confidence_rationale,
         "used_tools": ["generate_report"],
         "generated_sql": "\n\n---\n\n".join(
             section.get("validated_sql") or section.get("generated_sql", "")
@@ -1222,13 +1791,14 @@ def report_finalize_node(state: AgentState) -> AgentState:
         "report_status": "done",
         "intent": "sql",
         "confidence": payload["confidence"],
+        "report_confidence_rationale": confidence_rationale,
         "response_mode": "report",
         "tool_history": [
             {
                 "tool": "report_finalize",
                 "status": "ok",
                 "section_count": len(state.get("report_sections", [])),
-                "used_safe_fallback": critic_verdict == "REVISE",
+                "used_safe_fallback": used_safe_fallback,
             }
         ],
         "step_count": state.get("step_count", 0) + 1,

@@ -27,6 +27,9 @@ class ReportSectionResponse(BaseModel):
     chart_image: VisualizationResponse | None = None
     chart_manifest: dict[str, Any] | None = None
     limitations: list[str] = []
+    analysis_type: str = "descriptive"
+    semantic_warnings: list[str] = []
+    section_confidence: str = "medium"
 
 
 class QueryResponse(BaseModel):
@@ -46,6 +49,7 @@ class QueryResponse(BaseModel):
     intent_reason: str = ""
     response_mode: str = "answer"
     confidence: str = "low"
+    confidence_rationale: str | None = None
     used_tools: list[str] = []
     generated_sql: str = ""
     evidence: list[str] = []

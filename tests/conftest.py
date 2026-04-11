@@ -13,7 +13,7 @@ from data.seeds.create_seed_db import main as seed_main
 MULTI_QUERY = (
     '"Có bao nhiêu học sinh nam và bao nhiêu học sinh nữ trong tập dữ liệu này?"\n\n'
     '"Điểm toán (math score) trung bình của toàn bộ học sinh là bao nhiêu?"\n\n'
-    '"Có bao nhiêu học sinh đã hoàn thành khóa luyện thi (test prep course = \'completed\')?"'
+    "\"Có bao nhiêu học sinh đã hoàn thành khóa luyện thi (test prep course = 'completed')?\""
 )
 
 REPORT_QUERY = "Hãy viết báo cáo phân tích chi tiết về tập dữ liệu này"
@@ -26,16 +26,25 @@ REPORT_WITH_VIZ_QUERY = (
 class FakeV3LLMClient:
     def chat_completion(self, **kwargs):  # noqa: ANN003
         messages = kwargs.get("messages", [])
-        system = self._flatten_content(messages[0].get("content", "")) if messages else ""
-        user = self._flatten_content(messages[-1].get("content", "")) if messages else ""
+        system = (
+            self._flatten_content(messages[0].get("content", "")) if messages else ""
+        )
+        user = (
+            self._flatten_content(messages[-1].get("content", "")) if messages else ""
+        )
 
         if "You are the supervisor of a hierarchical data analyst system." in system:
             return self._leader_response(user)
         if "Bạn là Task Grounder" in system:
             return self._task_grounder_response(user)
+        if "You are a data domain analyst." in system:
+            return self._report_data_profiler_response(user)
         if "You are a data analysis report planner." in system:
             return self._report_planner_response(user)
-        if "You are the Report Insight Generator for a grounded analytics system." in system:
+        if (
+            "You are the Report Insight Generator for a grounded analytics system."
+            in system
+        ):
             return self._report_insight_response(user)
         if (
             "You are a professional data analyst report writer." in system
@@ -114,7 +123,11 @@ class FakeV3LLMClient:
                 "intent": "rag" if "Retention D1 là gì?" in query else "sql",
                 "reason": "Leader finalized from tool results",
             }
-        return {"choices": [{"message": {"content": json.dumps(payload, ensure_ascii=False)}}]}
+        return {
+            "choices": [
+                {"message": {"content": json.dumps(payload, ensure_ascii=False)}}
+            ]
+        }
 
     def _report_insight_response(self, user: str) -> dict:
         if "Cơ cấu giới tính" in user:
@@ -138,7 +151,11 @@ class FakeV3LLMClient:
                 ],
                 "limitations": [],
             }
-        return {"choices": [{"message": {"content": json.dumps(payload, ensure_ascii=False)}}]}
+        return {
+            "choices": [
+                {"message": {"content": json.dumps(payload, ensure_ascii=False)}}
+            ]
+        }
 
     def _report_planner_response(self, user: str) -> dict:
         payload = {
@@ -149,23 +166,76 @@ class FakeV3LLMClient:
                     "section_id": "1",
                     "title": "Cơ cấu giới tính",
                     "analysis_query": "Có bao nhiêu học sinh nam và bao nhiêu học sinh nữ trong tập dữ liệu này?",
+                    "analysis_type": "comparative",
+                    "target_metrics": ["student_count"],
+                    "target_dimensions": ["gender"],
+                    "expected_grain": "gender",
+                    "confidence_notes": "Counts are straightforward if grouping is preserved.",
                 },
                 {
                     "section_id": "2",
                     "title": "Điểm toán trung bình",
                     "analysis_query": "Điểm toán (math score) trung bình của toàn bộ học sinh là bao nhiêu?",
+                    "analysis_type": "descriptive",
+                    "target_metrics": ["average_math_score"],
+                    "target_dimensions": [],
+                    "expected_grain": "dataset",
+                    "confidence_notes": "Average score should remain descriptive.",
                 },
             ],
             "conclusion_instruction": "Kết luận ngắn gọn dựa trên dữ liệu.",
         }
-        return {"choices": [{"message": {"content": json.dumps(payload, ensure_ascii=False)}}]}
+        return {
+            "choices": [
+                {"message": {"content": json.dumps(payload, ensure_ascii=False)}}
+            ]
+        }
+
+    def _report_data_profiler_response(self, user: str) -> dict:
+        payload = {
+            "domain_summary": "Dataset ghi nhận kết quả học tập của học sinh theo giới tính và điểm số.",
+            "key_metrics": ["math score"],
+            "key_dimensions": ["gender"],
+            "analytical_angles": ["student performance", "gender comparison"],
+            "suggested_sections": [
+                {
+                    "title": "Cơ cấu giới tính",
+                    "rationale": "Cho biết phân bổ học sinh theo giới tính.",
+                    "analysis_query": "Có bao nhiêu học sinh nam và bao nhiêu học sinh nữ trong tập dữ liệu này?",
+                    "analysis_type": "comparative",
+                    "target_metrics": ["student_count"],
+                    "target_dimensions": ["gender"],
+                    "expected_grain": "gender",
+                    "confidence_notes": "Counts are straightforward if grouping is preserved.",
+                    "requires_visualization": True,
+                },
+                {
+                    "title": "Điểm toán trung bình",
+                    "rationale": "Tóm tắt hiệu suất học tập tổng thể.",
+                    "analysis_query": "Điểm toán (math score) trung bình của toàn bộ học sinh là bao nhiêu?",
+                    "analysis_type": "descriptive",
+                    "target_metrics": ["average_math_score"],
+                    "target_dimensions": [],
+                    "expected_grain": "dataset",
+                    "confidence_notes": "Average score should remain descriptive.",
+                    "requires_visualization": False,
+                },
+            ],
+        }
+        return {
+            "choices": [
+                {"message": {"content": json.dumps(payload, ensure_ascii=False)}}
+            ]
+        }
 
     def _task_grounder_response(self, user: str) -> dict:
         query = self._flatten_content(user)
         if REPORT_QUERY in query or REPORT_WITH_VIZ_QUERY in query:
             payload = {
                 "task_mode": "simple",
-                "data_source": "uploaded_table" if REPORT_WITH_VIZ_QUERY in query else "database",
+                "data_source": "uploaded_table"
+                if REPORT_WITH_VIZ_QUERY in query
+                else "database",
                 "required_capabilities": (
                     ["sql", "visualization", "report"]
                     if REPORT_WITH_VIZ_QUERY in query
@@ -193,7 +263,11 @@ class FakeV3LLMClient:
                 "confidence": "high",
                 "reasoning": "Structured data query.",
             }
-        return {"choices": [{"message": {"content": json.dumps(payload, ensure_ascii=False)}}]}
+        return {
+            "choices": [
+                {"message": {"content": json.dumps(payload, ensure_ascii=False)}}
+            ]
+        }
 
     def _report_writer_response(self, user: str) -> dict:
         content = (
@@ -214,7 +288,11 @@ class FakeV3LLMClient:
             "issues": [],
             "summary": "Draft is grounded in the provided SQL evidence.",
         }
-        return {"choices": [{"message": {"content": json.dumps(payload, ensure_ascii=False)}}]}
+        return {
+            "choices": [
+                {"message": {"content": json.dumps(payload, ensure_ascii=False)}}
+            ]
+        }
 
     def _sql_response(self, user: str) -> dict:
         query = self._extract_sql_question(user)
@@ -225,8 +303,8 @@ class FakeV3LLMClient:
             or "giới tính nam" in query
         ):
             sql = (
-                'SELECT COUNT(*) AS male_students '
-                'FROM "Performance_of_Stuednts" WHERE gender = \'male\''
+                "SELECT COUNT(*) AS male_students "
+                "FROM \"Performance_of_Stuednts\" WHERE gender = 'male'"
                 if "giới tính nam" in query
                 else 'SELECT gender, COUNT(*) AS student_count FROM "Performance_of_Stuednts" GROUP BY gender'
             )
@@ -235,7 +313,7 @@ class FakeV3LLMClient:
         elif "khóa luyện thi" in query or "test prep course" in query:
             sql = (
                 'SELECT COUNT(*) AS completed_test_prep_count FROM "Performance_of_Stuednts" '
-                'WHERE "test prep course" = \'completed\''
+                "WHERE \"test prep course\" = 'completed'"
             )
         elif "Tính tổng điểm 3 môn trung bình theo từng nhóm" in query:
             sql = (
@@ -244,11 +322,14 @@ class FakeV3LLMClient:
                 'FROM "Performance_of_Stuednts" GROUP BY "race/ethnicity" ORDER BY avg_total_score DESC'
             )
         elif "chỉ tính cho các học sinh nam" in query:
-            sql = 'SELECT COUNT(*) AS male_students FROM "Performance_of_Stuednts" WHERE gender = \'male\''
+            sql = "SELECT COUNT(*) AS male_students FROM \"Performance_of_Stuednts\" WHERE gender = 'male'"
         return {"choices": [{"message": {"content": sql}}]}
 
     def _synthesis_response(self, user: str) -> dict:
-        if "Số lượng học sinh nam và học sinh nữ" in user or "Có bao nhiêu học sinh nam" in user:
+        if (
+            "Số lượng học sinh nam và học sinh nữ" in user
+            or "Có bao nhiêu học sinh nam" in user
+        ):
             answer = "Có 518 học sinh nữ và 482 học sinh nam trong tập dữ liệu này."
         elif "giới tính nam" in user:
             answer = "Có 482 người giới tính nam trong dữ liệu này."
@@ -380,6 +461,7 @@ def clean_test_conversation_memory():
     """
     try:
         from data.migrations.create_schemas import run as ensure_schemas
+
         ensure_schemas()
     except Exception:  # noqa: BLE001
         pass
@@ -407,7 +489,9 @@ def fake_v3_llm(monkeypatch):
 
 @pytest.fixture
 def fake_report_analysis(monkeypatch):
-    def _fake_generate_grounded_report_analysis(*, data_rows, user_query, section_title):  # noqa: ANN001
+    def _fake_generate_grounded_report_analysis(
+        *, data_rows, user_query, section_title
+    ):  # noqa: ANN001
         if "giới tính" in user_query.lower():
             computed_stats = {
                 "row_count": 2,
@@ -425,19 +509,29 @@ def fake_report_analysis(monkeypatch):
                 "comparisons": {},
                 "data_quality": {"warnings": []},
             }
-            chart_manifest = {"chart_type": "bar", "x_field": "gender", "y_field": "student_count"}
+            chart_manifest = {
+                "chart_type": "bar",
+                "x_field": "gender",
+                "y_field": "student_count",
+            }
         else:
             computed_stats = {
                 "row_count": 1,
                 "metrics": {
                     "average_math_score": {"value": 66.08, "display_value": "66.08"}
                 },
-                "series": [{"x": "average_math_score", "y": 66.08, "display_y": "66.08"}],
+                "series": [
+                    {"x": "average_math_score", "y": 66.08, "display_y": "66.08"}
+                ],
                 "rankings": {},
                 "comparisons": {},
                 "data_quality": {"warnings": []},
             }
-            chart_manifest = {"chart_type": "bar", "x_field": "metric", "y_field": "value"}
+            chart_manifest = {
+                "chart_type": "bar",
+                "x_field": "metric",
+                "y_field": "value",
+            }
 
         return ReportAnalysisResult(
             success=True,
@@ -450,8 +544,18 @@ def fake_report_analysis(monkeypatch):
             execution_time_ms=12.0,
         )
 
-    service = type("FakeVisualizationService", (), {"generate_grounded_report_analysis": staticmethod(_fake_generate_grounded_report_analysis)})()
-    monkeypatch.setattr("app.graph.report_subgraph.get_visualization_service", lambda: service)
+    service = type(
+        "FakeVisualizationService",
+        (),
+        {
+            "generate_grounded_report_analysis": staticmethod(
+                _fake_generate_grounded_report_analysis
+            )
+        },
+    )()
+    monkeypatch.setattr(
+        "app.graph.report_subgraph.get_visualization_service", lambda: service
+    )
     return service
 
 

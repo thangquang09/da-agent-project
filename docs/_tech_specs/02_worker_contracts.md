@@ -283,22 +283,31 @@ def retrieve_rag_answer(query: str, top_k: int = 4) -> dict[str, Any]
 ### Graph Structure
 
 ```
-START → report_planner → report_executor → report_writer → report_critic
-                                                              │
-                               ┌──────────────────────────────┘
-                               ▼
-                         report_finalize → END
+START → profiler_sampler → profiler_analyzer → report_planner
+                                              │
+                                              └─Send()→ section_pipeline (N parallel)
+                                                          ↓
+                                                     sections_sort
+                                                          ↓
+                                                     report_writer → report_critic
+                                                                           │
+                                              ┌────────────────────────────┘
+                                              ▼
+                                        report_finalize → END
 ```
 
 ### Nodes
 
 | Node | Model | Purpose |
 |------|-------|---------|
-| `report_planner` | `model_report_planner` | Decompose into sections |
-| `report_executor` | `model_sql_worker` | Parallel SQL execution per section |
-| `report_writer` | `model_report_writer` | Generate markdown |
-| `report_critic` | `model_report_critic` | Evaluate groundedness |
-| `report_finalize` | — | Construct `AnswerPayload` |
+| `profiler_sampler` | — | Sample 100 random rows + column stats from candidate tables |
+| `profiler_analyzer` | `model_report_data_profiler` | Infer domain context and suggest report sections from schema + samples |
+| `report_planner` | `model_report_planner` | Build section plan (usually from profiler suggestions) |
+| `section_pipeline` | `model_sql_worker` + sandbox + `model_report_writer` | Per-section SQL → grounded stats/chart → semantic validation → insight |
+| `sections_sort` | — | Reassemble Send() fan-in results in planner order |
+| `report_writer` | `model_report_writer` | Assemble final markdown from section evidence |
+| `report_critic` | `model_report_critic` | Evaluate groundedness and revision needs |
+| `report_finalize` | — | Construct `AnswerPayload`, derive confidence, and use conservative fallback if critic still rejects |
 
 ### Returns (from `report_finalize_node`)
 
@@ -309,7 +318,8 @@ START → report_planner → report_executor → report_writer → report_critic
     "report_final": str,
     "report_status": "done",
     "intent": "sql",
-    "confidence": "high" | "medium",
+    "confidence": "high" | "medium" | "low",
+    "report_confidence_rationale": str,
     "response_mode": "report",
     "tool_history": list[dict],
     "step_count": int,
@@ -323,9 +333,12 @@ START → report_planner → report_executor → report_writer → report_critic
     "section_id": str,
     "title": str,
     "analysis_query": str,
+    "analysis_type": str,
     "sql_result": dict,
     "result_ref": dict | None,
     "visualization": dict | None,
+    "semantic_warnings": list[str],
+    "section_confidence": "low" | "medium" | "high",
     "status": "done" | "failed",
     "error": str | None,
     "generated_sql": str,

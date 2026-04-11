@@ -49,7 +49,9 @@ class WorkerArtifact(TypedDict, total=False):
     artifact_type: Literal["sql_result", "rag_context", "chart", "report_draft"]
     status: Literal["success", "failed", "partial"]
     artifact_path: str  # relative path to file in artifacts/ dir
-    metadata: dict[str, Any]  # lightweight summary (row_count, columns, image_format, ...)
+    metadata: dict[
+        str, Any
+    ]  # lightweight summary (row_count, columns, image_format, ...)
     evidence: dict[str, Any]
     terminal: bool
     recommended_next_action: Literal[
@@ -95,6 +97,7 @@ class AnswerPayload(TypedDict, total=False):
     report_sections: list[dict[str, Any]]
     evidence: list[str]
     confidence: Confidence
+    confidence_rationale: str
     used_tools: list[str]
     generated_sql: str
     error_categories: list[str]
@@ -139,7 +142,9 @@ class AgentState(TypedDict, total=False):
     ]  # table_name → user-provided business context (from pair upload)
     xml_database_context: str  # Full <database_context> XML block for SQL agent
     task_results: Annotated[list[TaskState], operator.add]  # Fan-in from workers
-    visualization: dict[str, Any]  # {success, image_url, image_format, image_size_bytes, error, execution_time_ms}
+    visualization: dict[
+        str, Any
+    ]  # {success, image_url, image_format, image_size_bytes, error, execution_time_ms}
     # Grounding Group (v4) — set by task_grounder node
     artifacts: Annotated[
         list[WorkerArtifact], operator.add
@@ -174,9 +179,12 @@ class AgentState(TypedDict, total=False):
     report_status: ReportStatus
     report_feedback_hash: str
     report_draft_hash: str
+    report_confidence_rationale: str
     report_data_profile: dict[str, Any]  # output of report_data_profiler_node
     # Report V2: Send() fan-out fields
-    report_sample_data: dict[str, Any]  # {table: {sample_rows, column_stats}} from profiler_sampler
+    report_sample_data: dict[
+        str, Any
+    ]  # {table: {sample_rows, column_stats}} from profiler_sampler
     _report_sections_raw: Annotated[
         list["ReportSection"], operator.add
     ]  # fan-in reducer target from Send()
@@ -217,6 +225,20 @@ class ReportSection(TypedDict, total=False):
     section_id: str
     title: str
     analysis_query: str
+    analysis_type: Literal[
+        "descriptive",
+        "comparative",
+        "trend",
+        "distribution",
+        "composition",
+        "correlation",
+        "cohort",
+        "funnel",
+    ]
+    target_metrics: list[str]
+    target_dimensions: list[str]
+    expected_grain: str
+    confidence_notes: str
     requires_visualization: bool  # planner decides; False = skip sandbox chart
     section_order: int  # original planner order for reassembly after Send() fan-in
     sql_result: dict[str, Any]
@@ -233,6 +255,9 @@ class ReportSection(TypedDict, total=False):
     insight_markdown: str
     insight_citations: list[dict[str, Any]]
     limitations: list[str]
+    semantic_warnings: list[str]
+    semantic_status: Literal["ok", "warning", "failed"]
+    section_confidence: Literal["low", "medium", "high"]
     analysis_status: Literal["pending", "done", "failed"]
     status: Literal["pending", "done", "failed"]
     error: str | None

@@ -5,6 +5,10 @@ from tests.conftest import FakeV3LLMClient, REPORT_QUERY, REPORT_WITH_VIZ_QUERY
 from app.main import run_query
 from app.graph.report_subgraph import (
     _build_report_insight_messages,
+    _deterministic_critic_issues,
+    _section_writer_payload,
+    _validate_section_semantics,
+    profiler_sampler_node,
     report_finalize_node,
 )
 
@@ -208,11 +212,150 @@ def test_report_finalize_uses_safe_fallback_when_critic_still_rejects():
     update = report_finalize_node(state)
 
     assert "Unsupported synthesis" not in update["final_payload"]["report_markdown"]
+    assert "quy trình sơ tán" not in update["final_payload"]["report_markdown"]
     assert (
         "Hành khách đi một mình có tỷ lệ sống sót 30,35%."
         in update["final_payload"]["report_markdown"]
     )
+    assert update["final_payload"]["confidence"] == "low"
+    assert "did not pass the critic" in update["final_payload"]["confidence_rationale"]
     assert update["tool_history"][0]["used_safe_fallback"] is True
+
+
+def test_section_writer_payload_includes_citations_and_compact_stats():
+    payload = _section_writer_payload(
+        {
+            "section_id": "sec-1",
+            "title": "Overview",
+            "analysis_query": "Summarize the main findings",
+            "status": "done",
+            "analysis_status": "done",
+            "insight_markdown": "Revenue was concentrated in two segments.",
+            "insight_citations": [
+                {"json_path": "metrics.total_value", "value": "1000"}
+            ],
+            "computed_stats": {
+                "row_count": 12,
+                "metrics": {"total_value": {"value": 1000, "display_value": "1000"}},
+                "comparisons": {"delta": {"value": 120, "display_value": "120"}},
+                "rankings": {"top_items": [{"label": "A", "value": 700}]},
+                "data_quality": {"warnings": ["Small sample"]},
+                "grouped_rows": [
+                    {"segment": "A", "revenue": 700},
+                    {"segment": "B", "revenue": 300},
+                ],
+                "row_bindings": {
+                    "group_columns": ["segment"],
+                    "metric_columns": ["revenue"],
+                },
+            },
+            "limitations": ["Small sample"],
+        }
+    )
+
+    assert payload["analysis_status"] == "done"
+    assert payload["citations"] == [
+        {"json_path": "metrics.total_value", "value": "1000"}
+    ]
+    assert payload["computed_stats"]["row_count"] == 12
+    assert payload["computed_stats"]["grouped_rows"] == [
+        {"segment": "A", "revenue": 700},
+        {"segment": "B", "revenue": 300},
+    ]
+
+
+def test_profiler_sampler_ignores_uploaded_tables_not_in_schema(monkeypatch):
+    executed_sql: list[str] = []
+
+    def _fake_query_sql(sql: str, db_path=None):  # noqa: ANN001, ARG001
+        executed_sql.append(sql)
+        if "ORDER BY RANDOM()" in sql:
+            return {"rows": [{"id": 1, "value": 10}], "columns": ["id", "value"]}
+        return {"rows": [{"total_rows": 1, "distinct_count": 1, "null_count": 0}]}
+
+    monkeypatch.setattr("app.graph.report_subgraph.query_sql", _fake_query_sql)
+
+    update = profiler_sampler_node(
+        {
+            "xml_database_context": '<database><table name="valid_table"></table></database>',
+            "table_contexts": {
+                "missing_table": "not in schema",
+                "valid_table": "in schema",
+            },
+        }
+    )
+
+    assert list(update["report_sample_data"].keys()) == ["valid_table"]
+    assert all('"valid_table"' in sql for sql in executed_sql)
+
+
+def test_semantic_validator_flags_average_of_rates_risk():
+    section = _validate_section_semantics(
+        {
+            "title": "Tỷ lệ chuyển đổi theo nhóm",
+            "analysis_query": "Tỷ lệ chuyển đổi trung bình theo từng nhóm khách hàng là bao nhiêu?",
+            "analysis_type": "comparative",
+            "validated_sql": 'SELECT AVG("conversion_rate") AS avg_conversion_rate FROM "campaign_metrics"',
+            "computed_stats": {
+                "row_count": 3,
+                "grouped_rows": [{"segment": "A", "conversion_rate": 0.2}],
+                "data_quality": {"warnings": []},
+            },
+            "chart_manifest": {"chart_type": "table"},
+            "sql_result": {"row_count": 3},
+        }
+    )
+
+    assert section["analysis_type"] == "comparative"
+    assert section["semantic_status"] == "warning"
+    assert section["section_confidence"] == "low"
+    assert any(
+        "average-of-averages" in warning for warning in section["semantic_warnings"]
+    )
+
+
+def test_semantic_validator_marks_missing_trend_series():
+    section = _validate_section_semantics(
+        {
+            "title": "Xu hướng doanh thu",
+            "analysis_query": "Doanh thu thay đổi theo thời gian như thế nào?",
+            "analysis_type": "trend",
+            "validated_sql": 'SELECT "month", "revenue" FROM "monthly_revenue"',
+            "computed_stats": {
+                "row_count": 6,
+                "metrics": {"total": {"value": 1200, "display_value": "1200"}},
+                "data_quality": {"warnings": []},
+            },
+            "chart_manifest": {"chart_type": "table"},
+            "sql_result": {"row_count": 6},
+        }
+    )
+
+    assert section["semantic_status"] == "warning"
+    assert any(
+        "lacks an explicit grounded time series" in warning
+        for warning in section["semantic_warnings"]
+    )
+
+
+def test_deterministic_critic_flags_missing_recommendations_and_missing_caveats():
+    issues = _deterministic_critic_issues(
+        {
+            "report_sections": [
+                {
+                    "title": "Price and Survival",
+                    "semantic_warnings": [
+                        "The SQL uses multiple joins with aggregation."
+                    ],
+                    "section_confidence": "medium",
+                }
+            ]
+        },
+        "# Report\n\n## Price and Survival\n\nGiá vé là yếu tố quyết định khả năng sống sót.",
+    )
+
+    assert any("Recommendations" in issue for issue in issues)
+    assert any("strong analytical claims" in issue for issue in issues)
 
 
 # ---------------------------------------------------------------------------

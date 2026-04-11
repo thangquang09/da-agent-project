@@ -102,6 +102,7 @@ class AnswerPayload(TypedDict, total=False):
     report_markdown: str | None
     evidence: list[str]
     confidence: Confidence
+    confidence_rationale: str
     used_tools: list[str]
     generated_sql: str
     error_categories: list[str]
@@ -132,13 +133,59 @@ class AnswerPayload(TypedDict, total=False):
 | Field | Type | Purpose |
 |-------|------|---------|
 | `report_request` | `str` | User's report request |
-| `report_plan` | `ReportPlan` | Planned sections |
+| `report_plan` | `ReportPlan` | Planned sections (includes `domain_context` from profiler) |
 | `report_sections` | `list[ReportSection]` | Executed sections |
 | `report_draft` | `str` | Writer output |
 | `report_final` | `str` | Finalized report |
 | `critic_feedback` | `str` | Critic evaluation |
 | `critic_iteration` | `int` | Number of revisions |
-| `report_status` | `ReportStatus` | `"planning"` → `"executing"` → `"writing"` → `"critiquing"` → `"done"` |
+| `report_confidence_rationale` | `str` | Human-readable explanation for the final report confidence |
+| `report_status` | `ReportStatus` | `"planning"` → `"executing"` → `"insighting"` → `"writing"` → `"critiquing"` → `"done"` |
+| `report_sample_data` | `dict[str, Any]` | Output of `profiler_sampler_node`: 100 random rows + column stats per table |
+| `report_data_profile` | `dict[str, Any]` | Output of `profiler_analyzer_node`: domain summary, key metrics, suggested sections |
+
+### `ReportSection` structure
+
+```python
+class ReportSection(TypedDict, total=False):
+    section_id: str
+    title: str
+    analysis_query: str
+    analysis_type: Literal["descriptive", "comparative", "trend", "distribution", "composition", "correlation", "cohort", "funnel"]
+    target_metrics: list[str]
+    target_dimensions: list[str]
+    expected_grain: str
+    confidence_notes: str
+    requires_visualization: bool  # planner decides; False = skip sandbox chart
+    sql_result: dict[str, Any]
+    computed_stats: dict[str, Any] | None
+    chart_image: dict[str, Any] | None
+    chart_manifest: dict[str, Any] | None
+    insight_markdown: str
+    insight_citations: list[dict[str, Any]]
+    limitations: list[str]
+    semantic_warnings: list[str]
+    semantic_status: Literal["ok", "warning", "failed"]
+    section_confidence: Literal["low", "medium", "high"]
+    analysis_status: Literal["pending", "done", "failed"]
+    status: Literal["pending", "done", "failed"]
+    error: str | None
+    generated_sql: str
+    validated_sql: str
+    section_order: int  # Original planner position for sorting after fan-in
+    critic_decision: str  # Feedback from report_critic node
+```
+
+### `ReportPlan` structure
+
+```python
+class ReportPlan(TypedDict, total=False):
+    title: str
+    executive_summary_instruction: str
+    sections: list[ReportSection]
+    conclusion_instruction: str
+    domain_context: str  # profiler-derived domain summary passed to writer
+```
 
 ---
 
@@ -167,6 +214,7 @@ tool_history: Annotated[list[dict[str, Any]], operator.add]
 errors: Annotated[list[dict[str, Any]], operator.add]
 artifacts: Annotated[list[WorkerArtifact], operator.add]
 task_results: Annotated[list[TaskState], operator.add]  # From parallel workers
+_report_sections_raw: Annotated[list[ReportSection], operator.add]  # Fan-in reducer for Send() pipeline
 ```
 
 All other fields are **last-write-wins** (node output replaces prior value).

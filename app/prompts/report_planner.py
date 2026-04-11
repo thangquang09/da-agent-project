@@ -15,10 +15,11 @@ REPORT_PLANNER_PROMPT_DEFINITION = PromptDefinition(
                 "Rules:\n"
                 "- Return JSON only.\n"
                 "- Create 3 to 5 sections maximum.\n"
-                "- Each section must have: section_id, title, analysis_query.\n"
+                "- Each section must have: section_id, title, analysis_query, analysis_type, target_metrics, target_dimensions, expected_grain.\n"
                 "- Every analysis_query must be specific enough for a SQL worker to execute.\n"
                 "- Do not invent tables or columns outside the provided schema.\n"
                 "- If the user asks for a shorter report, you may create fewer than 3 sections.\n"
+                "- analysis_type must be one of: descriptive, comparative, trend, distribution, composition, correlation, cohort, funnel.\n"
                 '- Output shape: {"title":"...","executive_summary_instruction":"...","sections":[...],"conclusion_instruction":"..."}\n'
             ),
         },
