@@ -7,6 +7,7 @@ from app.graph.state import AgentState, TaskState
 from app.llm import LLMClient
 from app.logger import logger
 from app.prompts import prompt_manager
+from app.artifacts.helpers import build_viz_dict_from_result
 from app.tools.visualization import (
     get_visualization_service,
     is_visualization_available,
@@ -66,15 +67,12 @@ def generate_visualization(state: AgentState) -> AgentState:
             python_code=python_code,
         )
 
-        # Build visualization state
-        viz_state = {
-            "success": result.success,
-            "image_data": result.image_data,
-            "image_format": result.image_format,
-            "error": result.error,
-            "code_executed": result.code_executed,
-            "execution_time_ms": result.execution_time_ms,
-        }
+        # Build visualization state — save image to file, keep URL only
+        viz_state = build_viz_dict_from_result(
+            result,
+            thread_id=state.get("thread_id", "default"),
+            turn_number=state.get("conversation_turn", 0),
+        )
 
         return {
             "visualization": viz_state,
@@ -82,8 +80,8 @@ def generate_visualization(state: AgentState) -> AgentState:
                 {
                     "tool": "generate_visualization",
                     "status": "ok" if result.success else "failed",
-                    "has_image": result.image_data is not None,
-                    "image_size": len(result.image_data) if result.image_data else 0,
+                    "has_image": viz_state.get("image_url") is not None,
+                    "image_size_bytes": viz_state.get("image_size_bytes", 0),
                     "error": result.error,
                     "execution_time_ms": result.execution_time_ms,
                 }
@@ -220,15 +218,15 @@ def visualization_worker(task_state: TaskState) -> dict[str, Any]:
             user_query=query,
         )
 
+        viz_dict = build_viz_dict_from_result(
+            result,
+            thread_id=task_state.get("thread_id", "default"),
+            turn_number=0,
+        )
         return {
             **task_state,
             "status": "success" if result.success else "failed",
-            "visualization_result": {
-                "success": result.success,
-                "image_data": result.image_data,
-                "image_format": result.image_format,
-                "error": result.error,
-            },
+            "visualization_result": viz_dict,
             "execution_time_ms": result.execution_time_ms,
         }
     except Exception as exc:

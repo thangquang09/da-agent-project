@@ -68,6 +68,7 @@ class Settings:
     model_report_planner: str
     model_report_writer: str
     model_report_critic: str
+    model_report_data_profiler: str
     type_of_sandbox: str
     docker_sandbox_image: str
     docker_sandbox_base_image: str
@@ -77,6 +78,8 @@ class Settings:
     # Debug file sink — always active, defaults to logs/DEBUG.log
     debug_log_path: str
     debug_log_level: str
+    # Artifact file store root
+    artifact_root: str
 
 
 def _env_bool(value: str | None, default: bool) -> bool:
@@ -101,7 +104,7 @@ def load_settings() -> Settings:
     models = load_model_list()
 
     # Default to gpt-4o for higher token limits (12288 -> 128k context)
-    default_model = os.getenv("DEFAULT_MODEL", "gh/gpt-4o")
+    default_model = os.getenv("DEFAULT_MODEL", "gh/gpt-4.1")
     default_router_model = os.getenv("DEFAULT_ROUTER_MODEL", default_model)
     default_synthesis_model = os.getenv("DEFAULT_SYNTHESIS_MODEL", default_model)
 
@@ -122,6 +125,7 @@ def load_settings() -> Settings:
     model_report_planner = os.getenv("MODEL_REPORT_PLANNER", model_leader)
     model_report_writer = os.getenv("MODEL_REPORT_WRITER", model_synthesis)
     model_report_critic = os.getenv("MODEL_REPORT_CRITIC", model_leader)
+    model_report_data_profiler = os.getenv("MODEL_REPORT_DATA_PROFILER", model_leader)
     type_of_sandbox = os.getenv("TYPE_OF_SANDBOX", "docker").strip().lower() or "docker"
 
     settings = Settings(
@@ -176,6 +180,7 @@ def load_settings() -> Settings:
         model_report_planner=model_report_planner,
         model_report_writer=model_report_writer,
         model_report_critic=model_report_critic,
+        model_report_data_profiler=model_report_data_profiler,
         type_of_sandbox=type_of_sandbox,
         docker_sandbox_image=os.getenv(
             "DOCKER_SANDBOX_IMAGE",
@@ -198,6 +203,7 @@ def load_settings() -> Settings:
             "DEBUG_LOG_PATH", str(PROJECT_ROOT / "logs" / "DEBUG.log")
         ),
         debug_log_level=os.getenv("DEBUG_LOG_LEVEL", "DEBUG").upper(),
+        artifact_root=os.getenv("ARTIFACT_ROOT", str(PROJECT_ROOT / "artifacts")),
     )
 
     if not settings.llm_api_key:

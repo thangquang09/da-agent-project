@@ -21,7 +21,7 @@ DA Agent Lab — Hybrid Architecture v3
 | `clarify_question_node`   | Interrupt  | Halt → show `[CLARIFY]` question → **END** (no memory save)         |
 | `capture_action_node`     | Memory     | Save `last_action`, `conversation_turn`                             |
 | `compact_and_save_memory` | Memory     | Persist to PostgreSQL (agent schema)                                |
-| `report_subgraph`         | Subgraph   | 4-phase: plan → execute → write → critique                          |
+| `report_subgraph`         | Subgraph   | 8-node Send() pipeline: profiler_sampler → profiler_analyzer → report_planner → [Send fan-out section_pipeline] → sections_sort → report_writer → report_critic → report_finalize |
 
 
 **Clarify interrupt**: khi `task_profile.confidence == "low"` hoặc `task_mode == "ambiguous"`, graph dừng tại `clarify_question_node` và chờ user input. Câu hỏi được generate tự động bằng heuristic tiếng Việt.
@@ -56,6 +56,8 @@ DA Agent Lab — Hybrid Architecture v3
 | [02_worker_contracts.md](_tech_specs/02_worker_contracts.md)         | `WorkerArtifact` contract — artifact_type, status, terminal, recommended_action |
 | [03_observability.md](_tech_specs/03_observability.md)               | `RunTracer`, `@trace_node`, Langfuse, JSONL format                              |
 | [04_observability_schema.md](_tech_specs/04_observability_schema.md) | Trace event schema, error tracking                                              |
+| [05_frontend_architecture.md](_tech_specs/05_frontend_architecture.md) | Frontend architecture — layout, state, API, components, adding features       |
+| [06_artifact_store.md](_tech_specs/06_artifact_store.md)             | File-based artifact offload — PNG/SVG/markdown to disk, URL references in state |
 
 
 ---
@@ -63,12 +65,14 @@ DA Agent Lab — Hybrid Architecture v3
 ## Đọc nhanh theo vai trò
 
 
-| Vai trò          | Đọc                                                                    |
-| ---------------- | ---------------------------------------------------------------------- |
-| Phỏng vấn viên   | `docs/thangquang09/01_architecture.md` + `03_interview_qna.md` *(local only)* |
-| Review code mới   | `_tech_specs/01_state_model.md` + `_tech_specs/02_worker_contracts.md`  |
-| Debug production  | `_tech_specs/03_observability.md`                                       |
+| Vai trò            | Đọc                                                                    |
+| ------------------ | ---------------------------------------------------------------------- |
+| Phỏng vấn viên     | `docs/thangquang09/01_architecture.md` + `03_interview_qna.md` *(local only)* |
+| Review code mới    | `_tech_specs/01_state_model.md` + `_tech_specs/02_worker_contracts.md`  |
+| Debug production   | `_tech_specs/03_observability.md`                                       |
 | Thay đổi kiến trúc | `_tech_specs/01_state_model.md` → `_tech_specs/02_worker_contracts.md` |
+| Artifact/visualization flow | `_tech_specs/06_artifact_store.md` |
+| Thay đổi frontend  | `_tech_specs/05_frontend_architecture.md`                               |
 
 
 ---
@@ -79,8 +83,12 @@ DA Agent Lab — Hybrid Architecture v3
 - **State model**: `app/graph/state.py` → `AgentState`, `TaskProfile`, `WorkerArtifact`
 - **Nodes**: `app/graph/nodes.py`
 - **Workers**: `app/graph/standalone_visualization.py`, `app/tools/retrieve_rag_answer.py`
+- **Table metadata**: `app/tools/table_metadata.py` — business context persistence (`user_data.table_contexts`)
 - **Observability**: `app/observability/tracer.py`
-- **Prompts**: `app/prompts/task_grounder.py`, `app/prompts/leader.py`
+- **Artifact file store**: `app/artifacts/file_store.py`, `app/artifacts/helpers.py`
+- **Artifact API**: `backend/routers/artifacts.py`
+- **Prompts**: `app/prompts/task_grounder.py`, `app/prompts/leader.py`, `app/prompts/report_data_profiler.py`
+- **Frontend**: `frontend/src/` — see `_tech_specs/05_frontend_architecture.md`
 
 ## Quy tắc
 

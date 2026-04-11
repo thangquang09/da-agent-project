@@ -6,11 +6,16 @@ from pydantic import BaseModel
 
 
 class VisualizationResponse(BaseModel):
-    """Mirrors the VisualizationSpec TypedDict from app/graph/state.py."""
+    """Mirrors the visualization dict from AgentState.
+
+    image_url is a path like /artifacts/{thread_id}/{turn}/chart_xxx.png
+    that the frontend can use directly in <img src={...}>.
+    """
 
     success: bool = False
-    image_data: str | None = None  # base64-encoded PNG
+    image_url: str | None = None
     image_format: str = "png"
+    image_size_bytes: int | None = None
     execution_time_ms: float = 0.0
     error: str | None = None
 
@@ -78,12 +83,25 @@ class ConversationTurnResponse(BaseModel):
     result_summary: str | None = None
     entities: list[str] = []
     timestamp: str
+    last_action_json: dict[str, Any] | None = None
 
 
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = "1.0.0"
     graph_version: str = "v3"
+
+
+class TurnArtifactResponse(BaseModel):
+    """Persisted artifact (report, chart) for a conversation turn.
+
+    payload now contains metadata and file references only — never binary data.
+    """
+
+    thread_id: str
+    turn_number: int
+    artifact_type: str
+    payload: dict[str, Any] = {}
 
 
 class EvalRunResponse(BaseModel):

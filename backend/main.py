@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.logger import logger
-from backend.routers import data, evals, health, query, threads, traces
+from backend.routers import artifacts, data, evals, health, query, threads, traces
 
 
 def create_app() -> FastAPI:
@@ -42,6 +42,7 @@ def create_app() -> FastAPI:
     app.include_router(traces.router)
     app.include_router(evals.router)
     app.include_router(data.router)
+    app.include_router(artifacts.router)
 
     @app.on_event("startup")
     async def _startup() -> None:
@@ -49,6 +50,14 @@ def create_app() -> FastAPI:
             "DA Agent backend starting up (port={port})",
             port=os.getenv("BACKEND_PORT", "8001"),
         )
+
+        # Ensure artifact root directory exists
+        try:
+            from app.artifacts.file_store import get_artifact_file_store
+            get_artifact_file_store()
+            logger.info("Artifact file store ready")
+        except Exception as exc:
+            logger.warning("Artifact file store init failed (non-fatal): {err}", err=str(exc))
 
         # Pre-warm ConversationMemoryStore singleton (PostgreSQL-backed)
         from app.memory.conversation_store import get_conversation_memory_store

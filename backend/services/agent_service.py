@@ -63,8 +63,8 @@ async def run_query_async(
         intent=payload.get("intent", "?"),
     )
 
-    # Convert bytes → base64 str so Pydantic can parse the payload without
-    # ValidationError (non-ASCII bytes like PNG image_data are not valid str).
+    # Ensure payload is JSON-serializable (remove any stray bytes values).
+    # Image data is now served from files via /artifacts/ URLs, not in-band.
     serializable = make_serializable(payload)
 
     # Build QueryResponse — use only keys that exist in the payload

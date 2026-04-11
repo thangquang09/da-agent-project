@@ -12,6 +12,7 @@ from app.graph.state import TaskState
 from app.llm import LLMClient
 from app.logger import logger
 from app.prompts import prompt_manager
+from app.artifacts.helpers import build_viz_dict_from_result
 from app.tools import query_sql, validate_sql
 from app.tools.get_schema import get_schema_overview
 from app.tools.visualization import (
@@ -416,15 +417,13 @@ def _task_generate_visualization(task_state: TaskState) -> dict[str, Any]:
                 python_code=template_code,
             )
 
+        viz_dict = build_viz_dict_from_result(
+            result,
+            thread_id=task_state.get("thread_id", "default"),
+            turn_number=0,
+        )
         return {
-            "visualization": {
-                "success": result.success,
-                "image_data": result.image_data,
-                "image_format": result.image_format,
-                "error": result.error,
-                "code_executed": result.code_executed,
-                "execution_time_ms": result.execution_time_ms,
-            },
+            "visualization": viz_dict,
             "status": "success" if result.success else "failed",
         }
 
@@ -438,15 +437,18 @@ def _task_generate_visualization(task_state: TaskState) -> dict[str, Any]:
                 user_query=query,
                 python_code=template_code,
             )
+            viz_dict_fallback = build_viz_dict_from_result(
+                result,
+                thread_id=task_state.get("thread_id", "default"),
+                turn_number=0,
+            )
+            # Override error for non-success fallback
+            if not result.success and result.error:
+                viz_dict_fallback["error"] = result.error
+            elif result.success:
+                viz_dict_fallback["error"] = None
             return {
-                "visualization": {
-                    "success": result.success,
-                    "image_data": result.image_data,
-                    "image_format": result.image_format,
-                    "error": result.error if not result.success else None,
-                    "code_executed": result.code_executed,
-                    "execution_time_ms": result.execution_time_ms,
-                },
+                "visualization": viz_dict_fallback,
                 "status": "success" if result.success else "failed",
             }
         except Exception as exc2:

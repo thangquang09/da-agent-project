@@ -69,7 +69,7 @@ async def stream_query_events(
             run_id=payload.get("run_id", "?"),
         )
 
-        # Serialize payload — convert bytes to base64 for JSON transport
+        # Serialize payload — convert any remaining bytes for JSON transport (images now served via /artifacts/ URLs)
         serializable = make_serializable(payload)
 
         yield ServerSentEvent(

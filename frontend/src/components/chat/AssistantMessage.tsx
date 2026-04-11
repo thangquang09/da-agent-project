@@ -24,7 +24,7 @@ export function AssistantMessage({ message }: AssistantMessageProps) {
 
   const hasReport = !!result?.report_markdown;
   const hasSql = !!result?.generated_sql;
-  const hasChart = !!result?.visualization?.image_data;
+  const hasChart = !!result?.visualization?.image_url;
   const hasTrace = !!result?.run_id;
   const reportArtifactData = result?.report_markdown
     ? {
@@ -117,7 +117,7 @@ export function AssistantMessage({ message }: AssistantMessageProps) {
                     openArtifact({
                       type: "chart",
                       title: "Visualization",
-                      data: result.visualization!.image_data,
+                      data: result.visualization!.image_url,
                       messageId: message.id,
                     })
                   }

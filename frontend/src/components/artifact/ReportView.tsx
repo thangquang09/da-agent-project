@@ -81,7 +81,7 @@ function matchSection(
 
 function ReportSectionChart({ section }: { section: ReportSectionResponse }) {
   const image = section.chart_image;
-  if (!image?.image_data) return null;
+  if (!image?.image_url) return null;
 
   return (
     <figure className="mt-5 overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm">
@@ -90,7 +90,7 @@ function ReportSectionChart({ section }: { section: ReportSectionResponse }) {
         Visualization
       </div>
       <img
-        src={`data:image/${image.image_format || "png"};base64,${image.image_data}`}
+        src={image.image_url}
         alt={section.title || "Report visualization"}
         className="w-full h-auto bg-white dark:bg-slate-900"
       />

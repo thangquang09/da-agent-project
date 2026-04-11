@@ -58,7 +58,8 @@ def ask_sql_analyst_tool(
     # WorkerArtifact fields (for artifact_evaluator)
     "artifact_type": "sql_result",
     "artifact_status": "success" | "partial" | "failed",
-    "artifact_payload": {
+    "artifact_path": "",
+        "metadata": {
         "sql_result": dict,
         "answer_summary": str,
     },
@@ -192,7 +193,7 @@ def inline_data_worker(task_state: TaskState) -> dict[str, Any]
     # Visualization result
     "visualization": {
         "success": bool,
-        "image_data": str,  # base64
+/"image_url": str | None,  # URL path like "/artifacts/thread/1/chart_abc.png"/
         "image_format": "png" | "jpeg",
         "code_executed": str,
         "execution_time_ms": float,
@@ -206,7 +207,8 @@ def inline_data_worker(task_state: TaskState) -> dict[str, Any]
     # WorkerArtifact fields
     "artifact_type": "chart",
     "artifact_status": "success" | "failed",
-    "artifact_payload": {
+    "artifact_path": "",
+        "metadata": {
         "image_data": str,
         "image_format": str,
         "chart_type": str,
@@ -257,7 +259,8 @@ def retrieve_rag_answer(query: str, top_k: int = 4) -> dict[str, Any]
     # WorkerArtifact fields
     "artifact_type": "rag_context",
     "artifact_status": "failed",  # No context available
-    "artifact_payload": {
+    "artifact_path": "",
+        "metadata": {
         "chunks": [],
         "chunk_count": 0,
         "answer": "Không có thông tin",
@@ -340,7 +343,8 @@ All workers MUST return these fields for `artifact_evaluator` consumption:
 |-------|------|----------|
 | `artifact_type` | `Literal` | Yes |
 | `artifact_status` | `Literal` | Yes |
-| `artifact_payload` | `dict` | Yes |
+| `artifact_path` | `str` | Yes — relative path to file in `artifacts/` dir |
+| `metadata` | `dict` | Yes — lightweight summary (row_count, columns, image_format, etc.) |
 | `artifact_evidence` | `dict` | Yes |
 | `artifact_terminal` | `bool` | Yes |
 | `artifact_recommended_action` | `Literal` | Yes |

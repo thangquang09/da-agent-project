@@ -10,7 +10,7 @@ import type {
   TableInfo,
   UploadStatus,
 } from "@/lib/types";
-import { listThreads, getThreadHistory, getThreadArtifacts, deleteThread as deleteThreadAPI, uploadFiles as uploadFilesAPI, getTables as getTablesAPI } from "@/lib/api";
+import { listThreads, getThreadHistory, getThreadArtifacts, deleteThread as deleteThreadAPI, uploadFiles as uploadFilesAPI, getTables as getTablesAPI, updateTableContext as updateTableContextAPI } from "@/lib/api";
 import { streamQuery } from "@/lib/sse";
 import { postQueryWithFiles } from "@/lib/api";
 
@@ -77,7 +77,8 @@ interface ChatStore {
   // ── Data panel actions ───────────────────────────────────────────────
   toggleDataPanel: () => void;
   fetchTables: () => Promise<void>;
-  uploadFiles: (files: { name: string; data: ArrayBuffer }[]) => Promise<void>;
+  uploadFiles: (files: { name: string; data: ArrayBuffer; context?: string }[]) => Promise<void>;
+  updateTableContext: (tableName: string, context: string) => Promise<void>;
 }
 
 export const useChatStore = create<ChatStore>((set, get) => ({
@@ -202,8 +203,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               } else if (a.artifact_type === "chart") {
                 msg.result.visualization = {
                   success: true,
-                  image_data: (a.payload.image_data as string) ?? null,
+                  image_url: (a.payload.image_url as string) ?? null,
                   image_format: (a.payload.image_format as string) ?? "png",
+                  image_size_bytes: null,
                   execution_time_ms: (a.payload.execution_time_ms as number) ?? 0,
                   error: null,
                 };
@@ -395,7 +397,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  uploadFiles: async (files: { name: string; data: ArrayBuffer }[]) => {
+  uploadFiles: async (files: { name: string; data: ArrayBuffer; context?: string }[]) => {
     set({ uploadStatus: "uploading", uploadError: null });
 
     try {
@@ -420,6 +422,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Upload failed";
       set({ uploadStatus: "error", uploadError: msg });
+    }
+  },
+
+  updateTableContext: async (tableName: string, context: string) => {
+    try {
+      await updateTableContextAPI(tableName, context);
+      // Refresh tables to show updated context
+      get().fetchTables();
+    } catch {
+      // silently fail
     }
   },
 }));

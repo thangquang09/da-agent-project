@@ -127,7 +127,7 @@ export function ArtifactPanel() {
           <SqlView sql={content.data as string} />
         )}
         {content.type === "chart" && (
-          <ChartView imageData={content.data as string} />
+          <ChartView imageUrl={content.data as string} />
         )}
         {content.type === "trace" && (
           <TraceTimeline runId={content.data as string} />

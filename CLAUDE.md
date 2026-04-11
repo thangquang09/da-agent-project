@@ -101,7 +101,7 @@ User (Next.js / Streamlit / CLI / API)
         +-- clarify_question_node  →  Interrupt: halt if confidence=low or mode=ambiguous
         +-- capture_action_node    →  Save last_action, conversation_turn
         +-- compact_and_save_memory →  Persist to PostgreSQL (agent schema)
-        +-- report_subgraph        →  6-phase: plan → SQL+sandbox execute → grounded insight → assemble → critique → finalize
+        +-- report_subgraph        →  8-node Send() pipeline: profiler_sampler → profiler_analyzer → report_planner → [Send fan-out section_pipeline] → sections_sort → report_writer → report_critic → report_finalize
         v
   Synthesized answer + trace (JSONL + Langfuse)
 ```
@@ -113,10 +113,11 @@ User (Next.js / Streamlit / CLI / API)
 | `ask_sql_analyst` | `app/tools/` | Schema → SQL → validate → execute → analyze |
 | `ask_sql_analyst_parallel` | `app/tools/` | Fan-out parallel SQL workers |
 | `retrieve_rag_answer` | `app/tools/retrieve_rag_answer.py` | Vector similarity search |
-| `create_visualization` | `app/graph/standalone_visualization.py` | Configurable sandbox (`docker | e2b | none`) → chart artifact |
-| `generate_report` | `app/graph/report_subgraph.py` | Grounded report pipeline with SQL → sandbox stats/chart → insight → assemble |
+| `create_visualization` | `app/graph/standalone_visualization.py` | Configurable sandbox → chart artifact (saved to `artifacts/`, URL in state) |
+| `generate_report` | `app/graph/report_subgraph.py` | Grounded report pipeline: sample → profile → plan → [Send fan-out section_pipeline] → sort → write → critique → finalize |
 | `validate_sql_query` | `app/tools/validate_sql.py` | AST-based SELECT-only validation |
 | `get_schema_overview` | `app/tools/get_schema.py` | DB schema introspection |
+| `table_metadata` | `app/tools/table_metadata.py` | Persist business context per table (`user_data.table_contexts`) |
 
 ---
 
@@ -139,11 +140,25 @@ User (Next.js / Streamlit / CLI / API)
 
 Route bằng structured output (enum), không phải free-form text.
 
+### Data panel — business context
+
+- Users upload CSVs via the Data Panel (`/data/upload`). Table names are normalized (hyphens/spaces → underscores).
+- After upload, users can attach **business context** per table (e.g. "Titanic passenger survival data from 1912").
+- Context is persisted in `user_data.table_contexts` (Postgres) and merged into the agent's XML database context at query time via `_get_merged_table_contexts()`.
+- API: `PUT /data/tables/{name}/context`, `DELETE /data/tables/{name}`, `GET /data/tables` (includes `business_context` field).
+
 ### Report grounding
 
 - Report requests are normalized to `required_capabilities=["report"]` and dispatched directly into `report_subgraph`.
-- Report sections run through `SQL -> sandbox compute/viz -> insight generation`.
-- Insight nodes can inspect the chart image for qualitative reasoning, but every numeric claim must come from `computed_stats.json`.
+- **Phase 1 (profiler_sampler)**: Runs `SELECT * FROM table ORDER BY RANDOM() LIMIT 100` + column stats (min/max/unique/nulls), caps at 2 tables, 15 cols/table. Filters out system tables.
+- **Phase 2 (profiler_analyzer)**: LLM analyzes schema + sample data + business context to produce domain summary and suggest 3-5 report sections.
+- **Phase 3 (report_planner)**: Uses profiler suggestions directly (or falls back to LLM call) to build `ReportPlan` with `domain_context`.
+- **Phase 4 (section_pipeline via Send())**: Fan-out: each section independently runs SQL → sandbox (compute_stats + chart) → insight generation. Single sandbox instance reused. Results accumulate via `_report_sections_raw` with `operator.add` reducer.
+- **Phase 5 (sections_sort)**: Reassembles sections in original planner order after fan-in using `section_order` field.
+- **Phase 6 (report_writer)**: Synthesizes Executive Summary + Recommendations from grounded insights.
+- **Phase 7 (report_critic)**: Validates numeric claims; routes back to writer (max 2 revisions) or to finalize.
+- **Phase 8 (report_finalize)**: Packages final markdown + section payloads for frontend.
+- Insight nodes can inspect chart images for qualitative reasoning, but every numeric claim must come from `computed_stats.json`.
 - Final chat answer for report mode is intentionally short; the full document and section charts are rendered in the right-side Report artifact panel.
 
 ---
@@ -217,6 +232,7 @@ Có → good change. Không → probably a distraction.
 | `E2B_API_KEY` | No | — | E2B sandbox key when `TYPE_OF_SANDBOX=e2b` |
 | `BACKEND_URL` | No | `http://localhost:8001` | Streamlit → Backend |
 | `ENABLE_LANGFUSE` | No | `false` | Langfuse tracing |
+| `ARTIFACT_ROOT` | No | `./artifacts` | Root directory for file-based artifact storage (PNG charts, report markdown) |
 
 > **Chi tiết đầy đủ**: `docs/ENV.md`
 
@@ -252,5 +268,5 @@ Có → good change. Không → probably a distraction.
 - **State model**: `app/graph/state.py` → `AgentState`, `TaskProfile`, `WorkerArtifact`
 - **Nodes**: `app/graph/nodes.py`
 - **Observability**: `app/observability/tracer.py`
-- **Prompts**: `app/prompts/task_grounder.py`, `app/prompts/leader.py`
+- **Prompts**: `app/prompts/task_grounder.py`, `app/prompts/leader.py`, `app/prompts/report_data_profiler.py`
 - **Frontend**: `frontend/` — Next.js 16 + Tailwind + Zustand

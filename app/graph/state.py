@@ -29,7 +29,9 @@ class TaskProfile(TypedDict, total=False):
     """
 
     task_mode: Literal["simple", "mixed", "ambiguous", "chitchat"]
-    data_source: Literal["inline_data", "uploaded_table", "database", "knowledge", "mixed", "none"]
+    data_source: Literal[
+        "inline_data", "uploaded_table", "database", "knowledge", "mixed", "none"
+    ]
     required_capabilities: list[Literal["sql", "rag", "visualization", "report"]]
     followup_mode: Literal["fresh_query", "followup", "refine_previous_result"]
     confidence: Literal["high", "medium", "low"]
@@ -39,13 +41,15 @@ class TaskProfile(TypedDict, total=False):
 class WorkerArtifact(TypedDict, total=False):
     """Standardized output from any worker.
 
-    All workers return this schema so the supervisor and evaluator
-    consume typed artifacts instead of ad-hoc dicts.
+    Heavy data is stored on disk (via ArtifactFileStore) and referenced by
+    artifact_path. The metadata dict holds lightweight summary info only
+    (row_count, columns, image_format, etc.) — never raw bytes or base64.
     """
 
     artifact_type: Literal["sql_result", "rag_context", "chart", "report_draft"]
     status: Literal["success", "failed", "partial"]
-    payload: dict[str, Any]
+    artifact_path: str  # relative path to file in artifacts/ dir
+    metadata: dict[str, Any]  # lightweight summary (row_count, columns, image_format, ...)
     evidence: dict[str, Any]
     terminal: bool
     recommended_next_action: Literal[
@@ -135,9 +139,11 @@ class AgentState(TypedDict, total=False):
     ]  # table_name → user-provided business context (from pair upload)
     xml_database_context: str  # Full <database_context> XML block for SQL agent
     task_results: Annotated[list[TaskState], operator.add]  # Fan-in from workers
-    visualization: dict[str, Any]  # Visualization data from nested sequential execution
+    visualization: dict[str, Any]  # {success, image_url, image_format, image_size_bytes, error, execution_time_ms}
     # Grounding Group (v4) — set by task_grounder node
-    artifacts: Annotated[list[WorkerArtifact], operator.add]  # Worker artifacts accumulated
+    artifacts: Annotated[
+        list[WorkerArtifact], operator.add
+    ]  # Worker artifacts accumulated
     task_profile: TaskProfile  # Grounded task profile from grounder
     # v3 State fields
     execution_mode: str  # "linear" | "parallel" | "leader_loop" — set by task planner
@@ -145,7 +151,9 @@ class AgentState(TypedDict, total=False):
         str, Any
     ]  # Follow-up query context (is_continuation, inherited_action, parameter_changes)
     artifact_evaluation: dict[str, Any]  # Decision from artifact_evaluator node
-    clarification_question: str  # Human question from clarify decision; empty = no clarification needed
+    clarification_question: (
+        str  # Human question from clarify decision; empty = no clarification needed
+    )
     # Session memory fields
     thread_id: str  # Thread identifier for memory scoping
     session_context: str  # Injected context from conversation memory
@@ -166,6 +174,17 @@ class AgentState(TypedDict, total=False):
     report_status: ReportStatus
     report_feedback_hash: str
     report_draft_hash: str
+    report_data_profile: dict[str, Any]  # output of report_data_profiler_node
+    # Report V2: Send() fan-out fields
+    report_sample_data: dict[str, Any]  # {table: {sample_rows, column_stats}} from profiler_sampler
+    _report_sections_raw: Annotated[
+        list["ReportSection"], operator.add
+    ]  # fan-in reducer target from Send()
+    _report_sections_planned: list[
+        "ReportSection"
+    ]  # planner output → fan_out_sections reads this
+    _current_section: "ReportSection"  # per-section Send() payload
+    critic_decision: Literal["revise", "finalize"]  # explicit routing field
 
 
 class GraphInputState(TypedDict, total=False):
@@ -175,6 +194,7 @@ class GraphInputState(TypedDict, total=False):
     uploaded_files: list[str]
     uploaded_file_data: list[dict[str, Any]]
     thread_id: str  # Optional: for session memory scoping
+    run_id: str  # Set by run_config, needed in state for capture_action_node
 
 
 class GraphOutputState(TypedDict, total=False):
@@ -197,13 +217,16 @@ class ReportSection(TypedDict, total=False):
     section_id: str
     title: str
     analysis_query: str
+    requires_visualization: bool  # planner decides; False = skip sandbox chart
+    section_order: int  # original planner order for reassembly after Send() fan-in
     sql_result: dict[str, Any]
     result_ref: dict[str, Any] | None
     raw_result_ref: dict[str, Any] | None
     visualization: dict[str, Any] | None
     sandbox_analysis: dict[str, Any] | None
     computed_stats: dict[str, Any] | None
-    chart_image: dict[str, Any] | None
+    chart_image_url: str | None  # relative path like "{thread}/{turn}/section_{id}.png"
+    chart_image_format: str | None  # "png" | "svg" etc.
     chart_html: str | None
     chart_manifest: dict[str, Any] | None
     narrative: str
@@ -222,3 +245,4 @@ class ReportPlan(TypedDict, total=False):
     executive_summary_instruction: str
     sections: list[ReportSection]
     conclusion_instruction: str
+    domain_context: str  # profiler-derived domain summary passed to writer

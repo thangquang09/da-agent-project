@@ -68,6 +68,13 @@ skills-lock.json
 evals/reports/
 evals/reports/traces.jsonl
 
+# Generated report output
+
+# Artifact file store (charts, reports, data files)
+artifacts/
+!artifacts/.gitkeep
+reports/
+
 # Vendor dependencies (clone from external repos)
 vendor/
 

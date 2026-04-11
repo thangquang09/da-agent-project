@@ -23,7 +23,6 @@ from app.tools import (
     retrieve_metric_definition,
     validate_sql,
 )
-from app.tools.mcp_client import call_mcp_tool
 
 
 
@@ -40,6 +39,19 @@ def _extract_first_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _get_merged_table_contexts(in_flight: dict[str, str] | None = None) -> dict[str, str]:
+    """Merge persisted table contexts (from data panel uploads) with in-flight contexts."""
+    try:
+        from app.tools.table_metadata import get_all_table_contexts
+        merged = get_all_table_contexts()
+    except Exception:  # noqa: BLE001
+        merged = {}
+    # In-flight (from query-with-files) overrides persisted
+    if in_flight:
+        merged.update({k: v for k, v in in_flight.items() if v})
+    return merged
+
+
 def _build_xml_database_context(
     overview: dict[str, Any],
     table_contexts: dict[str, str] | None = None,
@@ -50,7 +62,7 @@ def _build_xml_database_context(
         format_schema_columns,
     )
 
-    contexts = table_contexts or {}
+    contexts = _get_merged_table_contexts(table_contexts)
     entries = [
         TableEntry(
             table_name=table["table_name"],
@@ -776,7 +788,7 @@ def _summarize_tool_result(tool_name: str, result: dict[str, Any]) -> str:
                 "status": result.get("status"),
                 "viz_success": viz.get("success"),
                 "viz_error": viz.get("error"),
-                "image_size": len(viz.get("image_data", b"")) if isinstance(viz.get("image_data"), bytes) else 0,
+                "image_size_bytes": viz.get("image_size_bytes", 0),
             },
             ensure_ascii=False,
             indent=2,
@@ -796,7 +808,7 @@ def _summarize_tool_result(tool_name: str, result: dict[str, Any]) -> str:
 def _generate_clarification_question(
     user_query: str,
     task_profile: dict[str, Any],
-    collected: set[str],
+    _collected: set[str],
     missing: set[str],
 ) -> str:
     """Generate a human-readable clarification question based on task profile.
@@ -1429,7 +1441,8 @@ def ask_sql_analyst_tool(
         # WorkerArtifact — for standardized supervisor evaluation
         "artifact_type": "sql_result",
         "artifact_status": "success" if successful_results and not failed_results else ("partial" if successful_results else "failed"),
-        "artifact_payload": {
+        "artifact_path": "",
+        "metadata": {
             "sql_result": sql_result,
             "answer_summary": answer_summary,
         },
@@ -1575,7 +1588,8 @@ def ask_sql_analyst_parallel_tool(
         # WorkerArtifact — for standardized supervisor evaluation
         "artifact_type": "sql_result",
         "artifact_status": "success" if successful_results and not failed_results else ("partial" if successful_results else "failed"),
-        "artifact_payload": {
+        "artifact_path": "",
+        "metadata": {
             "sql_result": aggregate_update.get("sql_result", {}),
             "answer_summary": answer_summary,
             "task_count": len(normalized_tasks),
@@ -1619,7 +1633,11 @@ def leader_agent(state: AgentState) -> AgentState:
         tool_result: dict[str, Any],
         status: str,
     ) -> dict[str, Any]:
-        """Build a WorkerArtifact dict from a tool result."""
+        """Build a WorkerArtifact dict from a tool result.
+
+        Heavy data is NOT included in the artifact — it has been saved to files
+        and referenced by artifact_path. Only lightweight metadata is stored.
+        """
         # Map tool_name → artifact_type
         TOOL_TO_ARTIFACT_TYPE = {
             "ask_sql_analyst": "sql_result",
@@ -1633,25 +1651,42 @@ def leader_agent(state: AgentState) -> AgentState:
         # Determine terminal from tool result shape
         terminal = False
         recommended_action: str = "none"
+        artifact_path = ""
+        metadata: dict[str, Any] = {}
         if tool_name == "create_visualization":
             viz = tool_result.get("visualization", {})
             if isinstance(viz, dict):
                 terminal = viz.get("success", False)
                 recommended_action = "finalize" if terminal else "clarify"
+                artifact_path = viz.get("image_url", "")
+                metadata = {
+                    "image_format": viz.get("image_format", "png"),
+                    "image_size_bytes": viz.get("image_size_bytes", 0),
+                }
         elif tool_name in ("ask_sql_analyst", "ask_sql_analyst_parallel"):
             terminal = tool_result.get("artifact_terminal", False)
             recommended_action = tool_result.get("artifact_recommended_action", "finalize")
+            sql_result = tool_result.get("sql_result", {})
+            metadata = {
+                "row_count": sql_result.get("row_count", 0),
+                "columns": list(sql_result.get("columns", [])),
+            }
+            result_ref = tool_result.get("result_ref")
+            if result_ref:
+                metadata["result_id"] = result_ref.get("result_id", "")
+                metadata["has_full_data"] = result_ref.get("has_full_data", False)
         elif tool_name == "retrieve_rag_answer":
             retrieved = tool_result.get("retrieved_context", [])
             has_context = bool(retrieved)
-            # Empty context: mark terminal=True so artifact_evaluator finalizes instead of looping
             terminal = True
             recommended_action = "finalize"
+            metadata = {"retrieved_chunks": len(retrieved)}
 
         return {
             "artifact_type": artifact_type,
             "status": status,
-            "payload": tool_result,
+            "artifact_path": artifact_path,
+            "metadata": metadata,
             "evidence": {
                 "tool": tool_name,
                 "row_count": tool_result.get("sql_result", {}).get("row_count", 0),
@@ -1684,6 +1719,10 @@ def leader_agent(state: AgentState) -> AgentState:
             "tool_history": leader_tool_history,
             "step_count": state.get("step_count", 0) + 1,
             "artifacts": artifacts,
+            "xml_database_context": xml_database_context,
+            "schema_context": state.get("schema_context", ""),
+            "target_db_path": state.get("target_db_path", ""),
+            "table_contexts": state.get("table_contexts", {}),
         }
 
     for step in range(1, 6):
@@ -1954,6 +1993,10 @@ def leader_agent(state: AgentState) -> AgentState:
                 "tool_history": leader_tool_history,
                 "step_count": state.get("step_count", 0) + step,
                 "artifacts": artifacts,
+                "xml_database_context": xml_database_context,
+                "schema_context": state.get("schema_context", ""),
+                "target_db_path": state.get("target_db_path", ""),
+                "table_contexts": state.get("table_contexts", {}),
             }
         else:
             break
@@ -2301,12 +2344,16 @@ def compact_and_save_memory(state: AgentState) -> AgentState:
     last_action = state.get("last_action", {})
     last_action_json = json.dumps(last_action) if last_action else None
 
+    # Use final_answer as assistant content so history shows the answer text
+    final_answer = state.get("final_answer", "") or ""
+    assistant_content = final_answer or (result_summary or "")
+
     assistant_turn = ConversationTurn(
         thread_id=thread_id,
         turn_number=turn_number + 1,
         role="assistant",
-        content="",
-        intent=None,
+        content=assistant_content,
+        intent=intent,
         sql_generated=generated_sql,
         result_summary=result_summary,
         entities=entities,
@@ -2314,6 +2361,12 @@ def compact_and_save_memory(state: AgentState) -> AgentState:
         last_action_json=last_action_json,
     )
     conv_store.save_turn(assistant_turn)
+
+    # Save heavyweight artifacts (reports, charts) in dedicated store
+    try:
+        _save_turn_artifacts(state, thread_id, turn_number + 1)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to save artifacts: {err}", err=str(exc))
 
     # Compact if needed
     total_turns = conv_store.get_turn_count(thread_id)
@@ -2498,7 +2551,8 @@ def capture_action_node(state: AgentState) -> AgentState:
         )
         return {"last_action": {}}
 
-    # Build last_action
+    # Build last_action — lightweight metadata only
+    # Heavy artifacts (reports, charts) stored in agent.turn_artifacts
     last_action = {
         "action_type": intent,
         "intent": intent,
@@ -2508,21 +2562,111 @@ def capture_action_node(state: AgentState) -> AgentState:
         "has_visualization": bool(state.get("visualization")),
     }
 
-    # Add visualization type if present
+    # Lightweight metadata for frontend reconstruction
+    run_id = state.get("run_id", "")
+    if run_id:
+        last_action["run_id"] = run_id
+    last_action["response_mode"] = state.get("response_mode", "answer")
+    last_action["confidence"] = confidence
+
     viz = state.get("visualization", {})
     if viz and viz.get("success"):
         last_action["visualization_type"] = "generated"
 
-    # Add answer snippet
     answer = final_payload.get("answer", "")
     if answer:
         last_action["answer_snippet"] = answer[:300]
 
     logger.info(
-        "Captured action: type={type}, has_sql={has_sql}, has_viz={has_viz}",
+        "Captured action: type={type}, has_sql={has_sql}, has_viz={has_viz}, run_id={rid}",
         type=intent,
         has_sql=bool(generated_sql),
         has_viz=last_action.get("has_visualization", False),
+        rid=run_id[:8] if run_id else "-",
     )
 
     return {"last_action": last_action}
+
+
+def _save_turn_artifacts(
+    state: AgentState, thread_id: str, assistant_turn_number: int
+) -> None:
+    """Persist heavyweight artifacts (reports, charts) for a conversation turn."""
+    from app.memory.artifact_store import TurnArtifact, get_artifact_store
+
+    store = get_artifact_store()
+    ts = datetime.now(timezone.utc).isoformat()
+    final_payload = state.get("final_payload", {})
+    response_mode = state.get("response_mode", "answer")
+
+    # ── Report artifact ─────────────────────────────────────────────────
+    if response_mode == "report":
+        report_md = final_payload.get("report_markdown")
+        if report_md:
+            # Save report markdown to file
+            from app.artifacts.helpers import save_report_markdown_to_file
+            report_md_path = save_report_markdown_to_file(
+                markdown=report_md,
+                thread_id=thread_id,
+                turn_number=assistant_turn_number,
+            )
+            raw_sections = final_payload.get("report_sections", [])
+            sections_data = []
+            for s in raw_sections:
+                sec: dict[str, Any] = {
+                    "section_id": s.get("section_id", ""),
+                    "title": s.get("title", ""),
+                    "insight_markdown": s.get("insight_markdown", ""),
+                    "limitations": s.get("limitations", []),
+                }
+                chart_img = s.get("chart_image")
+                if chart_img:
+                    sec["chart_image"] = {
+                        "success": chart_img.get("success", False),
+                        "image_url": chart_img.get("image_url"),
+                        "image_format": chart_img.get("image_format", "png"),
+                    }
+                sections_data.append(sec)
+
+            payload = {
+                "report_sections": sections_data,
+            }
+            if report_md_path:
+                payload["report_markdown_path"] = report_md_path
+            # Still include report_markdown text for backward compat in DB
+            payload["report_markdown"] = report_md
+
+            store.save_artifact(
+                TurnArtifact(
+                    thread_id=thread_id,
+                    turn_number=assistant_turn_number,
+                    artifact_type="report",
+                    payload=payload,
+                    created_at=ts,
+                )
+            )
+            logger.info(
+                "Saved report artifact: thread={t}, sections={n}",
+                t=thread_id[:8],
+                n=len(sections_data),
+            )
+
+    # ── Standalone chart artifact ────────────────────────────────────────
+    viz = state.get("visualization", {})
+    if viz and viz.get("success") and viz.get("image_url"):
+        store.save_artifact(
+            TurnArtifact(
+                thread_id=thread_id,
+                turn_number=assistant_turn_number,
+                artifact_type="chart",
+                payload={
+                    "success": True,
+                    "image_url": viz.get("image_url"),
+                    "image_format": viz.get("image_format", "png"),
+                    "image_size_bytes": viz.get("image_size_bytes", 0),
+                    "execution_time_ms": viz.get("execution_time_ms", 0),
+                },
+                created_at=ts,
+            )
+        )
+        logger.info("Saved chart artifact: thread={t}", t=thread_id[:8])

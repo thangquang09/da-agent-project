@@ -163,7 +163,7 @@ def main() -> None:
         "Query completed with confidence={confidence}",
         confidence=result.get("confidence"),
     )
-    # Convert bytes (e.g., PNG image_data) to base64 for JSON serialization
+    # Convert stray bytes to base64 for JSON serialization (heavy data now uses file URLs)
     serializable_result = _make_serializable(result)
     print(json.dumps(serializable_result, ensure_ascii=False, indent=2))
 

@@ -6,6 +6,7 @@ from app.graph.state import TaskState
 from app.llm import LLMClient
 from app.logger import logger
 from app.prompts import prompt_manager
+from app.artifacts.helpers import build_viz_dict_from_result
 from app.tools.visualization import (
     get_visualization_service,
     is_visualization_available,
@@ -63,7 +64,8 @@ def inline_data_worker(task_state: TaskState) -> dict[str, Any]:
             # WorkerArtifact fields
             "artifact_type": "chart",
             "artifact_status": "failed",
-            "artifact_payload": {"error": "No raw data provided"},
+            "artifact_path": "",
+            "metadata": {"error": "No raw data provided"},
             "artifact_evidence": {"source": "input_validation"},
             "artifact_terminal": False,
             "artifact_recommended_action": "clarify",
@@ -79,7 +81,8 @@ def inline_data_worker(task_state: TaskState) -> dict[str, Any]:
             # WorkerArtifact fields
             "artifact_type": "chart",
             "artifact_status": "failed",
-            "artifact_payload": {"error": "Visualization service not available"},
+            "artifact_path": "",
+            "metadata": {"error": "Visualization service not available"},
             "artifact_evidence": {"source": "e2b_check"},
             "artifact_terminal": False,
             "artifact_recommended_action": "clarify",
@@ -99,7 +102,8 @@ def inline_data_worker(task_state: TaskState) -> dict[str, Any]:
                 # WorkerArtifact fields
                 "artifact_type": "chart",
                 "artifact_status": "failed",
-                "artifact_payload": {"error": "Failed to generate visualization code"},
+                "artifact_path": "",
+                "metadata": {"error": "Failed to generate visualization code"},
                 "artifact_evidence": {"source": "llm_code_generation"},
                 "artifact_terminal": False,
                 "artifact_recommended_action": "clarify",
@@ -129,35 +133,34 @@ def inline_data_worker(task_state: TaskState) -> dict[str, Any]:
                 # WorkerArtifact fields
                 "artifact_type": "chart",
                 "artifact_status": "failed",
-                "artifact_payload": {"error": result.error},
+                "artifact_path": "",
+                "metadata": {"error": result.error or "Visualization execution failed"},
                 "artifact_evidence": {"source": "code_execution"},
                 "artifact_terminal": False,
                 "artifact_recommended_action": "clarify",
             }
 
+        viz_dict = build_viz_dict_from_result(
+            result,
+            thread_id=task_state.get("thread_id", "default"),
+            turn_number=0,
+        )
         return {
             "visualization": {
-                "success": True,
-                "image_data": result.image_data,
-                "image_format": result.image_format,
-                "code_executed": result.code_executed,
-                "execution_time_ms": result.execution_time_ms,
+                **viz_dict,
                 "terminal": True,
                 "recommended_next_action": "finalize",
             },
             "status": "success",
-            # WorkerArtifact fields
+            # WorkerArtifact fields — use path instead of raw payload
             "artifact_type": "chart",
             "artifact_status": "success",
-            "artifact_payload": {
-                "image_data": result.image_data,
-                "image_format": result.image_format,
-                "chart_type": "unknown",  # Would need LLM to determine
-                "normalized_rows": len(normalized_rows),
-            },
+            "artifact_path": viz_dict.get("image_url", ""),
             "artifact_evidence": {
                 "source": "inline_data",
                 "normalized_rows": len(normalized_rows),
+                "image_format": viz_dict.get("image_format", "png"),
+                "image_size_bytes": viz_dict.get("image_size_bytes", 0),
             },
             "artifact_terminal": True,
             "artifact_recommended_action": "finalize",
@@ -191,7 +194,8 @@ def inline_data_worker(task_state: TaskState) -> dict[str, Any]:
             # WorkerArtifact fields
             "artifact_type": "chart",
             "artifact_status": "failed",
-            "artifact_payload": {"error": user_error},
+            "artifact_path": "",
+            "metadata": {"error": user_error},
             "artifact_evidence": {"source": "exception_handler"},
             "artifact_terminal": False,
             "artifact_recommended_action": "clarify",

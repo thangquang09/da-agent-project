@@ -2,8 +2,9 @@
 
 export interface VisualizationResponse {
   success: boolean;
-  image_data: string | null; // base64-encoded PNG
+  image_url: string | null; // URL like /artifacts/{thread}/{turn}/chart_xxx.png
   image_format: string;
+  image_size_bytes: number | null;
   execution_time_ms: number;
   error: string | null;
 }
@@ -40,7 +41,7 @@ export interface QueryResponse {
   rows: number | null;
   context_chunks: number | null;
   step_count: number;
-  // Fields returned by backend but not in Pydantic model (extra fields):
+  // Fields that may come through SSE but aren't in the Pydantic model:
   sql_rows?: Record<string, unknown>[];
   sql_row_count?: number;
   result_metadata?: Record<string, unknown> | null;
@@ -106,12 +107,6 @@ export interface UploadedFile {
   context: string;
 }
 
-// SSE event shapes from GET /query/stream
-export interface SSEEvent {
-  event: "started" | "result" | "error";
-  data: Record<string, unknown>;
-}
-
 // Persisted artifact (report, chart) from GET /threads/{id}/artifacts
 export interface TurnArtifact {
   thread_id: string;
@@ -173,6 +168,8 @@ export interface TableInfo {
   columns: TableColumn[];
   row_count?: number;
   original_file?: string;
+  business_context?: string;
+  auto_context?: string;
 }
 
 export interface UploadResponse {
