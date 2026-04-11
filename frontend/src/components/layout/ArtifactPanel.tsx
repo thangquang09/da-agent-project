@@ -1,7 +1,7 @@
 "use client";
 
 import { useChatStore } from "@/stores/chatStore";
-import type { ReportArtifactData } from "@/lib/types";
+import type { ReportArtifactData, VisualizationResponse } from "@/lib/types";
 import { X } from "lucide-react";
 import { ReportView } from "@/components/artifact/ReportView";
 import { SqlView } from "@/components/artifact/SqlView";
@@ -127,7 +127,7 @@ export function ArtifactPanel() {
           <SqlView sql={content.data as string} />
         )}
         {content.type === "chart" && (
-          <ChartView imageUrl={content.data as string} />
+          <ChartView visualizations={content.data as VisualizationResponse[]} />
         )}
         {content.type === "trace" && (
           <TraceTimeline runId={content.data as string} />

@@ -156,6 +156,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               total_cost_usd: null,
               context_type: "default",
               visualization: null,
+              visualizations: [],
               rows: null,
               context_chunks: null,
               step_count: 0,
@@ -192,7 +193,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 used_tools: [], generated_sql: "", evidence: [],
                 error_categories: [], tool_history: [], errors: [],
                 total_token_usage: null, total_cost_usd: null,
-                context_type: "default", visualization: null,
+                context_type: "default", visualization: null, visualizations: [],
                 rows: null, context_chunks: null, step_count: 0,
               };
             }
@@ -204,14 +205,23 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 msg.result.report_sections =
                   (a.payload.report_sections as ReportSectionResponse[]) ?? [];
               } else if (a.artifact_type === "chart") {
-                msg.result.visualization = {
-                  success: true,
-                  image_url: (a.payload.image_url as string) ?? null,
-                  image_format: (a.payload.image_format as string) ?? "png",
-                  image_size_bytes: null,
-                  execution_time_ms: (a.payload.execution_time_ms as number) ?? 0,
-                  error: null,
-                };
+                const items = Array.isArray(a.payload.items)
+                  ? (a.payload.items as import("@/lib/types").VisualizationResponse[])
+                  : [];
+                const visualizations = items.length > 0
+                  ? items
+                  : [
+                      {
+                        success: true,
+                        image_url: (a.payload.image_url as string) ?? null,
+                        image_format: (a.payload.image_format as string) ?? "png",
+                        image_size_bytes: null,
+                        execution_time_ms: (a.payload.execution_time_ms as number) ?? 0,
+                        error: null,
+                      },
+                    ];
+                msg.result.visualizations = visualizations.filter((viz) => !!viz?.image_url);
+                msg.result.visualization = msg.result.visualizations.at(-1) ?? null;
               }
             }
           }

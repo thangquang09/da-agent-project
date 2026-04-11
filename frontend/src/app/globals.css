@@ -107,34 +107,34 @@ body {
 /* ─── Report surfaces ────────────────────────────────────────────────────────── */
 .report-surface {
   background:
-    radial-gradient(circle at top right, rgba(14, 165, 233, 0.12), transparent 28%),
-    linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+    radial-gradient(circle at top right, rgba(120, 115, 108, 0.08), transparent 30%),
+    linear-gradient(180deg, #fcfcf9 0%, #f6f4ef 100%);
 }
 
 .dark .report-surface {
   background:
-    radial-gradient(circle at top right, rgba(14, 165, 233, 0.06), transparent 28%),
-    linear-gradient(180deg, #0f172a 0%, #020617 100%);
+    radial-gradient(circle at top right, rgba(128, 128, 128, 0.09), transparent 34%),
+    linear-gradient(180deg, #1a1a1a 0%, #141414 100%);
 }
 
 .report-hero {
   background:
-    linear-gradient(135deg, rgba(14, 165, 233, 0.1), rgba(255, 255, 255, 0.8)),
-    linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+    linear-gradient(135deg, rgba(98, 93, 85, 0.08), rgba(252, 252, 249, 0.9)),
+    linear-gradient(180deg, #f8f6f2 0%, #fcfcf9 100%);
 }
 
 .dark .report-hero {
   background:
-    linear-gradient(135deg, rgba(14, 165, 233, 0.05), rgba(15, 23, 42, 0.9)),
-    linear-gradient(180deg, #0f172a 0%, #020617 100%);
+    linear-gradient(135deg, rgba(138, 138, 138, 0.08), rgba(23, 23, 23, 0.94)),
+    linear-gradient(180deg, #1f1f1f 0%, #171717 100%);
 }
 
 .report-prose {
-  color: #0f172a;
+  color: #2f2f2f;
 }
 
 .dark .report-prose {
-  color: #f1f5f9;
+  color: #e8e8e8;
 }
 
 .report-prose h1 {
@@ -149,22 +149,22 @@ body {
   margin-top: 2.25rem;
   margin-bottom: 0.75rem;
   padding-top: 1rem;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid #dfddd7;
 }
 
 .dark .report-prose h2 {
-  border-top-color: #334155;
+  border-top-color: #323232;
 }
 
 .report-prose h3 {
   font-size: 1rem;
-  color: #0f172a;
+  color: #2f2f2f;
   margin-top: 1.25rem;
   margin-bottom: 0.5rem;
 }
 
 .dark .report-prose h3 {
-  color: #f1f5f9;
+  color: #ededed;
 }
 
 .report-prose p,
@@ -180,11 +180,11 @@ body {
 }
 
 .report-prose strong {
-  color: #020617;
+  color: #1f1f1f;
 }
 
 .dark .report-prose strong {
-  color: #f8fafc;
+  color: #f3f3f3;
 }
 
 /* ─── Typing animation ───────────────────────────────────────────────────────── */

@@ -38,6 +38,7 @@ export interface QueryResponse {
   total_cost_usd: number | null;
   context_type: string;
   visualization: VisualizationResponse | null;
+  visualizations: VisualizationResponse[];
   rows: number | null;
   context_chunks: number | null;
   step_count: number;

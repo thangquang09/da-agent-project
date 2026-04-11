@@ -22,10 +22,15 @@ export function AssistantMessage({ message }: AssistantMessageProps) {
   const agentStatus = useChatStore((s) => s.agentStatus);
   const result = message.result;
   const isReportResponse = result?.response_mode === "report" && !!result?.report_markdown;
+  const chartVisualizations = result?.visualizations?.length
+    ? result.visualizations
+    : result?.visualization?.image_url
+      ? [result.visualization]
+      : [];
 
   const hasReport = !!result?.report_markdown;
   const hasSql = !!result?.generated_sql;
-  const hasChart = !!result?.visualization?.image_url;
+  const hasChart = chartVisualizations.length > 0;
   const hasTrace = !!result?.run_id;
   const reportArtifactData = result?.report_markdown
     ? {
@@ -114,8 +119,10 @@ export function AssistantMessage({ message }: AssistantMessageProps) {
                   onClick={() =>
                     openArtifact({
                       type: "chart",
-                      title: "Visualization",
-                      data: result.visualization!.image_url,
+                      title: chartVisualizations.length > 1
+                        ? `Visualizations (${chartVisualizations.length})`
+                        : "Visualization",
+                      data: chartVisualizations,
                       messageId: message.id,
                     })
                   }

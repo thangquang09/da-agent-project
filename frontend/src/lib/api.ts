@@ -2,7 +2,6 @@ import type {
   QueryResponse,
   ThreadInfo,
   ConversationTurn,
-  HealthResponse,
   TraceData,
   TurnArtifact,
   UploadResponse,
@@ -20,25 +19,10 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-// ─── Health ────────────────────────────────────────────────────────────────
-
-export async function healthCheck(): Promise<boolean> {
-  try {
-    await fetchJSON<HealthResponse>("/health");
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // ─── Threads ───────────────────────────────────────────────────────────────
 
 export function listThreads(limit = 50): Promise<ThreadInfo[]> {
   return fetchJSON<ThreadInfo[]>(`/threads?limit=${limit}`);
-}
-
-export function getThread(threadId: string): Promise<ThreadInfo> {
-  return fetchJSON<ThreadInfo>(`/threads/${threadId}`);
 }
 
 export function getThreadHistory(
@@ -56,28 +40,6 @@ export function getThreadArtifacts(threadId: string): Promise<TurnArtifact[]> {
 
 export async function deleteThread(threadId: string): Promise<void> {
   await fetch(`${API_URL}/threads/${threadId}`, { method: "DELETE" });
-}
-
-// ─── Query (non-streaming) ────────────────────────────────────────────────
-
-export function postQuery(
-  query: string,
-  threadId: string,
-  opts?: {
-    userSemanticContext?: string;
-    version?: string;
-  }
-): Promise<QueryResponse> {
-  return fetchJSON<QueryResponse>("/query", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      query,
-      thread_id: threadId,
-      user_semantic_context: opts?.userSemanticContext ?? null,
-      version: opts?.version ?? "v3",
-    }),
-  });
 }
 
 // ─── Query with file upload (multipart) ──────────────────────────────────
@@ -121,12 +83,17 @@ export function getTrace(runId: string): Promise<TraceData> {
 // ─── Data Upload ────────────────────────────────────────────────────────────
 
 export async function uploadFiles(
-  files: { name: string; data: ArrayBuffer }[]
+  files: { name: string; data: ArrayBuffer; context?: string }[]
 ): Promise<UploadResponse> {
   const form = new FormData();
+  const contextsMap: Record<string, string> = {};
   for (const f of files) {
     const blob = new Blob([f.data], { type: "text/csv" });
     form.append("files", blob, f.name);
+    if (f.context) contextsMap[f.name] = f.context;
+  }
+  if (Object.keys(contextsMap).length > 0) {
+    form.append("contexts_json", JSON.stringify(contextsMap));
   }
 
   return fetchJSON<UploadResponse>("/data/upload", {
@@ -137,4 +104,15 @@ export async function uploadFiles(
 
 export function getTables(): Promise<TablesResponse> {
   return fetchJSON<TablesResponse>("/data/tables");
+}
+
+export async function updateTableContext(
+  tableName: string,
+  context: string
+): Promise<{ table_name: string; business_context: string }> {
+  return fetchJSON(`/data/tables/${encodeURIComponent(tableName)}/context`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ context }),
+  });
 }
