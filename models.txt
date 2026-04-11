@@ -1,4 +1,3 @@
-gh/gpt-4o
+gh/gpt-4.1
 gh/gpt-4o-mini
-gh/gpt-5-mini
-cu/default
+kr/claude-sonnet-4.5
