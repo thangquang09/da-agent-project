@@ -54,16 +54,18 @@ def test_v3_multi_query_uses_parallel_tool(fake_v3_llm, analytics_db_path):
     assert "358" in result["answer"]
 
 
-def test_v3_rag_stub_path_is_supported(fake_v3_llm, analytics_db_path):
+def test_v3_definition_only_query_requests_clarification(
+    fake_v3_llm, analytics_db_path
+):
     result = run_query(
         "Retention D1 là gì?",
         db_path=analytics_db_path,
         version="v3",
-        thread_id="v3-rag-stub",
+        thread_id="v3-definition-out-of-scope",
     )
 
-    assert result["intent"] == "rag"
-    assert result["answer"] == "Không có thông tin"
+    assert result["confidence"] == "low"
+    assert result["answer"].startswith("[CLARIFY]")
 
 
 def test_v3_simple_male_query_stays_on_fast_path(fake_v3_llm, analytics_db_path):
@@ -275,9 +277,19 @@ def test_profiler_sampler_ignores_uploaded_tables_not_in_schema(monkeypatch):
 
     def _fake_query_sql(sql: str, db_path=None):  # noqa: ANN001, ARG001
         executed_sql.append(sql)
-        if "ORDER BY RANDOM()" in sql:
+        if 'SELECT * FROM "valid_table" LIMIT 100' == sql:
             return {"rows": [{"id": 1, "value": 10}], "columns": ["id", "value"]}
-        return {"rows": [{"total_rows": 1, "distinct_count": 1, "null_count": 0}]}
+        return {
+            "rows": [
+                {
+                    "__total_rows": 42,
+                    "__distinct__id": 42,
+                    "__nulls__id": 0,
+                    "__distinct__value": 10,
+                    "__nulls__value": 1,
+                }
+            ]
+        }
 
     monkeypatch.setattr("app.graph.report_subgraph.query_sql", _fake_query_sql)
 
@@ -292,7 +304,32 @@ def test_profiler_sampler_ignores_uploaded_tables_not_in_schema(monkeypatch):
     )
 
     assert list(update["report_sample_data"].keys()) == ["valid_table"]
-    assert all('"valid_table"' in sql for sql in executed_sql)
+    assert len(executed_sql) == 2
+    assert executed_sql[0] == 'SELECT * FROM "valid_table" LIMIT 100'
+    assert 'COUNT(*) AS "__total_rows"' in executed_sql[1]
+    assert 'COUNT(DISTINCT "id") AS "__distinct__id"' in executed_sql[1]
+    assert (
+        'SUM(CASE WHEN "value" IS NULL THEN 1 ELSE 0 END) AS "__nulls__value"'
+        in executed_sql[1]
+    )
+    assert update["report_sample_data"]["valid_table"]["table_row_count"] == 42
+
+
+def test_report_finalize_does_not_write_global_report_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    update = report_finalize_node(
+        {
+            "critic_verdict": "APPROVED",
+            "report_plan": {"title": "Titanic Report"},
+            "report_draft": "# Titanic Report\n\n## Findings\n\nGrounded draft.\n\n## Recommendations\n\n1. Check caveats.",
+            "report_sections": [],
+            "step_count": 1,
+        }
+    )
+
+    assert update["final_payload"]["report_markdown"].startswith("# Titanic Report")
+    assert not (tmp_path / "reports" / "report.md").exists()
 
 
 def test_semantic_validator_flags_average_of_rates_risk():

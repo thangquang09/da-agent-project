@@ -303,7 +303,7 @@ Mỗi run capture: `run_id`, `thread_id`, routing decision, `tool_history`, `val
 | **Input**         | `user_query`, `target_db_path`, `uploaded_files`, `uploaded_file_data`              | GraphInputState             |
 | **Context**       | `schema_context`, `xml_database_context`, `session_context`, `thread_id`            | inject_session_context      |
 | **Grounding**     | `task_profile: TaskProfile`, `intent`, `confidence`                                 | task_grounder               |
-| **Execution**     | `artifacts: list[WorkerArtifact]`, `task_results`, `visualization`, `response_mode` | leader_agent, workers       |
+| **Execution**     | `artifacts: list[WorkerArtifact]`, `task_results`, `visualization`, `visualizations: list[dict]`, `response_mode` | leader_agent, workers       |
 | **Output**        | `final_answer`, `final_payload: AnswerPayload`, `report`_*                          | synthesize, report_subgraph |
 | **Memory**        | `conversation_turn`, `last_action`, `result_ref`                                    | memory nodes                |
 | **Observability** | `run_id`, `step_count`, `tool_history`, `errors`                                    | all nodes                   |

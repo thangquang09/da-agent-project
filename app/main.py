@@ -95,7 +95,6 @@ def run_query(
         payload["step_count"] = output.get("step_count", payload.get("step_count"))
         payload["tool_history"] = output.get("tool_history", [])
         payload["rows"] = _extract_numeric_evidence(payload, "rows")
-        payload["context_chunks"] = _extract_numeric_evidence(payload, "context_chunks")
         payload["error_categories"] = [
             str(item.get("category", "UNKNOWN")) for item in payload.get("errors", [])
         ]
@@ -108,7 +107,7 @@ def run_query(
             "run_id": run_cfg.run_id,
             "thread_id": run_cfg.thread_id,
             "answer": f"Run failed: {exc}",
-            "evidence": ["intent=unknown", "rows=0", "context_chunks=0"],
+            "evidence": ["intent=unknown", "rows=0"],
             "confidence": "low",
             "used_tools": [],
             "generated_sql": "",
@@ -119,7 +118,6 @@ def run_query(
             "step_count": 0,
             "tool_history": [],
             "rows": 0,
-            "context_chunks": 0,
             "error_categories": ["SYNTHESIS_ERROR"],
             "total_token_usage": None,
             "total_cost_usd": None,

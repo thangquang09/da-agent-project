@@ -242,57 +242,6 @@ def inline_data_worker(task_state: TaskState) -> dict[str, Any]
 
 ---
 
-## `retrieve_rag_answer()`
-
-**File:** `app/tools/retrieve_rag_answer.py`
-
-### Signature
-
-```python
-def retrieve_rag_answer(query: str, top_k: int = 4) -> dict[str, Any]
-```
-
-### Input
-
-| Field | Type | Default |
-|-------|------|---------|
-| `query` | `str` | — |
-| `top_k` | `int` | 4 |
-
-### Current Status
-
-> **Stub implementation.** Returns empty context. Full RAG not yet integrated.
-
-### Returns
-
-```python
-{
-    "query": str,
-    "top_k": int,
-    "answer": "Không có thông tin",
-    "sources": list,
-    "status": "stub",
-
-    # WorkerArtifact fields
-    "artifact_type": "rag_context",
-    "artifact_status": "failed",  # No context available
-    "artifact_path": "",
-        "metadata": {
-        "chunks": [],
-        "chunk_count": 0,
-        "answer": "Không có thông tin",
-    },
-    "artifact_evidence": {
-        "source": "rag_index",
-        "query": str,
-    },
-    "artifact_terminal": False,
-    "artifact_recommended_action": "clarify",
-}
-```
-
----
-
 ## `generate_report` (report_subgraph)
 
 **File:** `app/graph/report_subgraph.py`
@@ -394,7 +343,7 @@ All workers MUST return these fields for `artifact_evaluator` consumption:
 ### `artifact_evaluator` Logic (`app/graph/nodes.py` lines 918+)
 
 1. **Coverage check** — ensures `required_capabilities` from `TaskProfile` are met
-2. **Retry check** — detects failed artifacts with `retry_sql`/`ask_rag`
+2. **Retry check** — detects failed artifacts with `retry_sql`
 3. **Terminal check** — if any artifact is terminal, can finalize
 4. **Confidence check** — low confidence → `wait_for_user`
 5. **Max steps** — exceeds limit → force finalize
@@ -405,6 +354,6 @@ All workers MUST return these fields for `artifact_evaluator` consumption:
 {
     "decision": "finalize" | "continue" | "retry" | "wait_for_user",
     "reason": str,
-    "retry_tool": str | None,  # "ask_sql_analyst" | "retrieve_rag_answer"
+    "retry_tool": str | None,  # "ask_sql_analyst"
 }
 ```

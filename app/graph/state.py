@@ -4,7 +4,7 @@ import operator
 from typing import Annotated, Any, Literal, TypedDict
 
 
-Intent = Literal["sql", "rag", "mixed", "unknown"]
+Intent = Literal["sql", "mixed", "unknown"]
 Confidence = Literal["high", "medium", "low"]
 ContextType = Literal["user_provided", "csv_auto", "mixed", "default"]
 ResponseMode = Literal["answer", "report"]
@@ -29,10 +29,8 @@ class TaskProfile(TypedDict, total=False):
     """
 
     task_mode: Literal["simple", "mixed", "ambiguous", "chitchat"]
-    data_source: Literal[
-        "inline_data", "uploaded_table", "database", "knowledge", "mixed", "none"
-    ]
-    required_capabilities: list[Literal["sql", "rag", "visualization", "report"]]
+    data_source: Literal["inline_data", "uploaded_table", "database", "mixed", "none"]
+    required_capabilities: list[Literal["sql", "visualization", "report"]]
     followup_mode: Literal["fresh_query", "followup", "refine_previous_result"]
     confidence: Literal["high", "medium", "low"]
     reasoning: str  # Why this classification was chosen
@@ -46,7 +44,7 @@ class WorkerArtifact(TypedDict, total=False):
     (row_count, columns, image_format, etc.) — never raw bytes or base64.
     """
 
-    artifact_type: Literal["sql_result", "rag_context", "chart", "report_draft"]
+    artifact_type: Literal["sql_result", "chart", "report_draft"]
     status: Literal["success", "failed", "partial"]
     artifact_path: str  # relative path to file in artifacts/ dir
     metadata: dict[
@@ -55,7 +53,7 @@ class WorkerArtifact(TypedDict, total=False):
     evidence: dict[str, Any]
     terminal: bool
     recommended_next_action: Literal[
-        "finalize", "visualize", "retry_sql", "ask_rag", "clarify", "none"
+        "finalize", "visualize", "retry_sql", "clarify", "none"
     ]
 
 
@@ -126,7 +124,6 @@ class AgentState(TypedDict, total=False):
     uploaded_files: list[str]
     uploaded_file_data: list[dict[str, Any]]
     registered_tables: list[str]
-    retrieved_context: list[dict[str, Any]]
     generated_sql: str
     validated_sql: str
     sql_result: dict[str, Any]

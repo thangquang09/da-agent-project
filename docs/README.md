@@ -16,7 +16,7 @@ DA Agent Lab — Hybrid Architecture v3
 | `process_uploaded_files`  | Tool       | Parse file uploads, register tables                                 |
 | `inject_session_context`  | Memory     | Load conversation history via `thread_id`                           |
 | `task_grounder`           | Classifier | LLM (mini) → `TaskProfile` (mode, source, capabilities, confidence) |
-| `leader_agent`            | Supervisor | 5-step tool-calling loop — SQL, RAG, viz, report                    |
+| `leader_agent`            | Supervisor | 5-step tool-calling loop — SQL, viz, report                         |
 | `artifact_evaluator`      | Evaluator  | Deterministic: finalize / continue / retry / **wait_for_user**      |
 | `clarify_question_node`   | Interrupt  | Halt → show `[CLARIFY]` question → **END** (no memory save)         |
 | `capture_action_node`     | Memory     | Save `last_action`, `conversation_turn`                             |
@@ -82,7 +82,7 @@ DA Agent Lab — Hybrid Architecture v3
 - **Graph flow**: `app/graph/graph.py` → `build_sql_v3_graph()`
 - **State model**: `app/graph/state.py` → `AgentState`, `TaskProfile`, `WorkerArtifact`
 - **Nodes**: `app/graph/nodes.py`
-- **Workers**: `app/graph/standalone_visualization.py`, `app/tools/retrieve_rag_answer.py`, `app/tools/table_metadata.py`
+- **Workers**: `app/graph/standalone_visualization.py`, `app/tools/table_metadata.py`
 - **Table metadata**: `app/tools/table_metadata.py` — business context persistence (`user_data.table_contexts`)
 - **Observability**: `app/observability/tracer.py`
 - **Artifact file store**: `app/artifacts/file_store.py`, `app/artifacts/helpers.py`
@@ -96,4 +96,3 @@ DA Agent Lab — Hybrid Architecture v3
 2. Mỗi folder con có `AGENTS.md` / `CLAUDE.md` mô tả phạm vi.
 3. File mới đặt tên rõ ràng: `YYYY-MM-DD_topic.md` cho research notes.
 4. Không quét toàn bộ `docs/` nếu không cần — đọc đúng file.
-

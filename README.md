@@ -1,6 +1,6 @@
 # DA Agent Lab
 
-**LangGraph-based Data Analyst Agent** — trả lời business/data questions qua SQL tools, RAG retrieval, Visualization, và Report generation, với full observability.
+**LangGraph-based Data Analyst Agent** — trả lời business/data questions qua SQL tools, Visualization, và Report generation, với full observability.
 
 ![DA Agent Lab — Architecture](docs/_media/architecture_flow.png)
 
@@ -11,7 +11,7 @@
 DA Agent Lab nhận câu hỏi tiếng Việt/tiếng Anh về business data — từ đơn giản ("DAU hôm qua?") đến phức tạp ("So sánh retention cohort tháng này với tháng trước rồi vẽ chart") — và tự động hoàn thiện:
 
 - **Phân loại & Ground** — Task Grounder (LLM mini) phân loại query thành `TaskProfile` (mode, source, required capabilities, confidence). Nếu query ambiguous → halt và hỏi user.
-- **Tool orchestration** — Leader Agent điều phối 5 worker tools qua tool-calling loop (≤5 steps): SQL query, RAG retrieval, Visualization, Report generation.
+- **Tool orchestration** — Leader Agent điều phối các worker tool qua tool-calling loop (≤5 steps): SQL query, Visualization, Report generation.
 - **Artifact evaluation** — Mỗi worker output được chuẩn hóa thành `WorkerArtifact`. Artifact Evaluator (deterministic code) quyết định: cần thêm tool? đủ rồi? hay cần hỏi user?
 - **Synthesize & trace** — Final Composer tổng hợp câu trả lời. Toàn bộ run được trace JSONL + Langfuse để replay và debug.
 
@@ -46,13 +46,12 @@ uv run python -m app.main "Top 5 sản phẩm bán chạy nhất?"
 
 ## Available Tools
 
-Agent exposed **5 high-level tools** qua Leader Agent tool-calling surface:
+Agent exposed **4 high-level tools** qua Leader Agent tool-calling surface:
 
 | Tool | Trigger | What it does |
 |------|---------|-------------|
 | `ask_sql_analyst` | Data questions, counting, ranking, trend, comparison | Schema lookup → SQL generation → validate → execute → analyze |
 | `ask_sql_analyst_parallel` | Multi-part questions (2+ independent sub-queries) | Fan-out parallel SQL workers, merge results |
-| `retrieve_rag_answer` | Business definitions, policy, qualitative context | Vector similarity search in uploaded docs |
 | `create_visualization` | Inline data values in query (e.g. "vẽ biểu đồ 10, 20, 30") | E2B sandbox → Python/Altair chart |
 | `generate_report` | Explicit multi-section report request | 4-phase pipeline: plan → execute → write → critique |
 
@@ -120,7 +119,7 @@ da-agent-project/
 │   ├── memory/              # ConversationMemoryStore (SQLite)
 │   ├── observability/       # RunTracer (JSONL + Langfuse)
 │   ├── prompts/             # All LLM prompt definitions
-│   ├── tools/               # SQL safety, RAG, schema tools
+│   ├── tools/               # SQL safety, schema, upload, metadata tools
 │   └── main.py             # run_query() — UI-agnostic entry
 ├── backend/                 # FastAPI HTTP layer
 ├── mcp_server/             # FastMCP tool surface
@@ -133,4 +132,3 @@ da-agent-project/
     ├── thangquang09/        # Tiếng Việt — architecture, system design, interview
     └── _tech_specs/         # English — state model, worker contracts, observability
 ```
-

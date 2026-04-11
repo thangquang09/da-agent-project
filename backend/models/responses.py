@@ -62,7 +62,6 @@ class QueryResponse(BaseModel):
     visualization: VisualizationResponse | None = None
     visualizations: list[VisualizationResponse] = []
     rows: int | None = None
-    context_chunks: int | None = None
     step_count: int = 0
 
 

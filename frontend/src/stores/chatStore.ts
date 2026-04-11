@@ -158,7 +158,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               visualization: null,
               visualizations: [],
               rows: null,
-              context_chunks: null,
               step_count: 0,
             };
           }
@@ -191,11 +190,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 intent: "unknown", intent_reason: "",
                 response_mode: "answer", confidence: "medium",
                 used_tools: [], generated_sql: "", evidence: [],
-                error_categories: [], tool_history: [], errors: [],
-                total_token_usage: null, total_cost_usd: null,
-                context_type: "default", visualization: null, visualizations: [],
-                rows: null, context_chunks: null, step_count: 0,
-              };
+                 error_categories: [], tool_history: [], errors: [],
+                 total_token_usage: null, total_cost_usd: null,
+                 context_type: "default", visualization: null, visualizations: [],
+                 rows: null, step_count: 0,
+               };
             }
 
             for (const a of turnArtifacts) {

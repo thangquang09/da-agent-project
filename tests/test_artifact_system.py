@@ -24,6 +24,7 @@ from app.graph.nodes import (
     _format_leader_plan,
     _normalize_leader_plan,
     _evaluate_artifacts,
+    ask_sql_analyst_parallel_tool,
     artifact_evaluator,
 )
 from app.graph.task_grounder import _normalize_capabilities
@@ -199,6 +200,65 @@ class FakeLeaderPlanLLM:
         }
 
 
+class FakeLeaderParallelVisualizationLLM:
+    """Returns a parallel SQL tool call with per-task visualization flags."""
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def chat_completion(self, **kwargs):
+        self.call_count += 1
+        if self.call_count == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "action": "tool",
+                                    "tool": "ask_sql_analyst_parallel",
+                                    "args": {
+                                        "tasks": [
+                                            {
+                                                "task_id": "1",
+                                                "query": "Đếm nam nữ trong Titanic",
+                                                "requires_visualization": True,
+                                            },
+                                            {
+                                                "task_id": "2",
+                                                "query": "Phân tích family size và mortality",
+                                                "requires_visualization": True,
+                                            },
+                                        ]
+                                    },
+                                    "reason": "Need two independent SQL analyses with charts",
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ]
+            }
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "action": "final",
+                                "answer": "Đã tạo hai biểu đồ từ hai truy vấn SQL song song.",
+                                "confidence": "high",
+                                "intent": "sql",
+                                "reason": "Done",
+                            },
+                            ensure_ascii=False,
+                        )
+                    }
+                }
+            ]
+        }
+
+
 def test_leader_agent_returns_artifacts_key(monkeypatch):
     """leader_agent must return state containing the 'artifacts' key."""
     from app.graph.nodes import leader_agent
@@ -276,7 +336,7 @@ def test_leader_agent_artifacts_preserve_on_loop_back(monkeypatch):
 
     # State already carrying one artifact (simulating loop-back from artifact_evaluator)
     existing_artifact = {
-        "artifact_type": "rag_context",
+        "artifact_type": "chart",
         "status": "success",
         "payload": {},
         "evidence": {},
@@ -293,7 +353,7 @@ def test_leader_agent_artifacts_preserve_on_loop_back(monkeypatch):
 
     # The existing artifact must be preserved
     artifact_types = {a.get("artifact_type") for a in artifacts}
-    assert "rag_context" in artifact_types, "Loop-back must preserve existing artifacts"
+    assert "chart" in artifact_types, "Loop-back must preserve existing artifacts"
 
 
 def test_task_grounder_report_capability_overrides_mixed_caps():
@@ -776,6 +836,135 @@ def test_leader_agent_records_micro_plan_in_tool_history(monkeypatch):
     assert result["final_answer"] == "Danh mục A và khu vực North giảm mạnh nhất."
 
 
+def test_leader_agent_preserves_parallel_visualization_flags(monkeypatch):
+    from app.graph.nodes import leader_agent
+
+    fake_llm = FakeLeaderParallelVisualizationLLM()
+    captured: dict[str, list[dict[str, object]]] = {}
+
+    def fake_parallel_tool(state, tasks, parent_query):  # noqa: ANN001
+        captured["tasks"] = tasks
+        return {
+            "status": "ok",
+            "task_count": len(tasks),
+            "execution_mode": "parallel",
+            "answer_summary": "Parallel SQL completed with charts.",
+            "sql_result": {"row_count": 2, "columns": ["label", "value"], "rows": []},
+            "generated_sql": "SELECT 1",
+            "validated_sql": "SELECT 1",
+            "tool_history": [],
+            "errors": [],
+            "result_ref": None,
+            "visualization": {
+                "success": True,
+                "image_url": "/artifacts/test/chart_1.png",
+            },
+            "visualizations": [
+                {"success": True, "image_url": "/artifacts/test/chart_1.png"},
+                {"success": True, "image_url": "/artifacts/test/chart_2.png"},
+            ],
+            "task_results": [],
+            "artifact_terminal": True,
+            "artifact_recommended_action": "finalize",
+        }
+
+    monkeypatch.setattr("app.graph.nodes.LLMClient.from_env", lambda: fake_llm)
+    monkeypatch.setattr(
+        "app.graph.nodes.ask_sql_analyst_parallel_tool", fake_parallel_tool
+    )
+
+    result = leader_agent(_make_minimal_state())
+
+    assert captured["tasks"] == [
+        {
+            "task_id": "1",
+            "query": "Đếm nam nữ trong Titanic",
+            "requires_visualization": True,
+        },
+        {
+            "task_id": "2",
+            "query": "Phân tích family size và mortality",
+            "requires_visualization": True,
+        },
+    ]
+    assert len(result["final_payload"]["visualizations"]) == 2
+
+
+def test_parallel_sql_tool_collects_visualizations_from_subtasks(monkeypatch):
+    class FakeAggregationLLM:
+        def chat_completion(self, **kwargs):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Hai truy vấn SQL đã được tổng hợp thành công."
+                        }
+                    }
+                ]
+            }
+
+    def fake_sql_tool(state, query, **kwargs):  # noqa: ANN001
+        requires_visualization = kwargs.get("requires_visualization", False)
+        chart_name = "gender" if "nam nữ" in query.lower() else "family"
+        visualization = (
+            {
+                "success": True,
+                "image_url": f"/artifacts/test/{chart_name}.png",
+                "image_format": "png",
+                "image_size_bytes": 128,
+            }
+            if requires_visualization
+            else None
+        )
+        return {
+            "status": "ok",
+            "answer_summary": f"Done: {query}",
+            "sql_result": {
+                "row_count": 1,
+                "columns": ["label", "value"],
+                "rows": [{"label": chart_name, "value": 1}],
+            },
+            "generated_sql": "SELECT 1",
+            "validated_sql": "SELECT 1",
+            "result_ref": None,
+            "visualization": visualization,
+            "visualizations": [visualization] if visualization else [],
+            "tool_history": [],
+            "errors": [],
+            "confidence": "high",
+            "artifact_terminal": True,
+            "artifact_recommended_action": "finalize",
+        }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.LLMClient.from_env", lambda: FakeAggregationLLM()
+    )
+    monkeypatch.setattr("app.graph.nodes.ask_sql_analyst_tool", fake_sql_tool)
+
+    result = ask_sql_analyst_parallel_tool(
+        _make_minimal_state(),
+        tasks=[
+            {
+                "task_id": "1",
+                "query": "Đếm nam nữ trong Titanic",
+                "requires_visualization": True,
+            },
+            {
+                "task_id": "2",
+                "query": "Phân tích family size và mortality",
+                "requires_visualization": True,
+            },
+        ],
+        parent_query="Titanic analysis",
+    )
+
+    assert result["status"] == "ok"
+    assert len(result["visualizations"]) == 2
+    assert result["visualizations"][0]["image_url"].endswith("gender.png")
+    assert result["visualizations"][1]["image_url"].endswith("family.png")
+    assert result["visualization"]["image_url"].endswith("gender.png")
+
+
 # =============================================================================
 # Fix 3 — artifact_evaluator node wired into graph
 # =============================================================================
@@ -865,7 +1054,7 @@ def test_evaluate_artifacts_decision_continue_when_capabilities_missing():
         "task_profile": {
             "task_mode": "mixed",
             "data_source": "mixed",
-            "required_capabilities": ["sql", "rag"],  # rag not covered
+            "required_capabilities": ["sql", "visualization"],
             "followup_mode": "fresh_query",
             "confidence": "medium",
             "reasoning": "mixed query",
@@ -874,7 +1063,7 @@ def test_evaluate_artifacts_decision_continue_when_capabilities_missing():
     }
     result = _evaluate_artifacts(state)
     assert result["artifact_evaluation"]["decision"] == "continue"
-    assert "rag_context" in result["artifact_evaluation"]["missing_types"]
+    assert "chart" in result["artifact_evaluation"]["missing_types"]
 
 
 def test_evaluate_artifacts_decision_finalize_when_all_caps_covered():
@@ -890,7 +1079,7 @@ def test_evaluate_artifacts_decision_finalize_when_all_caps_covered():
                 "recommended_next_action": "finalize",
             },
             {
-                "artifact_type": "rag_context",
+                "artifact_type": "chart",
                 "status": "success",
                 "payload": {},
                 "evidence": {},
@@ -901,7 +1090,7 @@ def test_evaluate_artifacts_decision_finalize_when_all_caps_covered():
         "task_profile": {
             "task_mode": "mixed",
             "data_source": "mixed",
-            "required_capabilities": ["sql", "rag"],
+            "required_capabilities": ["sql", "visualization"],
             "followup_mode": "fresh_query",
             "confidence": "high",
             "reasoning": "both covered",

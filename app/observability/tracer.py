@@ -22,7 +22,6 @@ NODE_TO_FAILURE = {
     "generate_sql": "SQL_GENERATION_ERROR",
     "validate_sql_node": "SQL_VALIDATION_ERROR",
     "execute_sql_node": "SQL_EXECUTION_ERROR",
-    "retrieve_context_node": "RAG_RETRIEVAL_ERROR",
     "synthesize_answer": "SYNTHESIS_ERROR",
 }
 
@@ -83,7 +82,6 @@ def _state_summary(state: dict[str, Any]) -> dict[str, Any]:
                 if isinstance(state.get("sql_result"), dict)
                 else None
             ),
-            "retrieved_context_count": len(state.get("retrieved_context", []) or []),
             "errors": _safe_jsonable(state.get("errors", [])),
         }
     )
@@ -361,15 +359,6 @@ class RunTracer:
         latency_ms = round((time.perf_counter() - self.started_perf) * 1000, 2)
         used_tools = [str(item) for item in payload.get("used_tools", [])]
         error_categories = [str(cat) for cat in payload.get("error_categories", [])]
-        context_chunks = payload.get("context_chunks")
-        if (
-            payload.get("intent") in {"rag", "mixed"}
-            and isinstance(context_chunks, int)
-            and context_chunks == 0
-            and "RAG_RETRIEVAL_ERROR" not in error_categories
-        ):
-            error_categories.append("RAG_IRRELEVANT_CONTEXT")
-
         row_count = payload.get("rows")
         if (
             isinstance(row_count, int)

@@ -186,7 +186,6 @@ function RunInfoBar({ run }: { run: TraceData["run"] }) {
 
   const intentColor: Record<string, string> = {
     sql: "bg-blue-50 text-blue-700",
-    rag: "bg-purple-50 text-purple-700",
     mixed: "bg-teal-50 text-teal-700",
     report: "bg-amber-50 text-amber-700",
     unknown: "bg-slate-50 text-slate-600",

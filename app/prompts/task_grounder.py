@@ -13,7 +13,6 @@ TASK_GROUNDER_PROMPT_DEFINITION = PromptDefinition(
                 "## DA Agent Capabilities\n"
                 "The DA Agent is a data analysis assistant that can:\n"
                 "- Query SQL databases (count, filter, aggregate, rank, compare)\n"
-                "- Search a RAG knowledge base for business definitions, policies, metrics\n"
                 "- Generate data visualizations (bar, line, pie, scatter charts)\n"
                 "- Produce detailed multi-section analytical reports with charts\n"
                 "- Analyze user-uploaded CSV/Excel files\n\n"
@@ -22,29 +21,27 @@ TASK_GROUNDER_PROMPT_DEFINITION = PromptDefinition(
                 "Analyze the user's query and return EXACTLY ONE JSON object:\n\n"
                 "{\n"
                 '  "task_mode": "simple" | "mixed" | "ambiguous" | "chitchat",\n'
-                '  "data_source": "inline_data" | "uploaded_table" | "database" | "knowledge" | "mixed" | "none",\n'
-                '  "required_capabilities": ["sql"] | ["rag"] | ["sql", "rag"] | ["visualization"] | ["report"] | [],\n'
+                '  "data_source": "inline_data" | "uploaded_table" | "database" | "mixed" | "none",\n'
+                '  "required_capabilities": ["sql"] | ["visualization"] | ["sql", "visualization"] | ["report"] | [],\n'
                 '  "followup_mode": "fresh_query" | "followup" | "refine_previous_result",\n'
                 '  "confidence": "high" | "medium" | "low",\n'
                 '  "reasoning": "Brief explanation of the classification"\n'
                 "}\n\n"
                 "**task_mode:**\n"
                 '- "simple": Query needs only 1 capability\n'
-                '- "mixed": Requires multiple capabilities combined (e.g., data + metric definition + chart)\n'
+                '- "mixed": Requires multiple data capabilities combined (e.g., SQL + chart)\n'
                 '- "ambiguous": Unclear what the user wants — needs clarification\n'
                 '- "chitchat": Greetings, thanks, small talk, questions outside DA Agent scope\n\n'
                 "**data_source:**\n"
                 '- "inline_data": User provides numeric values directly (e.g., "plot 10, 20, 30")\n'
                 '- "uploaded_table": Needs to query a user-uploaded table\n'
                 '- "database": Needs to query the main database\n'
-                '- "knowledge": Asking about definitions, concepts, business rules\n'
-                '- "mixed": Needs both database and knowledge\n'
+                '- "mixed": Needs multiple data sources or data steps in the same request\n'
                 '- "none": No data source needed (chitchat, out-of-scope)\n\n'
                 "**required_capabilities:**\n"
                 '- ["sql"]: Query SQL for data\n'
-                '- ["rag"]: Look up definitions/explanations from knowledge base\n'
-                '- ["sql", "rag"]: Needs both SQL and RAG\n'
                 '- ["visualization"]: Generate a chart\n'
+                '- ["sql", "visualization"]: Query data first, then visualize it\n'
                 '- ["report"]: Generate a detailed analytical report\n'
                 "- []: No capability needed (chitchat)\n\n"
                 "**followup_mode:**\n"
@@ -61,15 +58,15 @@ TASK_GROUNDER_PROMPT_DEFINITION = PromptDefinition(
                 '- Goodbye: "bye", "goodbye", "tam biet", "hen gap lai"...\n\n'
                 'Data queries (task_mode="simple" or "mixed"):\n'
                 "- Questions about numbers, rankings, trends → sql\n"
-                "- Questions about definitions, business rules → rag\n"
-                "- Needs both data and context → mixed\n"
+                "- Questions asking for both data and chart output → mixed\n"
                 "- Needs a chart → visualization\n"
                 "- Needs a detailed report → report\n\n"
                 "Followup:\n"
                 '- Questions referencing conversation history → data_source from context, followup_mode="followup"\n'
                 '- Questions about previous answer content → followup_mode="followup"\n\n'
                 "Meta/ambiguous:\n"
-                '- Vague questions lacking context → task_mode="ambiguous", confidence="low"\n\n'
+                '- Vague questions lacking context → task_mode="ambiguous", confidence="low"\n'
+                '- Definition-only / business-rule-only questions without a dataset to analyze are out of scope for now → task_mode="ambiguous", data_source="none", required_capabilities=[]\n\n'
                 "IMPORTANT:\n"
                 "- Return ONLY JSON. No additional text.\n"
                 "- Classify in ANY language — the user may write in Vietnamese, English, or mixed.\n"

@@ -25,7 +25,7 @@ CONTINUITY_DETECTION_PROMPT_DEFINITION = PromptDefinition(
                 '  "is_continuation": true | false,\n'
                 '  "continuation_type": "parameter_change" | "visualization_request" | "refinement" | "new_query",\n'
                 '  "inherited_action": {\n'
-                '    "action_type": "sql_query" | "rag_query" | "mixed_query",\n'
+                '    "action_type": "sql_query" | "mixed_query",\n'
                 '    "base_sql": "the SQL to re-run or modify",\n'
                 '    "base_parameters": {},\n'
                 '    "needs_rerun": true | false\n'

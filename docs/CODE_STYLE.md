@@ -31,7 +31,7 @@ from app.logger import logger
 - Use `Annotated[..., operator.add]` for LangGraph state fields that accumulate.
 
 ```python
-Intent = Literal["sql", "rag", "mixed", "unknown"]
+Intent = Literal["sql", "mixed", "unknown"]
 
 class AgentState(TypedDict, total=False):
     user_query: str

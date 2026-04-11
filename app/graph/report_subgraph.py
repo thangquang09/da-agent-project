@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any, Literal
 
@@ -19,7 +20,6 @@ from app.observability import get_current_tracer
 from app.prompts import prompt_manager
 from app.tools.get_schema import get_schema_overview
 from app.tools.query_sql import query_sql
-from app.artifacts.file_store import get_artifact_file_store
 from app.artifacts.helpers import (
     save_section_chart_to_file,
     read_chart_bytes,
@@ -186,6 +186,75 @@ def _as_string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _keyword_tokens(text: str) -> list[str]:
+    return [
+        token
+        for token in re.findall(r"[a-zA-Z0-9_]+", (text or "").lower())
+        if len(token) >= 3
+    ]
+
+
+def _select_tables_for_report(
+    all_tables: list[str],
+    *,
+    query: str,
+    table_contexts: dict[str, str],
+    limit: int = 2,
+) -> list[str]:
+    if not all_tables:
+        return []
+
+    query_tokens = Counter(_keyword_tokens(query))
+    ranked: list[tuple[int, int, str]] = []
+    for index, table in enumerate(all_tables):
+        table_text = f"{table} {table_contexts.get(table, '')}"
+        table_tokens = set(_keyword_tokens(table_text))
+        overlap_score = sum(query_tokens.get(token, 0) for token in table_tokens)
+        context_bonus = 3 if table_contexts.get(table) else 0
+        exact_bonus = 5 if table.lower() in (query or "").lower() else 0
+        ranked.append((overlap_score + context_bonus + exact_bonus, -index, table))
+
+    ranked.sort(reverse=True)
+    selected = [table for score, _, table in ranked if score > 0][:limit]
+    if len(selected) < limit:
+        for table in all_tables:
+            if table not in selected:
+                selected.append(table)
+            if len(selected) >= limit:
+                break
+    return selected[:limit]
+
+
+def _build_table_profile_query(table: str, columns: list[str]) -> str:
+    select_parts = ['COUNT(*) AS "__total_rows"']
+    for col in columns:
+        select_parts.extend(
+            [
+                f'COUNT(DISTINCT "{col}") AS "__distinct__{col}"',
+                f'SUM(CASE WHEN "{col}" IS NULL THEN 1 ELSE 0 END) AS "__nulls__{col}"',
+            ]
+        )
+    return f'SELECT {", ".join(select_parts)} FROM "{table}"'
+
+
+def _extract_column_stats(
+    stats_row: dict[str, Any],
+    columns: list[str],
+) -> tuple[int, list[dict[str, Any]]]:
+    total_rows = int(stats_row.get("__total_rows", 0) or 0)
+    column_stats: list[dict[str, Any]] = []
+    for col in columns:
+        column_stats.append(
+            {
+                "column": col,
+                "total_rows": total_rows,
+                "distinct_count": int(stats_row.get(f"__distinct__{col}", 0) or 0),
+                "null_count": int(stats_row.get(f"__nulls__{col}", 0) or 0),
+            }
+        )
+    return total_rows, column_stats
 
 
 def _first_nonempty_paragraph(text: str) -> str:
@@ -706,19 +775,17 @@ def profiler_sampler_node(state: AgentState) -> AgentState:
     for each relevant table. This gives the analyzer LLM actual data to reason about."""
     xml_ctx = state.get("xml_database_context", "")
     all_tables = _extract_tables_from_xml(xml_ctx)
+    query = state.get("report_request") or state.get("user_query", "")
     db_path_raw = state.get("target_db_path", "")
     db_path = Path(db_path_raw) if db_path_raw else None
 
-    # Prioritize tables from uploaded data context
     table_contexts = state.get("table_contexts") or {}
-    uploaded_tables = list(table_contexts.keys())
-    if uploaded_tables:
-        # Only profile tables that have user-provided business context
-        tables = [t for t in uploaded_tables if t in all_tables][:2]
-        if not tables:
-            tables = all_tables[:2]
-    else:
-        tables = all_tables[:2]
+    tables = _select_tables_for_report(
+        all_tables,
+        query=query,
+        table_contexts=table_contexts,
+        limit=2,
+    )
 
     if not tables:
         logger.warning("profiler_sampler: no tables found in xml_database_context")
@@ -736,39 +803,30 @@ def profiler_sampler_node(state: AgentState) -> AgentState:
     sample_data: dict[str, Any] = {}
     for table in tables:
         try:
-            # 100 random rows
-            sample_sql = f'SELECT * FROM "{table}" ORDER BY RANDOM() LIMIT 100'
+            # Keep row sampling cheap; quality comes from combining this with whole-table stats.
+            sample_sql = f'SELECT * FROM "{table}" LIMIT 100'
             sample_result = query_sql(sample_sql, db_path=db_path)
             sample_rows = sample_result.get("rows", [])
-
-            # Column-level summary stats (count, distinct, nulls) — cap at 15 columns
             columns = sample_result.get("columns", [])[:15]
+
+            total_rows = len(sample_rows)
             col_stats: list[dict[str, Any]] = []
-            for col in columns:
+            if columns:
                 try:
-                    stats_sql = (
-                        f"SELECT "
-                        f"COUNT(*) AS total_rows, "
-                        f'COUNT(DISTINCT "{col}") AS distinct_count, '
-                        f'SUM(CASE WHEN "{col}" IS NULL THEN 1 ELSE 0 END) AS null_count '
-                        f'FROM "{table}"'
-                    )
+                    stats_sql = _build_table_profile_query(table, columns)
                     stats_result = query_sql(stats_sql, db_path=db_path)
                     row = (stats_result.get("rows") or [{}])[0]
-                    col_stats.append(
-                        {
-                            "column": col,
-                            "total_rows": row.get("total_rows", 0),
-                            "distinct_count": row.get("distinct_count", 0),
-                            "null_count": row.get("null_count", 0),
-                        }
-                    )
+                    total_rows, col_stats = _extract_column_stats(row, columns)
                 except Exception:  # noqa: BLE001
-                    col_stats.append({"column": col, "error": "stats query failed"})
+                    col_stats = [
+                        {"column": col, "error": "stats query failed"}
+                        for col in columns
+                    ]
 
             sample_data[table] = {
                 "sample_rows": sample_rows[:100],
                 "sample_count": len(sample_rows),
+                "table_row_count": total_rows,
                 "columns": columns,
                 "column_stats": col_stats,
             }
@@ -817,6 +875,7 @@ def profiler_analyzer_node(state: AgentState) -> AgentState:
                 stats_text = stats_text[:1500] + "..."
             sample_summary_parts.append(
                 f"### Table: {table_name}\n"
+                f"Estimated total rows: {table_info.get('table_row_count', table_info.get('sample_count', 0))}\n"
                 f"Total sample rows: {table_info.get('sample_count', 0)}\n"
                 f"Columns: {', '.join(table_info.get('columns', []))}\n"
                 f"Column stats:\n{stats_text}\n"
@@ -1740,19 +1799,6 @@ def report_finalize_node(state: AgentState) -> AgentState:
         state, used_safe_fallback=used_safe_fallback
     )
 
-    # Save report markdown to disk
-    report_dir = Path("reports")
-    report_dir.mkdir(parents=True, exist_ok=True)
-    report_path = report_dir / "report.md"
-    try:
-        report_path.write_text(
-            report_markdown or f"# {plan_title}\n\nNo report content was generated.",
-            encoding="utf-8",
-        )
-        logger.info("Report saved to {path}", path=report_path)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to save report.md: {error}", error=str(exc))
-
     payload = {
         "answer": answer,
         "report_markdown": report_markdown
@@ -1765,7 +1811,6 @@ def report_finalize_node(state: AgentState) -> AgentState:
         "evidence": [
             "intent=sql",
             f"rows={sum(section.get('sql_result', {}).get('row_count', 0) for section in state.get('report_sections', []))}",
-            "context_chunks=0",
         ],
         "confidence": confidence,
         "confidence_rationale": confidence_rationale,

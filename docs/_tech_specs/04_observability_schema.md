@@ -71,7 +71,6 @@ NODE_TO_FAILURE = {
     "generate_sql": "SQL_GENERATION_ERROR",
     "validate_sql_node": "SQL_VALIDATION_ERROR",
     "execute_sql_node": "SQL_EXECUTION_ERROR",
-    "retrieve_context_node": "RAG_RETRIEVAL_ERROR",
     "synthesize_answer": "SYNTHESIS_ERROR",
 }
 
@@ -81,8 +80,6 @@ FailureCategory = Literal[
     "SQL_VALIDATION_ERROR",
     "SQL_EXECUTION_ERROR",
     "EMPTY_RESULT",
-    "RAG_RETRIEVAL_ERROR",
-    "RAG_IRRELEVANT_CONTEXT",
     "SYNTHESIS_ERROR",
     "STEP_LIMIT_REACHED",
 ]
@@ -142,7 +139,7 @@ def finish(
 **Behavior:**
 1. Calculates total run latency
 2. Aggregates token usage + cost from `tool_history`
-3. Infers error categories: `EMPTY_RESULT`, `RAG_IRRELEVANT_CONTEXT`, `STEP_LIMIT_REACHED`
+3. Infers error categories: `EMPTY_RESULT`, `STEP_LIMIT_REACHED`
 4. Counts retries from `node_attempts`
 5. Extracts `artifact_types` from `payload.artifacts`
 6. Creates `RunTraceRecord` and writes to JSONL

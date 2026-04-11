@@ -40,7 +40,6 @@ export interface QueryResponse {
   visualization: VisualizationResponse | null;
   visualizations: VisualizationResponse[];
   rows: number | null;
-  context_chunks: number | null;
   step_count: number;
   // Fields that may come through SSE but aren't in the Pydantic model:
   sql_rows?: Record<string, unknown>[];

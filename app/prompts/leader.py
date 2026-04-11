@@ -14,9 +14,8 @@ LEADER_AGENT_PROMPT_DEFINITION = PromptDefinition(
                 "Available tools:\n"
                 "1. ask_sql_analyst(query): use for any request that needs querying structured data, counting, filtering, aggregation, ranking, comparisons, or chart-ready analysis.\n"
                 "2. ask_sql_analyst_parallel(tasks): use when the user request contains multiple independent quantitative sub-questions that can be answered separately and merged.\n"
-                '3. retrieve_rag_answer(query): use for business definitions, policy, qualitative context, or when the answer depends on documentation rather than data. Current implementation may return "Không có thông tin".\n'
-                '4. create_visualization(query, raw_data): use when the user explicitly provides raw data values in their query (e.g., "vẽ biểu đồ cho 10, 20, 30", "plot the values 5, 15, 25"). Extract the data values into a structured format (array of numbers or key-value pairs) and pass them as raw_data.\n'
-                "5. generate_report(query): use only when the user explicitly asks for a detailed report, a multi-section analysis document, or a full written write-up.\n\n"
+                '3. create_visualization(query, raw_data): use when the user explicitly provides raw data values in their query (e.g., "vẽ biểu đồ cho 10, 20, 30", "plot the values 5, 15, 25"). Extract the data values into a structured format (array of numbers or key-value pairs) and pass them as raw_data.\n'
+                "4. generate_report(query): use only when the user explicitly asks for a detailed report, a multi-section analysis document, or a full written write-up.\n\n"
                 "Rules:\n"
                 "- Never call low-level SQL tools directly.\n"
                 "- Prefer ask_sql_analyst for any quantitative question about the dataset.\n"
@@ -41,11 +40,11 @@ LEADER_AGENT_PROMPT_DEFINITION = PromptDefinition(
                 "- Prefer multi-step tool usage over single-shot answers for complex analytical questions.\n\n"
                 "Return JSON only.\n"
                 "If you need a tool:\n"
-                '{"action":"tool","tool":"ask_sql_analyst|retrieve_rag_answer|create_visualization|generate_report","args":{"query":"...","raw_data":[...]},"reason":"short reason","plan":{"goal":"...","dimensions_to_check":["..."],"why_this_tool":"...","success_criteria":"..."}}\n'
+                '{"action":"tool","tool":"ask_sql_analyst|create_visualization|generate_report","args":{"query":"...","raw_data":[...]},"reason":"short reason","plan":{"goal":"...","dimensions_to_check":["..."],"why_this_tool":"...","success_criteria":"..."}}\n'
                 "If you need parallel SQL analysis:\n"
                 '{"action":"tool","tool":"ask_sql_analyst_parallel","args":{"tasks":[{"query":"..."},{"query":"..."}]},"reason":"short reason","plan":{"goal":"...","dimensions_to_check":["segment","time","category"],"why_this_tool":"...","success_criteria":"..."}}\n'
                 "If you are ready to answer:\n"
-                '{"action":"final","answer":"...","confidence":"high|medium|low","intent":"sql|rag|mixed|unknown","reason":"short reason"}\n'
+                '{"action":"final","answer":"...","confidence":"high|medium|low","intent":"sql|mixed|unknown","reason":"short reason"}\n'
                 "For create_visualization, raw_data format examples:\n"
                 '- Simple values: {"raw_data": [10, 20, 30]}\n'
                 '- Key-value pairs: {"raw_data": [{"label": "A", "value": 10}, {"label": "B", "value": 20}]}\n'

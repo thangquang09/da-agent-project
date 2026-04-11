@@ -11,7 +11,6 @@ from mcp_server.tools import (
     tool_get_schema,
     tool_profile_csv,
     tool_query_sql,
-    tool_retrieve_metric_definition,
     tool_validate_csv,
 )
 
@@ -48,10 +47,6 @@ def create_app():
     @server.tool()
     def dataset_context(db_path: str | None = None) -> Any:  # noqa: D401
         return tool_dataset_context(db_path=db_path)
-
-    @server.tool()
-    def retrieve_metric_definition(query: str, top_k: int = 4) -> Any:  # noqa: D401
-        return tool_retrieve_metric_definition(query=query, top_k=top_k)
 
     @server.tool()
     def query_sql(
@@ -108,10 +103,6 @@ def _build_server() -> Any:
     @server.tool()
     def dataset_context(db_path: str | None = None) -> Any:
         return tool_dataset_context(db_path=db_path)
-
-    @server.tool()
-    def retrieve_metric_definition(query: str, top_k: int = 4) -> Any:
-        return tool_retrieve_metric_definition(query=query, top_k=top_k)
 
     @server.tool()
     def query_sql(

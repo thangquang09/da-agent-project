@@ -18,8 +18,6 @@ from app.prompts import (
 from app.tools import (
     get_schema_overview,
     query_sql,
-    retrieve_business_context,
-    retrieve_metric_definition,
     validate_sql,
 )
 
@@ -562,6 +560,7 @@ Provide a unified analysis that:
         },
         # Pass through visualization data from tasks that have it
         "visualization": task_visualizations[0] if task_visualizations else None,
+        "visualizations": task_visualizations,
         # Original aggregate analysis
         "aggregate_analysis": analysis,
         # Pass through result_ref from first task (for result_store integration)
@@ -833,15 +832,6 @@ def _summarize_tool_result(tool_name: str, result: dict[str, Any]) -> str:
             ensure_ascii=False,
             indent=2,
         )
-    elif tool_name == "retrieve_rag_answer":
-        return json.dumps(
-            {
-                "context_chunks": len(result.get("context", [])),
-                "answer_preview": str(result.get("answer", ""))[:300],
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
     return json.dumps(result, ensure_ascii=False, indent=2)[:1500]
 
 
@@ -899,7 +889,7 @@ def _normalize_visualization_list(
 def _generate_clarification_question(
     user_query: str,
     task_profile: dict[str, Any],
-    _collected: set[str],
+    collected: set[str],
     missing: set[str],
 ) -> str:
     """Generate a human-readable clarification question based on task profile.
@@ -919,14 +909,14 @@ def _generate_clarification_question(
             return (
                 f"Tôi không chắc câu hỏi của bạn cần lấy dữ liệu từ đâu. "
                 f"Bạn muốn tôi truy vấn database chính, xem file bạn upload, "
-                f"hay hỏi về kiến thức/tài liệu? "
+                f"hay làm việc với dữ liệu bạn vừa cung cấp? "
                 f'(Câu hỏi gốc: "{user_query}")'
             )
         elif data_source == "unknown":
             return (
                 f"Tôi không rõ câu hỏi này liên quan đến loại dữ liệu nào. "
                 f"Bạn có thể nói rõ hơn bạn muốn phân tích dữ liệu, "
-                f"tra cứu định nghĩa, hay xem nội dung tài liệu không?"
+                f"vẽ biểu đồ, hay tạo báo cáo không?"
             )
         else:
             return (
@@ -941,7 +931,6 @@ def _generate_clarification_question(
     elif missing:
         cap_labels = {
             "sql_result": "dữ liệu từ database",
-            "rag_context": "thông tin từ tài liệu",
             "chart": "biểu đồ",
             "report_draft": "báo cáo",
         }
@@ -1064,6 +1053,13 @@ def clarify_question_node(state: AgentState) -> AgentState:
 
     return {
         "final_answer": prefixed_question,
+        "final_payload": {
+            "answer": prefixed_question,
+            "confidence": "low",
+            "used_tools": [],
+            "evidence": [],
+            "step_count": state.get("step_count", 0) + 1,
+        },
         "clarification_question": clarification_question,
         "confidence": "low",
         "step_count": state.get("step_count", 0) + 1,
@@ -1097,7 +1093,6 @@ def _evaluate_artifacts(state: AgentState) -> AgentState:
     # Map capabilities to artifact types
     CAPABILITY_TO_TYPE = {
         "sql": "sql_result",
-        "rag": "rag_context",
         "visualization": "chart",
         "report": "report_draft",
     }
@@ -1117,7 +1112,7 @@ def _evaluate_artifacts(state: AgentState) -> AgentState:
         a
         for a in artifacts
         if a.get("status") == "failed"
-        and a.get("recommended_next_action") in ("retry_sql", "ask_rag")
+        and a.get("recommended_next_action") == "retry_sql"
     ]
 
     # Check for terminal artifact
@@ -1139,9 +1134,6 @@ def _evaluate_artifacts(state: AgentState) -> AgentState:
     elif not missing_types and artifacts:
         decision = "finalize"
         reason = f"all capabilities covered: {collected_types}"
-    elif not artifacts and not required_caps:
-        decision = "finalize"
-        reason = "no artifacts needed"
     elif task_mode == "ambiguous" or task_confidence == "low":
         # Ambiguous / low-confidence task — stop and ask the user
         clarification_question = _generate_clarification_question(
@@ -1152,6 +1144,9 @@ def _evaluate_artifacts(state: AgentState) -> AgentState:
         )
         decision = "wait_for_user"
         reason = f"ambiguous task (mode={task_mode}, conf={task_confidence})"
+    elif not artifacts and not required_caps:
+        decision = "finalize"
+        reason = "no artifacts needed"
     else:
         decision = "continue"
         reason = "missing: " + ", ".join(sorted(str(item) for item in missing_types))
@@ -1239,8 +1234,8 @@ def _should_decompose_sql_query(query: str) -> bool:
 
 def _normalize_parallel_sql_tasks(
     raw_tasks: Any, default_query: str
-) -> list[dict[str, str]]:
-    normalized: list[dict[str, str]] = []
+) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
     if not isinstance(raw_tasks, list):
         return normalized
     for idx, item in enumerate(raw_tasks, start=1):
@@ -1253,10 +1248,19 @@ def _normalize_parallel_sql_tasks(
             {
                 "task_id": str(item.get("task_id", idx)),
                 "query": subquery,
+                "requires_visualization": bool(
+                    item.get("requires_visualization", False)
+                ),
             }
         )
     if not normalized and default_query.strip():
-        normalized.append({"task_id": "1", "query": default_query.strip()})
+        normalized.append(
+            {
+                "task_id": "1",
+                "query": default_query.strip(),
+                "requires_visualization": False,
+            }
+        )
     return normalized
 
 
@@ -1418,7 +1422,11 @@ def _run_traced_substep(
 
 
 def ask_sql_analyst_tool(
-    state: AgentState, query: str, *, allow_decomposition: bool = True
+    state: AgentState,
+    query: str,
+    *,
+    allow_decomposition: bool = True,
+    requires_visualization: bool = False,
 ) -> dict[str, Any]:
     enriched_state = _ensure_v3_schema_context(state)
     original_user_query = state.get("user_query", "") or query
@@ -1459,6 +1467,7 @@ def ask_sql_analyst_tool(
                 "session_context": enriched_state.get("session_context", ""),
                 "xml_database_context": enriched_state.get("xml_database_context", ""),
                 "status": "pending",
+                "requires_visualization": requires_visualization,
             }
         ]
     for task in task_plan:
@@ -1557,6 +1566,9 @@ def ask_sql_analyst_tool(
         "validated_sql": validated_sql,
         "result_ref": result_ref,
         "visualization": visualization,
+        "visualizations": [visualization]
+        if isinstance(visualization, dict) and visualization.get("success")
+        else [],
         "tool_history": tool_history,
         "errors": errors,
         "confidence": confidence,
@@ -1587,7 +1599,7 @@ def ask_sql_analyst_tool(
 
 
 def ask_sql_analyst_parallel_tool(
-    state: AgentState, tasks: list[dict[str, str]], parent_query: str
+    state: AgentState, tasks: list[dict[str, Any]], parent_query: str
 ) -> dict[str, Any]:
     normalized_tasks = _normalize_parallel_sql_tasks(tasks, parent_query)
     if not normalized_tasks:
@@ -1614,7 +1626,7 @@ def ask_sql_analyst_parallel_tool(
 
     tracer = get_current_tracer()
 
-    def _run_subquery(task_item: dict[str, str]) -> dict[str, Any]:
+    def _run_subquery(task_item: dict[str, Any]) -> dict[str, Any]:
         trace_state = {
             "user_query": task_item["query"],
             "task_id": task_item["task_id"],
@@ -1625,7 +1637,12 @@ def ask_sql_analyst_parallel_tool(
             f"leader_sql_task_{task_item['task_id']}",
             trace_state,
             lambda: ask_sql_analyst_tool(
-                state, task_item["query"], allow_decomposition=False
+                state,
+                task_item["query"],
+                allow_decomposition=False,
+                requires_visualization=bool(
+                    task_item.get("requires_visualization", False)
+                ),
             ),
             observation_type="tool",
             tracer_override=tracer,
@@ -1639,6 +1656,7 @@ def ask_sql_analyst_parallel_tool(
             "validated_sql": result.get("validated_sql", ""),
             "result_ref": result.get("result_ref"),
             "visualization": result.get("visualization"),
+            "visualizations": result.get("visualizations", []),
             "error": "; ".join(
                 str(item.get("message", "Unknown SQL analyst failure"))
                 for item in result.get("errors", [])
@@ -1701,6 +1719,7 @@ def ask_sql_analyst_parallel_tool(
         "validated_sql": aggregate_update.get("validated_sql", ""),
         "result_ref": aggregate_update.get("result_ref"),
         "visualization": aggregate_update.get("visualization"),
+        "visualizations": aggregate_update.get("visualizations", []),
         "tool_history": subtool_history + aggregate_tool_history,
         "errors": [
             {
@@ -1760,6 +1779,13 @@ def leader_agent(state: AgentState) -> AgentState:
         if str(cap).strip()
     }
 
+    if task_profile.get("task_mode") == "ambiguous" and not required_caps:
+        return {
+            "tool_history": leader_tool_history,
+            "step_count": state.get("step_count", 0) + 1,
+            "artifacts": artifacts,
+        }
+
     def _make_artifact(
         tool_name: str,
         tool_result: dict[str, Any],
@@ -1774,7 +1800,6 @@ def leader_agent(state: AgentState) -> AgentState:
         TOOL_TO_ARTIFACT_TYPE = {
             "ask_sql_analyst": "sql_result",
             "ask_sql_analyst_parallel": "sql_result",
-            "retrieve_rag_answer": "rag_context",
             "create_visualization": "chart",
             "generate_report": "report_draft",
         }
@@ -1809,13 +1834,6 @@ def leader_agent(state: AgentState) -> AgentState:
             if result_ref:
                 metadata["result_id"] = result_ref.get("result_id", "")
                 metadata["has_full_data"] = result_ref.get("has_full_data", False)
-        elif tool_name == "retrieve_rag_answer":
-            retrieved = tool_result.get("retrieved_context", [])
-            has_context = bool(retrieved)
-            terminal = True
-            recommended_action = "finalize"
-            metadata = {"retrieved_chunks": len(retrieved)}
-
         return {
             "artifact_type": artifact_type,
             "status": status,
@@ -1824,7 +1842,6 @@ def leader_agent(state: AgentState) -> AgentState:
             "evidence": {
                 "tool": tool_name,
                 "row_count": tool_result.get("sql_result", {}).get("row_count", 0),
-                "retrieved_chunks": len(tool_result.get("retrieved_context", [])),
                 "viz_success": tool_result.get("visualization", {}).get("success")
                 if tool_name == "create_visualization"
                 else None,
@@ -1832,6 +1849,27 @@ def leader_agent(state: AgentState) -> AgentState:
             "terminal": terminal,
             "recommended_next_action": recommended_action,
         }
+
+    def _merge_visualizations(tool_result: dict[str, Any]) -> None:
+        nonlocal sql_artifacts, visualization_results
+
+        merged_visualizations = _normalize_visualization_list(
+            tool_result.get("visualizations")
+        )
+        if not merged_visualizations:
+            merged_visualizations = _normalize_visualization_list(
+                [tool_result.get("visualization")]
+                if isinstance(tool_result.get("visualization"), dict)
+                else []
+            )
+
+        if merged_visualizations:
+            visualization_results.extend(merged_visualizations)
+            sql_artifacts = {
+                **sql_artifacts,
+                "visualization": merged_visualizations[0],
+                "visualizations": merged_visualizations,
+            }
 
     if "report" in required_caps:
         tool_query = (
@@ -1921,14 +1959,13 @@ def leader_agent(state: AgentState) -> AgentState:
             )
             if confidence not in {"high", "medium", "low"}:
                 confidence = "medium"
-            if intent not in {"sql", "rag", "mixed", "unknown"}:
+            if intent not in {"sql", "mixed", "unknown"}:
                 intent = inferred_intent or "unknown"
             payload = {
                 "answer": answer,
                 "evidence": [
                     f"intent={intent}",
                     f"rows={sql_artifacts.get('sql_result', {}).get('row_count', 0)}",
-                    "context_chunks=0",
                 ],
                 "confidence": confidence,
                 "used_tools": used_high_level_tools,
@@ -1991,6 +2028,7 @@ def leader_agent(state: AgentState) -> AgentState:
             )
             artifacts.append(_make_artifact("ask_sql_analyst", tool_result, "success"))
             sql_artifacts = tool_result
+            _merge_visualizations(tool_result)
             inferred_intent = "sql" if inferred_intent == "unknown" else inferred_intent
         elif tool_name == "ask_sql_analyst_parallel":
             raw_tasks = tool_args.get("tasks", [])
@@ -2013,23 +2051,8 @@ def leader_agent(state: AgentState) -> AgentState:
                 _make_artifact("ask_sql_analyst_parallel", tool_result, "success")
             )
             sql_artifacts = tool_result
+            _merge_visualizations(tool_result)
             inferred_intent = "sql" if inferred_intent == "unknown" else inferred_intent
-        elif tool_name == "retrieve_rag_answer":
-            from app.tools import retrieve_rag_answer
-
-            tool_result = _run_traced_substep(
-                "leader_tool_retrieve_rag_answer",
-                {"user_query": tool_query, "step_count": state.get("step_count", 0)},
-                lambda tool_query=tool_query: retrieve_rag_answer(
-                    query=tool_query,
-                    top_k=int(tool_args.get("top_k", 4) or 4),
-                ),
-                observation_type="retriever",
-            )
-            artifacts.append(
-                _make_artifact("retrieve_rag_answer", tool_result, "success")
-            )
-            inferred_intent = "rag" if inferred_intent == "unknown" else "mixed"
         elif tool_name == "create_visualization":
             from app.graph.standalone_visualization import inline_data_worker
 
@@ -2180,45 +2203,6 @@ def leader_agent(state: AgentState) -> AgentState:
                 "result_ref": None,
                 "artifacts": artifacts,
             }
-    elif "retrieve_rag_answer" in used_high_level_tools:
-        # RAG attempted — don't fall back to SQL
-        return {
-            "final_answer": "Không tìm thấy câu trả lời phù hợp trong tài liệu.",
-            "final_payload": {
-                "answer": "Không tìm thấy câu trả lời phù hợp trong tài liệu.",
-                "evidence": ["intent=rag", "rag_attempted=true"],
-                "confidence": "low",
-                "used_tools": used_high_level_tools,
-                "generated_sql": "",
-                "error_categories": ["RAG_IRRELEVANT_CONTEXT"],
-                "step_count": state.get("step_count", 0) + 1,
-                "total_token_usage": total_token_usage,
-                "total_cost_usd": round(total_cost_usd, 8),
-                "context_type": state.get("context_type", "default"),
-                "sql_rows": [],
-                "sql_row_count": 0,
-                "visualization": None,
-                "result_metadata": None,
-            },
-            "response_mode": "answer",
-            "intent": "rag",
-            "intent_reason": "rag_no_fallback",
-            "errors": [
-                {
-                    "category": "RAG_IRRELEVANT_CONTEXT",
-                    "message": "No relevant context found",
-                }
-            ],
-            "confidence": "low",
-            "step_count": state.get("step_count", 0) + 1,
-            "tool_history": leader_tool_history,
-            "generated_sql": "",
-            "validated_sql": "",
-            "sql_result": {},
-            "visualization": None,
-            "result_ref": None,
-            "artifacts": artifacts,
-        }
     else:
         # No specific tool attempted — last resort fallback to SQL (only for truly unknown cases)
         fallback_result = ask_sql_analyst_tool(state, query)
@@ -2235,7 +2219,6 @@ def leader_agent(state: AgentState) -> AgentState:
             "evidence": [
                 "intent=sql",
                 f"rows={fallback_result.get('sql_result', {}).get('row_count', 0)}",
-                "context_chunks=0",
             ],
             "confidence": fallback_result.get("confidence", "medium"),
             "used_tools": ["ask_sql_analyst"],
@@ -2621,7 +2604,7 @@ def capture_action_node(state: AgentState) -> AgentState:
     This node runs AFTER synthesize_answer to save action metadata.
 
     Captures:
-    - action_type: sql/rag/mixed/unknown
+    - action_type: sql/mixed/unknown
     - generated_sql: The SQL that was executed
     - parameters: Extracted parameters from query
     - result_summary: Lightweight summary (NOT raw data)

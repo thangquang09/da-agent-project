@@ -90,13 +90,6 @@ class FakeV3LLMClient:
                     },
                     "reason": "Independent quantitative sub-questions",
                 }
-            elif "Retention D1 là gì?" in user:
-                payload = {
-                    "action": "tool",
-                    "tool": "retrieve_rag_answer",
-                    "args": {"query": "Retention D1 là gì?"},
-                    "reason": "Definition request",
-                }
             elif REPORT_QUERY in user:
                 payload = {
                     "action": "tool",
@@ -120,7 +113,7 @@ class FakeV3LLMClient:
                 "action": "final",
                 "answer": self._final_answer_for_query(query),
                 "confidence": "high",
-                "intent": "rag" if "Retention D1 là gì?" in query else "sql",
+                "intent": "sql",
                 "reason": "Leader finalized from tool results",
             }
         return {
@@ -247,12 +240,12 @@ class FakeV3LLMClient:
             }
         elif "Retention D1 là gì?" in query:
             payload = {
-                "task_mode": "simple",
-                "data_source": "knowledge",
-                "required_capabilities": ["rag"],
+                "task_mode": "ambiguous",
+                "data_source": "none",
+                "required_capabilities": [],
                 "followup_mode": "fresh_query",
-                "confidence": "high",
-                "reasoning": "Definition request.",
+                "confidence": "low",
+                "reasoning": "Definition-only question is outside the current data-only agent scope.",
             }
         else:
             payload = {
@@ -383,7 +376,10 @@ class FakeV3LLMClient:
                 "Có 358 học sinh đã hoàn thành khóa luyện thi."
             )
         if "Retention D1 là gì?" in query:
-            return "Không có thông tin"
+            return (
+                "[CLARIFY] Tôi hiện tập trung vào phân tích dữ liệu, biểu đồ và báo cáo từ database hoặc file bạn upload. "
+                "Bạn muốn tôi phân tích metric hoặc bảng dữ liệu nào?"
+            )
         if REPORT_QUERY in query:
             return (
                 "# Báo cáo phân tích dữ liệu học sinh\n\n"
@@ -417,7 +413,7 @@ class FakeV3LLMClient:
 _TEST_THREAD_IDS = [
     "v3-single-query",
     "v3-multi-query",
-    "v3-rag-stub",
+    "v3-definition-out-of-scope",
     "v3-simple-male-query",
     "v3-report-query",
     "v3-retry-test-1",

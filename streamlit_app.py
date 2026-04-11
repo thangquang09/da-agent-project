@@ -166,11 +166,7 @@ def _render_result(result: dict) -> None:
                 trace_loaded = trace_data is not None
         with trace_col2:
             if run_id:
-                st.caption(
-                    "Trace cached"
-                    if trace_loaded
-                    else "Trace not loaded yet"
-                )
+                st.caption("Trace cached" if trace_loaded else "Trace not loaded yet")
 
         with tabs[1]:
             has_trace = trace_data and (
@@ -325,8 +321,8 @@ def _render_sample_queries() -> None:
     st.subheader("Sample Queries")
     samples = [
         ("SQL", "DAU 7 ngày gần đây như thế nào?"),
-        ("RAG", "Retention D1 là gì?"),
-        ("Mixed", "Revenue tuần này giảm từ ngày nào và metric này tính ra sao?"),
+        ("Visualization", "Vẽ biểu đồ cột cho các giá trị 10, 20, 30, 40"),
+        ("Mixed", "Revenue tuần này giảm từ ngày nào? Vẽ biểu đồ xu hướng giúp tôi."),
     ]
     for label, query in samples:
         if st.button(

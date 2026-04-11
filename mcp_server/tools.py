@@ -9,7 +9,6 @@ from app.tools import (
     dataset_context,
     get_schema_overview,
     query_sql,
-    retrieve_metric_definition,
     validate_sql,
 )
 from mcp_server.config import load_mcp_config
@@ -37,12 +36,6 @@ def tool_dataset_context(db_path: str | None = None) -> DatasetContextResponse:
         sample_rows=cfg.sample_rows,
         top_values=cfg.top_values,
     )
-
-
-def tool_retrieve_metric_definition(query: str, top_k: int = 4) -> dict[str, Any]:
-    return retrieve_metric_definition(query=query, top_k=top_k)
-
-
 def tool_query_sql(sql: str, row_limit: int | None = None, db_path: str | None = None) -> QuerySQLResponse:
     cfg = load_mcp_config()
     resolved_db_path = _resolve_db_path(db_path)

@@ -28,7 +28,7 @@ def _extract_first_json_object(text: str) -> dict[str, Any] | None:
 
 def _normalize_capabilities(raw_caps: Any, *, task_mode: str = "") -> list[str]:
     # Chitchat intentionally has no capabilities
-    if task_mode == "chitchat":
+    if task_mode in {"chitchat", "ambiguous"}:
         return []
 
     if not isinstance(raw_caps, list):

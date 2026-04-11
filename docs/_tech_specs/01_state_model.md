@@ -38,8 +38,8 @@ These fields are set once at graph entry and flow down to all downstream nodes.
 ```python
 class TaskProfile(TypedDict, total=False):
     task_mode: Literal["simple", "mixed", "ambiguous"]
-    data_source: Literal["inline_data", "uploaded_table", "database", "knowledge", "mixed"]
-    required_capabilities: list[Literal["sql", "rag", "visualization", "report"]]
+    data_source: Literal["inline_data", "uploaded_table", "database", "mixed", "none"]
+    required_capabilities: list[Literal["sql", "visualization", "report"]]
     followup_mode: Literal["fresh_query", "followup", "refine_previous_result"]
     confidence: Literal["high", "medium", "low"]
     reasoning: str
@@ -49,12 +49,12 @@ class TaskProfile(TypedDict, total=False):
 
 ```python
 class WorkerArtifact(TypedDict, total=False):
-    artifact_type: Literal["sql_result", "rag_context", "chart", "report_draft"]
+    artifact_type: Literal["sql_result", "chart", "report_draft"]
     status: Literal["success", "failed", "partial"]
     payload: dict[str, Any]
     evidence: dict[str, Any]
     terminal: bool
-    recommended_next_action: Literal["finalize", "visualize", "retry_sql", "ask_rag", "clarify", "none"]
+    recommended_next_action: Literal["finalize", "visualize", "retry_sql", "clarify", "none"]
 ```
 
 ---
@@ -67,7 +67,6 @@ class WorkerArtifact(TypedDict, total=False):
 | `session_context` | `str` | Injected conversation memory |
 | `continuity_context` | `dict` | Follow-up detection result |
 | `table_contexts` | `dict[str, str]` | Business context per table |
-| `retrieved_context` | `list[dict]` | RAG retrieval results |
 | `uploaded_file_data` | `list[dict]` | Parsed CSV/data file contents |
 
 ---
@@ -201,7 +200,7 @@ class ReportPlan(TypedDict, total=False):
 | `errors` | `Annotated[list[dict], operator.add]` | Fan-in of all errors |
 | `step_count` | `int` | Node execution counter |
 | `confidence` | `Confidence` | `"high"`, `"medium"`, or `"low"` |
-| `intent` | `Intent` | `"sql"`, `"rag"`, `"mixed"`, `"unknown"` |
+| `intent` | `Intent` | `"sql"`, `"mixed"`, `"unknown"` |
 | `intent_reason` | `str` | Why intent was chosen |
 | `artifact_evaluation` | `dict` | Decision from `artifact_evaluator` |
 | `clarification_question` | `str` | Human question when `wait_for_user` |

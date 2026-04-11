@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 
 SuiteName = Literal["domain", "spider", "movielens"]
-IntentName = Literal["sql", "rag", "mixed"]
+IntentName = Literal["sql", "mixed"]
 Language = Literal["vi", "en"]
 ContextType = Literal["user_provided", "csv_auto", "mixed", "default"]
 

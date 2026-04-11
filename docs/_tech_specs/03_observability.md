@@ -101,7 +101,6 @@ builder.add_node("artifact_evaluator",
 | `"span"` | Default (generic) |
 | `"tool"` | Worker tool calls |
 | `"agent"` | LLM-driven nodes |
-| `"retriever"` | RAG retrieval |
 | `"generation"` | LLM generation |
 | `"chain"` | Aggregation nodes |
 
@@ -166,7 +165,6 @@ def _state_summary(state: dict[str, Any]) -> dict[str, Any]:
         "generated_sql": _safe_jsonable(state.get("generated_sql")),
         "validated_sql": _safe_jsonable(state.get("validated_sql")),
         "sql_row_count": state.get("sql_result", {}).get("row_count"),
-        "retrieved_context_count": len(state.get("retrieved_context", [])),
         "errors": _safe_jsonable(state.get("errors", [])),
     }
 ```
@@ -231,7 +229,7 @@ Traces are written to `{trace_jsonl_path}/{run_id}.jsonl` (default: `./traces/{r
   "intent": "sql",
   "status": "success",
   "total_steps": 4,
-  "used_tools": ["ask_sql_analyst", "retrieve_rag_answer"],
+  "used_tools": ["ask_sql_analyst", "create_visualization"],
   "generated_sql": "SELECT ...",
   "retry_count": 1,
   "fallback_used": false,
@@ -242,7 +240,7 @@ Traces are written to `{trace_jsonl_path}/{run_id}.jsonl` (default: `./traces/{r
   "task_profile": {"task_mode": "simple", "data_source": "database"},
   "grounding_confidence": "high",
   "artifact_count": 2,
-  "artifact_types": ["sql_result", "rag_context"]
+  "artifact_types": ["sql_result", "chart"]
 }
 ```
 

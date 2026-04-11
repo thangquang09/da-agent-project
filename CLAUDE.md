@@ -24,7 +24,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 **DA Agent Lab** — A LangGraph-based Data Analyst Agent.
 
-Trả lời business/data questions qua SQL tools, RAG retrieval, Visualization, Report generation, và full observability.
+Trả lời business/data questions qua SQL tools, Visualization, Report generation, và full observability.
 
 - **Runtime**: `uv` virtualenv (`.venv`)
 - **Database**: PostgreSQL (schemas: `public`, `agent`, `user_data`)
@@ -112,7 +112,6 @@ User (Next.js / Streamlit / CLI / API)
 |------|------|---------|
 | `ask_sql_analyst` | `app/tools/` | Schema → SQL → validate → execute → analyze |
 | `ask_sql_analyst_parallel` | `app/tools/` | Fan-out parallel SQL workers |
-| `retrieve_rag_answer` | `app/tools/retrieve_rag_answer.py` | Vector similarity search |
 | `create_visualization` | `app/graph/standalone_visualization.py` | Configurable sandbox → chart artifact (saved to `artifacts/`, URL in state) |
 | `generate_report` | `app/graph/report_subgraph.py` | Grounded report pipeline: sample → profile → plan → [Send fan-out section_pipeline] → sort → write → critique → finalize |
 | `validate_sql_query` | `app/tools/validate_sql.py` | AST-based SELECT-only validation |
@@ -127,15 +126,14 @@ User (Next.js / Streamlit / CLI / API)
 2. **Observability-first** — Each run captured: run_id, routing, tools, SQL, latency, errors. Replayable.
 3. **SQL safety** — Only `SELECT` / CTE allowed. Block: `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, etc. Validate before execute.
 4. **Evaluation-driven** — Measure routing, SQL validity, tool-call correctness, answer quality. Run regression after every change.
-5. **Grounded answers** — No hallucinated numbers. Distinguish DB data vs RAG context vs inference.
+5. **Grounded answers** — No hallucinated numbers. Distinguish DB data vs explicit business context vs inference.
 
 ### Routing behavior
 
 | Query type | Intent | Example |
 |-----------|--------|---------|
 | Hỏi giá trị, ranking, trend | `sql` | "DAU hôm qua?" |
-| Hỏi định nghĩa, business rule | `rag` | "Retention D1 là gì?" |
-| Cần cả data lẫn context | `mixed` | "Retention giảm từ lúc nào và metric này tính ra sao?" |
+| Cần cả data lẫn chart / nhiều bước phân tích | `mixed` | "Doanh thu giảm từ ngày nào và vẽ biểu đồ xu hướng" |
 | Cần báo cáo dài, nhiều section, có biểu đồ | `report` | "Viết báo cáo chi tiết về bộ data này" |
 
 Route bằng structured output (enum), không phải free-form text.
@@ -207,7 +205,7 @@ Route bằng structured output (enum), không phải free-form text.
 ## Project purpose & interview value
 
 Dự án này là **applied AI portfolio project** cho vị trí AI/Agent Engineer. Mapping với:
-- AI application prototyping, tool-calling agents, RAG pipelines
+- AI application prototyping, tool-calling agents, SQL-first analytics pipelines
 - Prompt design, MCP-style tool surfaces
 - SQL/data infrastructure, evaluation, observability
 

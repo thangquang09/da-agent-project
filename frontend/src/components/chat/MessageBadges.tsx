@@ -8,7 +8,6 @@ interface MessageBadgesProps {
 
 const intentColors: Record<string, string> = {
   sql: "bg-[#ebe8e1] dark:bg-[#2a2a2a] text-[#3b3b3b] dark:text-[#d7d7d7]",
-  rag: "bg-[#ebe8e1] dark:bg-[#2a2a2a] text-[#3b3b3b] dark:text-[#d7d7d7]",
   mixed: "bg-[#e8e5de] dark:bg-[#2a2a2a] text-[#3b3b3b] dark:text-[#d7d7d7]",
   unknown: "bg-[#ece9e2] dark:bg-[#2a2a2a] text-[#707070] dark:text-[#a5a5a5]",
 };

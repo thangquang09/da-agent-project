@@ -24,7 +24,6 @@ NODE_LABELS: dict[str, tuple[str, str]] = {
     "report_writer": ("started", "Đang tổng hợp báo cáo..."),
     "report_critic": ("started", "Đang kiểm chứng báo cáo..."),
     "report_finalize": ("started", "Đang hoàn thiện báo cáo..."),
-    "retrieve_rag_answer": ("started", "Đang tìm kiếm tài liệu..."),
     "create_visualization": ("started", "Đang tạo biểu đồ..."),
 }
 
