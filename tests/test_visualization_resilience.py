@@ -152,13 +152,28 @@ def test_docker_visualization_service_extracts_chart_and_report_artifacts(monkey
     assert report.image_data == b"fake-png"
 
 
+def test_docker_visualization_wrapper_creates_home_user_query_data_alias():
+    service = DockerVisualizationService(
+        image="python:3.11-slim",
+        bootstrap_command="",
+        timeout_seconds=30,
+    )
+
+    wrapped = service._wrap_visualization_code("print('ok')")
+
+    assert 'os.makedirs("/home/user", exist_ok=True)' in wrapped
+    assert 'shutil.copyfile("query_data.csv", "/home/user/query_data.csv")' in wrapped
+
+
 def test_visualization_factory_defaults_to_docker(monkeypatch):
     from app import config as config_module
     from app.tools import visualization as visualization_module
 
     config_module.load_settings.cache_clear()
     monkeypatch.setenv("TYPE_OF_SANDBOX", "docker")
-    monkeypatch.setattr("app.tools.visualization.shutil.which", lambda name: "/usr/bin/docker")
+    monkeypatch.setattr(
+        "app.tools.visualization.shutil.which", lambda name: "/usr/bin/docker"
+    )
     visualization_module._visualization_service = None
     visualization_module._visualization_service_key = None
 
@@ -182,10 +197,13 @@ def test_visualization_factory_none_disables_sandbox(monkeypatch):
 
     service = get_visualization_service()
 
-    assert service.generate_visualization(
-        data_rows=[{"x": 1, "y": 2}],
-        user_query="chart",
-    ).success is False
+    assert (
+        service.generate_visualization(
+            data_rows=[{"x": 1, "y": 2}],
+            user_query="chart",
+        ).success
+        is False
+    )
     assert is_visualization_available() is False
     config_module.load_settings.cache_clear()
     visualization_module._visualization_service = None

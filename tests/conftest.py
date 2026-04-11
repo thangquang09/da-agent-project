@@ -35,7 +35,7 @@ class FakeV3LLMClient:
 
         if "You are the supervisor of a hierarchical data analyst system." in system:
             return self._leader_response(user)
-        if "Bạn là Task Grounder" in system:
+        if "Bạn là Task Grounder" in system or "You are Task Grounder" in system:
             return self._task_grounder_response(user)
         if "You are a data domain analyst." in system:
             return self._report_data_profiler_response(user)

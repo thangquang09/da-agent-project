@@ -300,6 +300,309 @@ def test_task_grounder_report_capability_overrides_mixed_caps():
     assert _normalize_capabilities(["sql", "visualization", "report"]) == ["report"]
 
 
+def test_task_grounder_inline_visualization_override():
+    from app.graph.task_grounder import task_grounder
+
+    result = task_grounder(
+        {
+            "user_query": "Vẽ cho tôi biểu đồ tròn của các giá trị sau: 10, 20, 30, 40",
+            "session_context": "",
+            "step_count": 0,
+        }
+    )
+
+    profile = result["task_profile"]
+    assert profile["data_source"] == "inline_data"
+    assert profile["required_capabilities"] == ["visualization"]
+    assert result["tool_history"][0]["override"] == "inline_visualization"
+
+
+def test_leader_create_visualization_reuses_sql_rows_when_raw_data_missing(monkeypatch):
+    from app.graph.nodes import leader_agent
+
+    class FakeLLM:
+        def __init__(self) -> None:
+            self.call_count = 0
+
+        def chat_completion(self, **kwargs):
+            self.call_count += 1
+            if self.call_count == 1:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "action": "tool",
+                                        "tool": "ask_sql_analyst",
+                                        "args": {"query": "Dem nam nu"},
+                                        "reason": "Need counts",
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                }
+            if self.call_count == 2:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "action": "tool",
+                                        "tool": "create_visualization",
+                                        "args": {"query": "Ve bieu do cot"},
+                                        "reason": "Need chart",
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                }
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "action": "final",
+                                    "answer": "Số lượng nam là 577 và nữ là 314. Biểu đồ cột đã được tạo thành công.",
+                                    "confidence": "high",
+                                    "intent": "mixed",
+                                    "reason": "leader_finalized_after_chart",
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+
+    captured_viz_task: dict[str, object] = {}
+
+    def fake_sql_tool(state, query):  # noqa: ANN001
+        return {
+            "status": "ok",
+            "sql_result": {
+                "rows": [
+                    {"Sex": "male", "count": 577},
+                    {"Sex": "female", "count": 314},
+                ],
+                "row_count": 2,
+                "columns": ["Sex", "count"],
+            },
+            "generated_sql": "SELECT ...",
+            "validated_sql": "SELECT ...",
+            "errors": [],
+            "tool_history": [],
+            "result_ref": None,
+            "artifact_terminal": True,
+            "artifact_recommended_action": "finalize",
+        }
+
+    def fake_inline_worker(task_state):  # noqa: ANN001
+        captured_viz_task.update(task_state)
+        return {
+            "visualization": {
+                "success": True,
+                "image_url": "/artifacts/test/chart.png",
+                "image_format": "png",
+                "image_size_bytes": 123,
+                "chart_type": "bar",
+            },
+            "status": "success",
+        }
+
+    fake_llm = FakeLLM()
+    monkeypatch.setattr("app.graph.nodes.LLMClient.from_env", lambda: fake_llm)
+    monkeypatch.setattr("app.graph.nodes.ask_sql_analyst_tool", fake_sql_tool)
+    monkeypatch.setattr(
+        "app.graph.standalone_visualization.inline_data_worker", fake_inline_worker
+    )
+
+    result = leader_agent(
+        {
+            "user_query": "Số lượng Nam và nữ là bao nhiêu? Vẽ biểu đồ cột",
+            "task_profile": {
+                "task_mode": "mixed",
+                "data_source": "database",
+                "required_capabilities": ["sql", "visualization"],
+                "followup_mode": "fresh_query",
+                "confidence": "high",
+                "reasoning": "mixed",
+            },
+            "artifacts": [],
+            "session_context": "",
+            "xml_database_context": "",
+            "schema_context": "",
+            "step_count": 0,
+            "errors": [],
+        }
+    )
+
+    assert captured_viz_task["raw_data"] == [
+        {"Sex": "male", "count": 577},
+        {"Sex": "female", "count": 314},
+    ]
+    assert result["visualization"]["success"] is True
+    assert "577" in result["final_answer"]
+
+
+def test_leader_final_payload_keeps_multiple_visualizations(monkeypatch):
+    from app.graph.nodes import leader_agent
+
+    class FakeLLM:
+        def __init__(self) -> None:
+            self.call_count = 0
+
+        def chat_completion(self, **kwargs):
+            self.call_count += 1
+            if self.call_count == 1:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "action": "tool",
+                                        "tool": "ask_sql_analyst_parallel",
+                                        "args": {
+                                            "tasks": [{"query": "q1"}, {"query": "q2"}]
+                                        },
+                                        "reason": "Need both datasets",
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                }
+            if self.call_count == 2:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "action": "tool",
+                                        "tool": "create_visualization",
+                                        "args": {
+                                            "query": "chart 1",
+                                            "raw_data": [
+                                                {"label": "male", "value": 577},
+                                                {"label": "female", "value": 314},
+                                            ],
+                                        },
+                                        "reason": "Need first chart",
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                }
+            if self.call_count == 3:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "action": "tool",
+                                        "tool": "create_visualization",
+                                        "args": {
+                                            "query": "chart 2",
+                                            "raw_data": [
+                                                {"family_size": 0, "dead": 374},
+                                                {"family_size": 1, "dead": 72},
+                                            ],
+                                        },
+                                        "reason": "Need second chart",
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                }
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "action": "final",
+                                    "answer": "Đã tạo hai biểu đồ.",
+                                    "confidence": "high",
+                                    "intent": "mixed",
+                                    "reason": "done",
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+
+    def fake_parallel_tool(state, tasks, parent_query):  # noqa: ANN001
+        return {
+            "status": "ok",
+            "sql_result": {"rows": [{"x": 1}], "row_count": 1, "columns": ["x"]},
+            "generated_sql": "SELECT 1",
+            "validated_sql": "SELECT 1",
+            "errors": [],
+            "tool_history": [],
+            "result_ref": None,
+        }
+
+    counter = {"value": 0}
+
+    def fake_inline_worker(task_state):  # noqa: ANN001
+        counter["value"] += 1
+        return {
+            "visualization": {
+                "success": True,
+                "image_url": f"/artifacts/test/chart_{counter['value']}.png",
+                "image_format": "png",
+                "image_size_bytes": 100 + counter["value"],
+                "chart_type": "bar",
+            },
+            "status": "success",
+        }
+
+    fake_llm = FakeLLM()
+    monkeypatch.setattr("app.graph.nodes.LLMClient.from_env", lambda: fake_llm)
+    monkeypatch.setattr(
+        "app.graph.nodes.ask_sql_analyst_parallel_tool", fake_parallel_tool
+    )
+    monkeypatch.setattr(
+        "app.graph.standalone_visualization.inline_data_worker", fake_inline_worker
+    )
+
+    result = leader_agent(
+        {
+            "user_query": "multi chart",
+            "task_profile": {
+                "task_mode": "mixed",
+                "data_source": "database",
+                "required_capabilities": ["sql", "visualization"],
+                "followup_mode": "fresh_query",
+                "confidence": "high",
+                "reasoning": "mixed",
+            },
+            "artifacts": [],
+            "session_context": "",
+            "xml_database_context": "",
+            "schema_context": "",
+            "step_count": 0,
+            "errors": [],
+        }
+    )
+
+    assert len(result["visualizations"]) == 2
+    assert result["visualizations"][0]["image_url"].endswith("chart_1.png")
+    assert result["visualizations"][1]["image_url"].endswith("chart_2.png")
+    assert result["final_payload"]["visualizations"][1]["image_url"].endswith(
+        "chart_2.png"
+    )
+
+
 # =============================================================================
 # Fix 2 — task_profile injection into leader prompt
 # =============================================================================
