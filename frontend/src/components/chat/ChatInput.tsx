@@ -39,7 +39,7 @@ export function ChatInput() {
   };
 
   return (
-    <div className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-4 py-3">
+    <div className="border-t border-[#dfddd7] dark:border-[#2b2b2b] bg-[#fcfcf9] dark:bg-[#141414] px-4 py-3">
       {/* Input row */}
       <div className="flex items-end gap-2 max-w-3xl mx-auto">
         {/* Textarea */}
@@ -52,14 +52,14 @@ export function ChatInput() {
           placeholder="Ask a data question..."
           rows={1}
           disabled={isStreaming}
-          className="flex-1 resize-none rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 px-4 py-2.5 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400 placeholder:text-slate-400 dark:placeholder:text-slate-500 disabled:opacity-50"
+          className="flex-1 resize-none rounded-xl border border-[#dcd8ce] dark:border-[#343434] bg-[#f7f5f0] dark:bg-[#1d1d1d] text-[#2f2f2f] dark:text-[#efefef] px-4 py-2.5 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[#686868]/20 focus:border-[#8a8a8a] placeholder:text-[#8f8f8f] dark:placeholder:text-[#8b8b8b] disabled:opacity-50"
         />
 
         {/* Send button */}
         <button
           onClick={handleSend}
           disabled={!input.trim() || isStreaming}
-          className="p-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-600 dark:bg-indigo-600 dark:hover:bg-indigo-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          className="p-2.5 rounded-xl bg-[#2f2f2f] hover:bg-[#3a3a3a] dark:bg-[#e9e9e9] dark:hover:bg-[#dcdcdc] text-[#fafafa] dark:text-[#171717] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           <Send size={16} />
         </button>

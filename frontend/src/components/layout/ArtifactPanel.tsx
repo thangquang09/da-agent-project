@@ -87,7 +87,7 @@ export function ArtifactPanel() {
 
   return (
     <aside
-      className="relative flex h-full flex-col border-l border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900"
+      className="relative flex h-full flex-col border-l border-[#dfddd7] dark:border-[#2b2b2b] bg-[#f7f6f3] dark:bg-[#1b1b1b]"
       style={{ width: panelWidth, minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }}
     >
       {/* ── Drag handle (left edge) ── */}
@@ -98,20 +98,20 @@ export function ArtifactPanel() {
       />
 
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#dfddd7] dark:border-[#2b2b2b] bg-[#fcfcf9] dark:bg-[#171717]">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+          <span className="text-sm font-semibold text-[#3a3a3a] dark:text-[#ececec]">
             {tabLabel[content.type] ?? "Artifact"}
           </span>
           {content.title && (
-            <span className="text-xs text-slate-400 dark:text-slate-500 truncate max-w-[200px]">
+            <span className="text-xs text-[#8a8a8a] dark:text-[#989898] truncate max-w-[200px]">
               &mdash; {content.title}
             </span>
           )}
         </div>
         <button
           onClick={closeArtifact}
-          className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+          className="p-1.5 rounded-lg hover:bg-[#ece9e2] dark:hover:bg-[#282828] text-[#7f7f7f] hover:text-[#2f2f2f] dark:text-[#9f9f9f] dark:hover:text-[#ebebeb] transition-colors"
           aria-label="Close artifact panel"
         >
           <X size={18} />

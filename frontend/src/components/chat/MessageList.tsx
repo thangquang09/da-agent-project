@@ -17,7 +17,7 @@ export function MessageList({ messages }: MessageListProps) {
   }, [messages]);
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-6 space-y-5">
+    <div className="max-w-4xl mx-auto px-5 py-7 space-y-6">
       {messages.map((msg) =>
         msg.role === "user" ? (
           <UserMessage key={msg.id} message={msg} />

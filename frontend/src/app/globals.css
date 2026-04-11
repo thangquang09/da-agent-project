@@ -1,21 +1,37 @@
 @import "tailwindcss";
 @import "highlight.js/styles/github.css";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --sidebar-w: 280px;
   --artifact-w: 480px;
+  --app-bg: #f3f2ef;
+  --app-bg-elevated: #fcfcf9;
+  --app-panel: #f7f6f3;
+  --app-border: #dfddd7;
+  --app-text: #2f2f2f;
+  --app-text-muted: #6b6b6b;
+  --app-accent: #1f1f1f;
 }
 
 body {
-  font-family: var(--font-geist-sans, system-ui, -apple-system, sans-serif);
-  background: #ffffff;
-  color: #0f172a;
+  font-family: var(--font-plex-sans, var(--font-geist-sans, system-ui, -apple-system, sans-serif));
+  background: var(--app-bg);
+  color: var(--app-text);
 }
 
 /* ─── Dark mode base ─────────────────────────────────────────────────────────── */
 .dark body {
-  background: #020617;
-  color: #f1f5f9;
+  --app-bg: #101010;
+  --app-bg-elevated: #161616;
+  --app-panel: #1e1e1e;
+  --app-border: #2c2c2c;
+  --app-text: #e8e8e8;
+  --app-text-muted: #a1a1a1;
+  --app-accent: #f3f3f3;
+  background: var(--app-bg);
+  color: var(--app-text);
 }
 
 /* ─── Scrollbar ──────────────────────────────────────────────────────────────── */
@@ -199,8 +215,8 @@ body {
   background: linear-gradient(
     to right,
     transparent 0px,
-    rgba(99, 102, 241, 0.35) 2px,
-    rgba(99, 102, 241, 0.35) 4px,
+    rgba(120, 120, 120, 0.28) 2px,
+    rgba(120, 120, 120, 0.28) 4px,
     transparent 6px
   );
 }
@@ -220,6 +236,5 @@ body {
 
 .resize-handle:hover::after,
 .resize-handle:active::after {
-  background: rgba(99, 102, 241, 0.6);
+  background: rgba(110, 110, 110, 0.45);
 }
-

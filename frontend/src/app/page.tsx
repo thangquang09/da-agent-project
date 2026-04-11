@@ -12,7 +12,7 @@ export default function Home() {
   const dataPanelOpen = useChatStore((s) => s.dataPanelOpen);
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full bg-[var(--app-bg)] text-[var(--app-text)]">
       {/* Left sidebar — thread list */}
       {sidebarOpen && <Sidebar />}
 

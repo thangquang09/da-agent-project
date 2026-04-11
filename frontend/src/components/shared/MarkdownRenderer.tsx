@@ -24,7 +24,7 @@ const components: Components = {
     if (isInline) {
       return (
         <code
-          className="bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-200 px-1.5 py-0.5 rounded text-[0.85em] font-mono"
+          className="bg-[#ece9e2] dark:bg-[#2a2a2a] text-[#2f2f2f] dark:text-[#e9e9e9] px-1.5 py-0.5 rounded text-[0.85em] font-mono"
           {...props}
         >
           {children}
@@ -39,7 +39,7 @@ const components: Components = {
   },
   a: ({ children, ...props }) => (
     <a
-      className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 underline underline-offset-2"
+      className="text-[#3f3f3f] dark:text-[#cfcfcf] hover:text-[#222] dark:hover:text-[#f2f2f2] underline underline-offset-2"
       target="_blank"
       rel="noopener noreferrer"
       {...props}
