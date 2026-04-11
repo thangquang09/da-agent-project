@@ -9,6 +9,7 @@ import type {
   TurnArtifact,
   TableInfo,
   UploadStatus,
+  AgentStatus,
 } from "@/lib/types";
 import { listThreads, getThreadHistory, getThreadArtifacts, deleteThread as deleteThreadAPI, uploadFiles as uploadFilesAPI, getTables as getTablesAPI, updateTableContext as updateTableContextAPI } from "@/lib/api";
 import { streamQuery } from "@/lib/sse";
@@ -47,6 +48,7 @@ interface ChatStore {
 
   // ── UI state ─────────────────────────────────────────────────────────
   isStreaming: boolean;
+  agentStatus: AgentStatus | null;
   uploadedFiles: UploadedFile[];
   sidebarOpen: boolean;
 
@@ -89,6 +91,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   artifactOpen: false,
   artifactContent: null,
   isStreaming: false,
+  agentStatus: null,
   uploadedFiles: [],
   sidebarOpen: true,
   dataPanelOpen: false,
@@ -267,6 +270,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       onStarted: () => {
         // already showing "thinking"
       },
+      onStatus: (status: AgentStatus) => {
+        set({ agentStatus: status });
+      },
       onResult: (result: QueryResponse) => {
         set((s) => ({
           messages: s.messages.map((m) =>
@@ -280,8 +286,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               : m
           ),
           isStreaming: false,
+          agentStatus: null,
         }));
-        // Refresh thread list (new thread may have appeared)
         get().fetchThreads();
       },
       onError: (error: string) => {
@@ -296,6 +302,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               : m
           ),
           isStreaming: false,
+          agentStatus: null,
         }));
       },
     });

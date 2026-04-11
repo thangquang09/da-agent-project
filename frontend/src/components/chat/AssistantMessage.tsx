@@ -3,8 +3,8 @@
 import type { Message } from "@/lib/types";
 import { useChatStore } from "@/stores/chatStore";
 import { MarkdownRenderer } from "@/components/shared/MarkdownRenderer";
-import { LoadingDots } from "@/components/shared/LoadingDots";
 import { MessageBadges } from "@/components/chat/MessageBadges";
+import { AgentStatusIndicator } from "@/components/chat/AgentStatusIndicator";
 import {
   Bot,
   FileText,
@@ -19,6 +19,7 @@ interface AssistantMessageProps {
 
 export function AssistantMessage({ message }: AssistantMessageProps) {
   const openArtifact = useChatStore((s) => s.openArtifact);
+  const agentStatus = useChatStore((s) => s.agentStatus);
   const result = message.result;
   const isReportResponse = result?.response_mode === "report" && !!result?.report_markdown;
 
@@ -49,10 +50,7 @@ export function AssistantMessage({ message }: AssistantMessageProps) {
           {/* Content */}
           <div className="bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-700 px-4 py-3 rounded-2xl rounded-tl-md">
             {message.status === "thinking" ? (
-              <div className="flex items-center gap-2 text-sm text-slate-400">
-                <LoadingDots />
-                <span>Thinking&hellip;</span>
-              </div>
+              <AgentStatusIndicator status={agentStatus} />
             ) : message.status === "failed" ? (
               <p className="text-sm text-red-500">{message.content}</p>
             ) : (

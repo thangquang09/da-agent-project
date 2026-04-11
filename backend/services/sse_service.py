@@ -9,6 +9,7 @@ from sse_starlette.sse import ServerSentEvent
 
 from app.logger import logger
 from app.main import run_query
+from backend.services.status_emitter import StatusEmitter
 from backend.utils import make_serializable
 
 
@@ -20,27 +21,16 @@ async def stream_query_events(
     recursion_limit: int = 25,
     version: str = "v3",
 ) -> AsyncGenerator[ServerSentEvent, None]:
-    """
-    Yields SSE events for a query execution.
+    loop = asyncio.get_running_loop()
 
-    Wire protocol (3 event types):
-      started  → fires immediately, signals work began (client shows "thinking")
-      result   → fires after graph completes (~7-10s), full QueryResponse payload
-      error    → fires on exception, includes message + category
+    emitter = StatusEmitter(loop=loop)
+    on_status = emitter.make_tracer_callback()
 
-    This is "synthetic" streaming: we fire `started` immediately so the
-    frontend is responsive, then run the synchronous graph in a thread pool,
-    then emit `result`. The SSE contract is stable — when graph.astream()
-    is adopted later, intermediate node events can be added without breaking
-    existing clients.
-    """
-    # Fire immediately → frontend shows spinner
     yield ServerSentEvent(
         data=json.dumps({"event": "started", "node": None, "data": {"query": query}}),
         event="started",
     )
 
-    # Decode base64 file data if present
     decoded_file_data: list[dict[str, Any]] | None = None
     if uploaded_file_data:
         decoded_file_data = []
@@ -50,40 +40,71 @@ async def stream_query_events(
                 raw = base64.b64decode(raw)
             decoded_file_data.append({"name": f["name"], "data": raw})
 
+    graph_done = asyncio.Event()
+
+    async def _drain_status() -> AsyncGenerator[ServerSentEvent, None]:
+        while True:
+            try:
+                event = await asyncio.wait_for(emitter.queue.get(), timeout=0.5)
+                yield ServerSentEvent(
+                    data=json.dumps(
+                        {"event": "status", "node": event.node, "data": event.to_dict()}
+                    ),
+                    event="status",
+                )
+            except asyncio.TimeoutError:
+                if graph_done.is_set() and emitter.queue.empty():
+                    return
+
+    def _run_graph() -> dict[str, Any]:
+        return run_query(
+            user_query=query,
+            thread_id=thread_id,
+            user_semantic_context=user_semantic_context,
+            uploaded_file_data=decoded_file_data,
+            recursion_limit=recursion_limit,
+            version=version,
+            on_status=on_status,
+        )
+
+    graph_task = loop.run_in_executor(None, _run_graph)
+
+    async def _run_and_signal() -> dict[str, Any]:
+        result = await graph_task
+        graph_done.set()
+        return result
+
+    runner = asyncio.ensure_future(_run_and_signal())
+
+    async for sse_event in _drain_status():
+        yield sse_event
+        if graph_done.is_set() and emitter.queue.empty():
+            break
+
     try:
-        loop = asyncio.get_running_loop()
-        payload: dict[str, Any] = await loop.run_in_executor(
-            None,
-            lambda: run_query(
-                user_query=query,
-                thread_id=thread_id,
-                user_semantic_context=user_semantic_context,
-                uploaded_file_data=decoded_file_data,
-                recursion_limit=recursion_limit,
-                version=version,
-            ),
-        )
-
-        logger.info(
-            "backend.sse_service done run_id={run_id}",
-            run_id=payload.get("run_id", "?"),
-        )
-
-        # Serialize payload — convert any remaining bytes for JSON transport (images now served via /artifacts/ URLs)
-        serializable = make_serializable(payload)
-
-        yield ServerSentEvent(
-            data=json.dumps({"event": "result", "node": None, "data": serializable}),
-            event="result",
-        )
-
-    except Exception as exc:  # noqa: BLE001
+        payload = runner.result()
+    except Exception as exc:
         logger.exception("backend.sse_service error: {error}", error=str(exc))
         yield ServerSentEvent(
-            data=json.dumps({
-                "event": "error",
-                "node": None,
-                "data": {"message": str(exc), "category": "BACKEND_ERROR"},
-            }),
+            data=json.dumps(
+                {
+                    "event": "error",
+                    "node": None,
+                    "data": {"message": str(exc), "category": "BACKEND_ERROR"},
+                }
+            ),
             event="error",
         )
+        return
+
+    logger.info(
+        "backend.sse_service done run_id={run_id}",
+        run_id=payload.get("run_id", "?"),
+    )
+
+    serializable = make_serializable(payload)
+
+    yield ServerSentEvent(
+        data=json.dumps({"event": "result", "node": None, "data": serializable}),
+        event="result",
+    )

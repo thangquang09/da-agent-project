@@ -31,7 +31,8 @@ Two Zustand stores:
 
 ## Key Flows
 
-- **Query**: `sendMessage()` → SSE streaming via `lib/sse.ts` → update assistant message
+- **Query**: `sendMessage()` → SSE streaming via `lib/sse.ts` → real-time `agentStatus` updates → update assistant message on result
+- **Agent Status**: `AgentStatusIndicator` shows spinner + Vietnamese label (e.g. "Đang phân tích câu hỏi...") instead of static "Thinking..." dots
 - **History**: `selectThread()` → fetch turns + artifacts → reconstruct messages with artifact buttons
 - **Data upload**: `uploadFiles()` → POST multipart → auto-refresh tables list
 - **Artifact view**: `openArtifact()` → render in right panel (resizable)

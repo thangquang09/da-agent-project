@@ -53,7 +53,9 @@ def _safe_jsonable(value: Any, max_length: int = 300) -> Any:
         return out
     if isinstance(value, list):
         compact = value[:8]
-        return [_safe_jsonable(v, max_length=max_length) for v in compact] + (["..."] if len(value) > 8 else [])
+        return [_safe_jsonable(v, max_length=max_length) for v in compact] + (
+            ["..."] if len(value) > 8 else []
+        )
     return str(value)[:max_length]
 
 
@@ -66,55 +68,71 @@ def _prune_empty_fields(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _state_summary(state: dict[str, Any]) -> dict[str, Any]:
-    return _prune_empty_fields({
-        "user_query": _safe_jsonable(state.get("user_query")),
-        "task_id": state.get("task_id"),
-        "step_count": state.get("step_count"),
-        "task_profile": _safe_jsonable(state.get("task_profile")),
-        "artifact_count": len(state.get("artifacts", []) or []),
-        "has_schema_context": bool(state.get("schema_context")),
-        "generated_sql": _safe_jsonable(state.get("generated_sql")),
-        "validated_sql": _safe_jsonable(state.get("validated_sql")),
-        "sql_row_count": (
-            state.get("sql_result", {}).get("row_count")
-            if isinstance(state.get("sql_result"), dict)
-            else None
-        ),
-        "retrieved_context_count": len(state.get("retrieved_context", []) or []),
-        "errors": _safe_jsonable(state.get("errors", [])),
-    })
+    return _prune_empty_fields(
+        {
+            "user_query": _safe_jsonable(state.get("user_query")),
+            "task_id": state.get("task_id"),
+            "step_count": state.get("step_count"),
+            "task_profile": _safe_jsonable(state.get("task_profile")),
+            "artifact_count": len(state.get("artifacts", []) or []),
+            "has_schema_context": bool(state.get("schema_context")),
+            "generated_sql": _safe_jsonable(state.get("generated_sql")),
+            "validated_sql": _safe_jsonable(state.get("validated_sql")),
+            "sql_row_count": (
+                state.get("sql_result", {}).get("row_count")
+                if isinstance(state.get("sql_result"), dict)
+                else None
+            ),
+            "retrieved_context_count": len(state.get("retrieved_context", []) or []),
+            "errors": _safe_jsonable(state.get("errors", [])),
+        }
+    )
 
 
 def _output_summary(update: dict[str, Any]) -> dict[str, Any]:
-    return _prune_empty_fields({
-        "keys": sorted(list(update.keys())),
-        "answer_preview": _safe_jsonable(
-            update.get("final_answer") or update.get("answer_summary")
-        ),
-        "intent": update.get("intent"),
-        "step_count": update.get("step_count"),
-        "status": update.get("status"),
-        "sql_row_count": (
-            update.get("sql_result", {}).get("row_count")
-            if isinstance(update.get("sql_result"), dict)
-            else None
-        ),
-        "tool_history_delta": len(update.get("tool_history", []) or []),
-        "errors_delta": _safe_jsonable(update.get("errors", [])),
-        "generated_sql": _safe_jsonable(update.get("generated_sql")),
-        "artifact_type": (
-            update.get("artifact_type")
-            or (update.get("artifacts", [{}])[0].get("artifact_type") if update.get("artifacts") else None)
-        ),
-        "terminal": (
-            update.get("artifact_terminal")
-            or (any(a.get("terminal") for a in update.get("artifacts", [])) if update.get("artifacts") else None)
-        ),
-        "recommended_action": (
-            update.get("artifact_recommended_action")
-            or (update.get("artifacts", [{}])[0].get("recommended_next_action") if update.get("artifacts") else None)
-        ),
-    })
+    return _prune_empty_fields(
+        {
+            "keys": sorted(list(update.keys())),
+            "answer_preview": _safe_jsonable(
+                update.get("final_answer") or update.get("answer_summary")
+            ),
+            "intent": update.get("intent"),
+            "step_count": update.get("step_count"),
+            "status": update.get("status"),
+            "sql_row_count": (
+                update.get("sql_result", {}).get("row_count")
+                if isinstance(update.get("sql_result"), dict)
+                else None
+            ),
+            "tool_history_delta": len(update.get("tool_history", []) or []),
+            "errors_delta": _safe_jsonable(update.get("errors", [])),
+            "generated_sql": _safe_jsonable(update.get("generated_sql")),
+            "artifact_type": (
+                update.get("artifact_type")
+                or (
+                    update.get("artifacts", [{}])[0].get("artifact_type")
+                    if update.get("artifacts")
+                    else None
+                )
+            ),
+            "terminal": (
+                update.get("artifact_terminal")
+                or (
+                    any(a.get("terminal") for a in update.get("artifacts", []))
+                    if update.get("artifacts")
+                    else None
+                )
+            ),
+            "recommended_action": (
+                update.get("artifact_recommended_action")
+                or (
+                    update.get("artifacts", [{}])[0].get("recommended_next_action")
+                    if update.get("artifacts")
+                    else None
+                )
+            ),
+        }
+    )
 
 
 class LangfuseAdapter:
@@ -126,7 +144,12 @@ class LangfuseAdapter:
 
         if not self.settings.enable_langfuse:
             return
-        host = (os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") or "").strip().strip('"').strip("'")
+        host = (
+            (os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") or "")
+            .strip()
+            .strip('"')
+            .strip("'")
+        )
         if host and not os.getenv("LANGFUSE_HOST"):
             os.environ["LANGFUSE_HOST"] = host
 
@@ -167,7 +190,9 @@ class LangfuseAdapter:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Langfuse start_run failed: {error}", error=str(exc))
 
-    def start_node(self, parent: Any, node_name: str, state: dict[str, Any], observation_type: str) -> Any:
+    def start_node(
+        self, parent: Any, node_name: str, state: dict[str, Any], observation_type: str
+    ) -> Any:
         if not self.enabled or parent is None:
             return None
         try:
@@ -177,22 +202,32 @@ class LangfuseAdapter:
                 input={"state": _state_summary(state)},
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Langfuse start_node failed for {node}: {error}", node=node_name, error=str(exc))
+            logger.warning(
+                "Langfuse start_node failed for {node}: {error}",
+                node=node_name,
+                error=str(exc),
+            )
             return None
 
-    def end_node(self, node_obs: Any, update: dict[str, Any] | None, error_message: str | None) -> None:
+    def end_node(
+        self, node_obs: Any, update: dict[str, Any] | None, error_message: str | None
+    ) -> None:
         if not self.enabled or node_obs is None:
             return
         try:
             if update is not None:
                 node_obs.update(output={"update": _output_summary(update)})
             if error_message:
-                node_obs.update(level="ERROR", metadata={"error_message": error_message})
+                node_obs.update(
+                    level="ERROR", metadata={"error_message": error_message}
+                )
             node_obs.end()
         except Exception as exc:  # noqa: BLE001
             logger.warning("Langfuse end_node failed: {error}", error=str(exc))
 
-    def end_run(self, payload: dict[str, Any], status: str, error_message: str | None) -> None:
+    def end_run(
+        self, payload: dict[str, Any], status: str, error_message: str | None
+    ) -> None:
         if not self.enabled or self.root_observation is None:
             return
         try:
@@ -208,7 +243,9 @@ class LangfuseAdapter:
                 }
             )
             if error_message:
-                self.root_observation.update(level="ERROR", metadata={"error_message": error_message})
+                self.root_observation.update(
+                    level="ERROR", metadata={"error_message": error_message}
+                )
             self.root_observation.end()
             self.client.flush()
         except Exception as exc:  # noqa: BLE001
@@ -216,7 +253,14 @@ class LangfuseAdapter:
 
 
 class RunTracer:
-    def __init__(self, run_id: str, thread_id: str, query: str, trace_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        run_id: str,
+        thread_id: str,
+        query: str,
+        trace_path: Path | None = None,
+        on_status: Any | None = None,
+    ) -> None:
         self.run_id = run_id
         self.thread_id = thread_id
         self.query = query
@@ -228,13 +272,21 @@ class RunTracer:
         self.node_attempts: Counter[str] = Counter()
         self.node_records: list[NodeTraceRecord] = []
         self._lock = threading.Lock()
+        self._on_status = on_status
         self.langfuse = LangfuseAdapter()
         self.langfuse.start_run(run_id=run_id, query=query, thread_id=thread_id)
 
-    def start_node(self, node_name: str, state: dict[str, Any], observation_type: str = "span") -> NodeScope:
+    def start_node(
+        self, node_name: str, state: dict[str, Any], observation_type: str = "span"
+    ) -> NodeScope:
         with self._lock:
             self.node_attempts[node_name] += 1
             attempt = self.node_attempts[node_name]
+        if self._on_status is not None:
+            try:
+                self._on_status(node_name, "started", None)
+            except Exception:
+                pass
         scope = NodeScope(
             node_name=node_name,
             attempt=attempt,
@@ -251,10 +303,17 @@ class RunTracer:
         )
         return scope
 
-    def end_node(self, scope: NodeScope, update: dict[str, Any] | None = None, error: Exception | None = None) -> None:
+    def end_node(
+        self,
+        scope: NodeScope,
+        update: dict[str, Any] | None = None,
+        error: Exception | None = None,
+    ) -> None:
         ended_at = utc_now_iso()
         latency_ms = round((time.perf_counter() - scope.started_perf) * 1000, 2)
-        error_category = NODE_TO_FAILURE.get(scope.node_name, "SYNTHESIS_ERROR") if error else None
+        error_category = (
+            NODE_TO_FAILURE.get(scope.node_name, "SYNTHESIS_ERROR") if error else None
+        )
         error_message = str(error) if error else None
         output_summary = _output_summary(update or {})
         record = NodeTraceRecord(
@@ -275,7 +334,15 @@ class RunTracer:
         with self._lock:
             self.node_records.append(record)
             self._append_jsonl(record.to_dict())
-        self.langfuse.end_node(scope.langfuse_observation, update=update, error_message=error_message)
+        self.langfuse.end_node(
+            scope.langfuse_observation, update=update, error_message=error_message
+        )
+        if self._on_status is not None:
+            try:
+                phase = "error" if error else "completed"
+                self._on_status(scope.node_name, phase, None)
+            except Exception:
+                pass
         logger.info(
             "Trace node={node} attempt={attempt} status={status} latency_ms={latency}",
             node=scope.node_name,
@@ -284,7 +351,12 @@ class RunTracer:
             latency=latency_ms,
         )
 
-    def finish(self, payload: dict[str, Any], status: str = "success", error_message: str | None = None) -> None:
+    def finish(
+        self,
+        payload: dict[str, Any],
+        status: str = "success",
+        error_message: str | None = None,
+    ) -> None:
         ended_at = utc_now_iso()
         latency_ms = round((time.perf_counter() - self.started_perf) * 1000, 2)
         used_tools = [str(item) for item in payload.get("used_tools", [])]
@@ -299,9 +371,18 @@ class RunTracer:
             error_categories.append("RAG_IRRELEVANT_CONTEXT")
 
         row_count = payload.get("rows")
-        if isinstance(row_count, int) and row_count == 0 and payload.get("intent") in {"sql", "mixed"}:
+        if (
+            isinstance(row_count, int)
+            and row_count == 0
+            and payload.get("intent") in {"sql", "mixed"}
+        ):
             error_categories.append("EMPTY_RESULT")
-        if status == "failed" and "STEP_LIMIT_REACHED" not in error_categories and error_message and "recursion" in error_message.lower():
+        if (
+            status == "failed"
+            and "STEP_LIMIT_REACHED" not in error_categories
+            and error_message
+            and "recursion" in error_message.lower()
+        ):
             error_categories.append("STEP_LIMIT_REACHED")
 
         fallback_used = any(
@@ -334,15 +415,11 @@ class RunTracer:
                 total_cost_usd = round(total_cost_usd, 8)
 
         artifacts = payload.get("artifacts", []) or []
-        artifact_types = sorted(set(
-            a.get("artifact_type")
-            for a in artifacts
-            if a.get("artifact_type")
-        ))
-        task_profile = payload.get("task_profile")
-        grounding_confidence = (
-            task_profile.get("confidence") if task_profile else None
+        artifact_types = sorted(
+            set(a.get("artifact_type") for a in artifacts if a.get("artifact_type"))
         )
+        task_profile = payload.get("task_profile")
+        grounding_confidence = task_profile.get("confidence") if task_profile else None
 
         run_record = RunTraceRecord(
             record_type="run",
@@ -370,7 +447,9 @@ class RunTracer:
         )
         with self._lock:
             self._append_jsonl(run_record.to_dict())
-        self.langfuse.end_run(payload=payload, status=status, error_message=error_message)
+        self.langfuse.end_run(
+            payload=payload, status=status, error_message=error_message
+        )
         logger.info(
             "Trace run_id={run_id} status={status} latency_ms={latency} intent={intent}",
             run_id=self.run_id,

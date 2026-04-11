@@ -22,6 +22,7 @@ class RunTracer:
         thread_id: str,
         query: str,
         trace_path: Path | None = None,
+        on_status: Any | None = None,
     ) -> None:
         self.run_id = run_id
         self.thread_id = thread_id
@@ -30,8 +31,20 @@ class RunTracer:
         self.started_perf = time.perf_counter()
         self.node_attempts: Counter[str]  # Tracks retries per node
         self.node_records: list[NodeTraceRecord]  # In-memory buffer
+        self._on_status = on_status  # Optional callback for SSE status emission
         self.langfuse = LangfuseAdapter()  # Optional Langfuse integration
 ```
+
+### Status Emission
+
+When `on_status` is provided, `RunTracer` fires callbacks on every node lifecycle event:
+
+| Method | Callback fired |
+|--------|---------------|
+| `start_node()` | `on_status(node_name, "started", None)` |
+| `end_node()` | `on_status(node_name, "completed", None)` or `on_status(node_name, "error", None)` |
+
+This is used by the SSE streaming layer to push real-time agent status to the frontend. When `on_status=None` (CLI, eval, POST endpoints), no callbacks fire — zero overhead.
 
 ### Key Methods
 

@@ -26,6 +26,7 @@ def _make_serializable(obj: Any) -> Any:
         return [_make_serializable(i) for i in obj]
     return obj
 
+
 def _extract_numeric_evidence(payload: dict, key: str) -> int | None:
     for item in payload.get("evidence", []):
         text = str(item)
@@ -47,6 +48,7 @@ def run_query(
     expected_keywords: list[str] | None = None,  # Deprecated: eval-only field
     version: str = "v3",
     thread_id: str | None = None,
+    on_status: Any | None = None,
 ) -> dict:
     if version != "v3":
         raise ValueError(f"Unsupported graph version: {version}")
@@ -61,6 +63,7 @@ def run_query(
         run_id=run_cfg.run_id,
         thread_id=run_cfg.thread_id,
         query=user_query,
+        on_status=on_status,
     )
     tracer_token = set_current_tracer(tracer)
     graph_input: dict[str, Any] = {"user_query": user_query}

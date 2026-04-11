@@ -1,24 +1,15 @@
-import type { QueryResponse } from "./types";
+import type { QueryResponse, AgentStatus } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
 
-export interface StreamCallbacks {
+interface StreamCallbacks {
   onStarted?: () => void;
+  onStatus?: (status: AgentStatus) => void;
   onResult?: (data: QueryResponse) => void;
   onError?: (error: string) => void;
   onClose?: () => void;
 }
 
-/**
- * Open an SSE connection to `GET /query/stream`.
- *
- * Backend sends NAMED SSE events:
- *   event: started  → data: {"event":"started","node":null,"data":{"query":"..."}}
- *   event: result   → data: {"event":"result","node":null,"data":{...QueryResponse}}
- *   event: error    → data: {"event":"error","node":null,"data":{"message":"...","category":"..."}}
- *
- * Returns a cleanup function that closes the EventSource.
- */
 export function streamQuery(
   query: string,
   threadId: string,
@@ -36,10 +27,21 @@ export function streamQuery(
 
   const source = new EventSource(`${API_URL}/query/stream?${params}`);
 
-  // Must use addEventListener for named events — onmessage only fires for
-  // untyped events (no "event:" line in the SSE frame).
   source.addEventListener("started", () => {
     callbacks.onStarted?.();
+  });
+
+  source.addEventListener("status", (ev: MessageEvent) => {
+    try {
+      const payload = JSON.parse(ev.data) as {
+        event: string;
+        node: string;
+        data: AgentStatus;
+      };
+      callbacks.onStatus?.(payload.data);
+    } catch {
+      // malformed status event — ignore
+    }
   });
 
   source.addEventListener("result", (ev: MessageEvent) => {
@@ -63,7 +65,6 @@ export function streamQuery(
       };
       callbacks.onError?.(payload.data?.message ?? "Unknown error");
     } catch {
-      // Also fires on connection failure (ev.data may be null)
       callbacks.onError?.("Connection lost");
     }
     source.close();

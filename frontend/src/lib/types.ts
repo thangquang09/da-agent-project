@@ -76,6 +76,19 @@ export interface HealthResponse {
 
 // Frontend-only types
 
+export interface AgentStatus {
+  node: string;
+  phase: "started" | "completed" | "error";
+  label: string;
+  detail?: {
+    step?: number;
+    total_steps?: number;
+    section?: number;
+    total_sections?: number;
+  };
+  timestamp: string;
+}
+
 export interface Message {
   id: string;
   role: "user" | "assistant";
