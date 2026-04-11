@@ -31,8 +31,8 @@ SQL: {{sql}}
 Results (JSON format):
 {{results}}
 
-Provide your analysis in this JSON format:
-{{{{"summary": "brief summary of findings", "insights": ["insight 1", "insight 2"]}}}}""",
+Return JSON with this shape:
+{"summary": "brief summary of findings", "insights": ["insight 1", "insight 2"]}""",
         },
     ],
 )

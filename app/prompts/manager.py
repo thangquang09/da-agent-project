@@ -9,8 +9,8 @@ from typing import Any, Literal
 from app.config import load_settings
 from app.logger import logger
 from app.prompts.analysis import ANALYSIS_PROMPT_DEFINITION
+from app.prompts.chitchat_response import CHITCHAT_RESPONSE_PROMPT_DEFINITION
 from app.prompts.classifier import RETRIEVAL_TYPE_CLASSIFIER_PROMPT
-from app.prompts.context_detection import CONTEXT_DETECTION_PROMPT_DEFINITION
 from app.prompts.continuity import CONTINUITY_DETECTION_PROMPT_DEFINITION
 from app.prompts.decomposition import TASK_DECOMPOSITION_PROMPT
 from app.prompts.evaluation import GROUNDEDNESS_EVALUATION_PROMPT
@@ -21,10 +21,9 @@ from app.prompts.report_data_profiler import REPORT_DATA_PROFILER_PROMPT_DEFINIT
 from app.prompts.report_insight import REPORT_INSIGHT_PROMPT_DEFINITION
 from app.prompts.report_planner import REPORT_PLANNER_PROMPT_DEFINITION
 from app.prompts.report_writer import REPORT_WRITER_PROMPT_DEFINITION
-from app.prompts.router import ROUTER_PROMPT_DEFINITION
 from app.prompts.sql_worker import SQL_WORKER_GENERATION_PROMPT
 from app.prompts.synthesis import SYNTHESIS_PROMPT_DEFINITION
-from app.prompts.task_grounder import TASK_GROUNDER_PROMPT
+from app.prompts.task_grounder import TASK_GROUNDER_PROMPT_DEFINITION
 from app.prompts.visualization import VISUALIZATION_CODE_GENERATION_PROMPT
 
 
@@ -154,14 +153,6 @@ class PromptManager:
                     error=str(exc),
                 )
         return self._compile_local_messages(definition, variables)
-
-    def router_messages(
-        self, query: str, session_context: str = ""
-    ) -> list[dict[str, str]]:
-        return self._compile_prompt(
-            ROUTER_PROMPT_DEFINITION,
-            {"query": query, "session_context": session_context},
-        )
 
     def analysis_messages(
         self,
@@ -433,19 +424,18 @@ class PromptManager:
     def task_grounder_messages(
         self, query: str, session_context: str = ""
     ) -> list[dict[str, str]]:
-        messages: list[dict[str, str]] = [
-            {"role": "system", "content": TASK_GROUNDER_PROMPT.system_prompt},
-        ]
-        if session_context:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": f"[Session Context]\n{session_context}\n\n[Câu hỏi hiện tại]\n{query}",
-                }
-            )
-        else:
-            messages.append({"role": "user", "content": query})
-        return messages
+        return self._compile_prompt(
+            TASK_GROUNDER_PROMPT_DEFINITION,
+            {"query": query, "session_context": session_context or ""},
+        )
+
+    def chitchat_response_messages(
+        self, query: str, session_context: str = ""
+    ) -> list[dict[str, str]]:
+        return self._compile_prompt(
+            CHITCHAT_RESPONSE_PROMPT_DEFINITION,
+            {"query": query, "session_context": session_context or ""},
+        )
 
 
 prompt_manager = PromptManager()

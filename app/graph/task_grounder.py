@@ -10,7 +10,7 @@ from app.config import load_settings
 from app.graph.state import AgentState, TaskProfile
 from app.llm.client import LLMClient
 from app.logger import logger
-from app.prompts.task_grounder import TASK_GROUNDER_PROMPT
+from app.prompts import prompt_manager
 
 
 def _extract_first_json_object(text: str) -> dict[str, Any] | None:
@@ -46,6 +46,32 @@ def _normalize_capabilities(raw_caps: Any, *, task_mode: str = "") -> list[str]:
     return ordered or ["sql"]
 
 
+def _is_inline_visualization_query(query: str) -> bool:
+    lower_query = query.lower()
+    viz_keywords = [
+        "vẽ",
+        "biểu đồ",
+        "chart",
+        "plot",
+        "graph",
+        "đồ thị",
+        "pie",
+        "bar",
+        "line",
+        "column",
+        "tròn",
+        "cột",
+    ]
+    if not any(keyword in lower_query for keyword in viz_keywords):
+        return False
+
+    if re.search(r"\d+\.?\d*\s*[,，]\s*\d+\.?\d*", query):
+        return True
+
+    numbers = re.findall(r"\b\d+\.?\d*\b", query)
+    return len(numbers) >= 2
+
+
 def task_grounder(state: AgentState) -> AgentState:
     """Classify user query into a structured TaskProfile.
 
@@ -58,18 +84,32 @@ def task_grounder(state: AgentState) -> AgentState:
     query = state.get("user_query", "")
     session_context = state.get("session_context", "")
 
-    messages: list[dict[str, str]] = [
-        {"role": "system", "content": TASK_GROUNDER_PROMPT.system_prompt},
-    ]
-    if session_context:
-        messages.append(
-            {
-                "role": "user",
-                "content": f"[Session Context]\n{session_context}\n\n[Câu hỏi hiện tại]\n{query}",
-            }
-        )
-    else:
-        messages.append({"role": "user", "content": query})
+    if _is_inline_visualization_query(query):
+        task_profile: TaskProfile = {
+            "task_mode": "simple",
+            "data_source": "inline_data",
+            "required_capabilities": ["visualization"],
+            "followup_mode": "fresh_query",
+            "confidence": "high",
+            "reasoning": "Deterministic override: chart request with inline numeric values.",
+        }
+        return {
+            "task_profile": task_profile,
+            "tool_history": [
+                {
+                    "tool": "task_grounder",
+                    "status": "ok",
+                    "task_profile": task_profile,
+                    "override": "inline_visualization",
+                }
+            ],
+            "step_count": state.get("step_count", 0) + 1,
+        }
+
+    messages = prompt_manager.task_grounder_messages(
+        query=query,
+        session_context=session_context,
+    )
 
     try:
         client = LLMClient.from_env()

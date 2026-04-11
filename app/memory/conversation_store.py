@@ -29,7 +29,14 @@ class ConversationTurn:
     last_action_json: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        # Parse last_action_json from string to dict for API serialization
+        if d.get("last_action_json") and isinstance(d["last_action_json"], str):
+            try:
+                d["last_action_json"] = json.loads(d["last_action_json"])
+            except (json.JSONDecodeError, TypeError):
+                d["last_action_json"] = None
+        return d
 
 
 @dataclass(frozen=True)
@@ -345,6 +352,14 @@ class ConversationMemoryStore:
                 "DELETE FROM agent.conversation_summary WHERE thread_id = %s",
                 (thread_id,),
             )
+            # Also clear artifacts (table may not exist on first run)
+            try:
+                conn.execute(
+                    "DELETE FROM agent.turn_artifacts WHERE thread_id = %s",
+                    (thread_id,),
+                )
+            except Exception:  # noqa: BLE001
+                pass
             conn.commit()
         logger.info("Cleared conversation memory: thread={thread}", thread=thread_id)
 

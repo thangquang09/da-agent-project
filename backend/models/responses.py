@@ -60,6 +60,7 @@ class QueryResponse(BaseModel):
     total_cost_usd: float | None = None
     context_type: str = "default"
     visualization: VisualizationResponse | None = None
+    visualizations: list[VisualizationResponse] = []
     rows: int | None = None
     context_chunks: int | None = None
     step_count: int = 0

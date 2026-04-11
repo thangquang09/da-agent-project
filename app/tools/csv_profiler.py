@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -139,6 +140,11 @@ def profile_csv(
 
     if table_name is None:
         table_name = file_path.stem.lower().replace(" ", "_").replace("-", "_")
+    else:
+        # Always normalize passed-in table names to be Postgres-safe
+        table_name = re.sub(r"[^a-zA-Z0-9_]", "_", table_name).strip("_")
+        if not table_name or not table_name[0].isalpha():
+            table_name = f"table_{table_name}"
 
     file_size_bytes = file_path.stat().st_size
 

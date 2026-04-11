@@ -110,6 +110,7 @@ class AnswerPayload(TypedDict, total=False):
     sql_rows: list[dict[str, Any]]
     sql_row_count: int
     visualization: dict[str, Any] | None
+    visualizations: list[dict[str, Any]]
     result_metadata: dict[str, Any] | None  # Result store metadata for frontend
 
 
@@ -146,6 +147,7 @@ class AgentState(TypedDict, total=False):
     visualization: dict[
         str, Any
     ]  # {success, image_url, image_format, image_size_bytes, error, execution_time_ms}
+    visualizations: list[dict[str, Any]]
     # Grounding Group (v4) — set by task_grounder node
     artifacts: Annotated[
         list[WorkerArtifact], operator.add

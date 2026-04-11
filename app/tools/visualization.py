@@ -1548,6 +1548,8 @@ class DockerVisualizationService(E2BVisualizationService):
     def _wrap_visualization_code(self, python_code: str) -> str:
         return f"""import base64
 import io
+import os
+import shutil
 import traceback
 
 import matplotlib
@@ -1565,6 +1567,9 @@ def _codex_show(*args, **kwargs):
 plt.show = _codex_show
 
 try:
+    os.makedirs("/home/user", exist_ok=True)
+    if os.path.exists("query_data.csv") and not os.path.exists("/home/user/query_data.csv"):
+        shutil.copyfile("query_data.csv", "/home/user/query_data.csv")
 {self._indent_code(python_code, 4)}
     if plt.get_fignums():
         _codex_show()

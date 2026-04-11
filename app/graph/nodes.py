@@ -14,7 +14,6 @@ from app.observability import get_current_tracer
 from app.prompts import (
     ANALYSIS_PROMPT_DEFINITION,
     prompt_manager,
-    ROUTER_PROMPT_DEFINITION,
 )
 from app.tools import (
     get_schema_overview,
@@ -881,6 +880,22 @@ def _format_leader_plan(plan: dict[str, Any]) -> str:
     return json.dumps(plan, ensure_ascii=False, indent=2, default=str)
 
 
+def _normalize_visualization_list(
+    visualizations: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    if not visualizations:
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for viz in visualizations:
+        if not isinstance(viz, dict):
+            continue
+        if not viz.get("success") or not viz.get("image_url"):
+            continue
+        normalized.append(viz)
+    return normalized
+
+
 def _generate_clarification_question(
     user_query: str,
     task_profile: dict[str, Any],
@@ -953,9 +968,10 @@ def chitchat_response_node(state: AgentState) -> AgentState:
     session_context = state.get("session_context", "")
 
     system_prompt = (
-        "Bạn là trợ lý phân tích dữ liệu thân thiện. "
-        "Người dùng đang chào hỏi hoặc nói chuyện phiếm — không phải hỏi về dữ liệu. "
-        "Hãy trả lời ngắn gọn, thân thiện, và nhắc nhẹ rằng bạn sẵn sàng giúp phân tích dữ liệu khi cần."
+        "You are a friendly data analyst assistant.\n"
+        "The user is greeting you or making casual conversation — not asking about data.\n"
+        "Respond warmly and briefly. Naturally mention you can help with data analysis when needed.\n"
+        "Match the user's language."
     )
 
     messages: list[dict[str, str]] = [
@@ -994,7 +1010,7 @@ def chitchat_response_node(state: AgentState) -> AgentState:
         llm_cost_usd = response.get("_cost_usd_estimate")
     except Exception as exc:  # noqa: BLE001
         logger.warning("Chitchat LLM failed: {error}", error=str(exc))
-        answer = "Xin chào! Tôi là trợ lý phân tích dữ liệu. Bạn cần hỗ trợ gì về dữ liệu không?"
+        answer = "Hello! I'm your data analyst assistant. How can I help you with your data today?"
 
     logger.info("Chitchat response generated ({length} chars)", length=len(answer))
 
@@ -1731,6 +1747,7 @@ def leader_agent(state: AgentState) -> AgentState:
     total_token_usage = 0
     total_cost_usd = 0.0
     sql_artifacts: dict[str, Any] = {}
+    visualization_results = _normalize_visualization_list(state.get("visualizations"))
     used_high_level_tools: list[str] = []
     inferred_intent = "unknown"
     # Accumulated WorkerArtifacts — injected into state on each return.
@@ -1930,6 +1947,7 @@ def leader_agent(state: AgentState) -> AgentState:
                     "row_count", 0
                 ),
                 "visualization": sql_artifacts.get("visualization"),
+                "visualizations": visualization_results,
                 "result_metadata": sql_artifacts.get("result_ref"),
             }
             if plan:
@@ -1951,6 +1969,7 @@ def leader_agent(state: AgentState) -> AgentState:
                 "validated_sql": sql_artifacts.get("validated_sql", ""),
                 "sql_result": sql_artifacts.get("sql_result", {}),
                 "visualization": sql_artifacts.get("visualization"),
+                "visualizations": visualization_results,
                 "result_ref": sql_artifacts.get("result_ref"),
                 "artifacts": artifacts,
             }
@@ -2021,6 +2040,9 @@ def leader_agent(state: AgentState) -> AgentState:
                 raw_data = _extract_inline_data_from_query(tool_query)
 
             if not raw_data:
+                raw_data = sql_artifacts.get("sql_result", {}).get("rows", [])
+
+            if not raw_data:
                 # No data found, return error
                 tool_result = {
                     "visualization": {
@@ -2047,64 +2069,21 @@ def leader_agent(state: AgentState) -> AgentState:
                     observation_type="tool",
                 )
 
-            # Auto-finalize if visualization succeeded — compose answer from viz metadata only
-            viz_result = tool_result.get("visualization", {})
-            if isinstance(viz_result, dict) and viz_result.get("success"):
-                viz_answer = f"Đã tạo biểu đồ {viz_result.get('chart_type', 'chart')} thành công."
-                payload = {
-                    "answer": viz_answer,
-                    "evidence": [
-                        f"intent=visualization",
-                        f"chart_type={viz_result.get('chart_type', 'unknown')}",
-                        f"viz_success=true",
-                    ],
-                    "confidence": "high",
-                    "used_tools": used_high_level_tools + ["create_visualization"],
-                    "generated_sql": "",
-                    "error_categories": [],
-                    "step_count": state.get("step_count", 0) + step,
-                    "total_token_usage": total_token_usage,
-                    "total_cost_usd": round(total_cost_usd, 8),
-                    "context_type": state.get("context_type", "default"),
-                    "sql_rows": [],
-                    "sql_row_count": 0,
-                    "visualization": viz_result,
-                    "result_metadata": None,
-                }
-                artifacts.append(
-                    _make_artifact("create_visualization", tool_result, "success")
+            visualization = tool_result.get("visualization")
+            if isinstance(visualization, dict) and visualization.get("success"):
+                visualization_results.append(visualization)
+            artifacts.append(
+                _make_artifact(
+                    "create_visualization",
+                    tool_result,
+                    "success" if tool_result.get("status") == "success" else "failed",
                 )
-                leader_tool_history.append(
-                    {
-                        "tool": "create_visualization",
-                        "status": "ok",
-                        "reason": "auto_finalize_on_success",
-                        "plan": plan,
-                        "source": "leader_agent",
-                    }
-                )
-                return {
-                    "final_answer": viz_answer,
-                    "final_payload": payload,
-                    "response_mode": "answer",
-                    "intent": "mixed",
-                    "intent_reason": "visualization_auto_finalize",
-                    "errors": [],
-                    "confidence": "high",
-                    "step_count": state.get("step_count", 0) + step,
-                    "tool_history": leader_tool_history,
-                    "generated_sql": "",
-                    "validated_sql": "",
-                    "sql_result": {},
-                    "visualization": viz_result,
-                    "result_ref": None,
-                    "artifacts": artifacts,
-                }
-
-            # Map visualization result to sql_artifacts format for final answer
+            )
             sql_artifacts = {
-                "visualization": tool_result.get("visualization"),
-                "tool_history": [
+                **sql_artifacts,
+                "visualization": visualization,
+                "tool_history": sql_artifacts.get("tool_history", [])
+                + [
                     {
                         "tool": "create_visualization",
                         "status": tool_result.get("status"),
@@ -2160,49 +2139,7 @@ def leader_agent(state: AgentState) -> AgentState:
     # Domain-aware fallback: depends on what tools were already attempted
     if "create_visualization" in used_high_level_tools:
         viz = sql_artifacts.get("visualization", {})
-        if viz and isinstance(viz, dict) and viz.get("success"):
-            # Visualization succeeded — compose answer from viz metadata only
-            answer = (
-                f"Đã tạo biểu đồ thành công. Loại: {viz.get('chart_type', 'chart')}"
-            )
-            payload = {
-                "answer": answer,
-                "evidence": [
-                    f"intent=visualization",
-                    f"chart_type={viz.get('chart_type', 'unknown')}",
-                    f"viz_success=true",
-                ],
-                "confidence": "high",
-                "used_tools": used_high_level_tools,
-                "generated_sql": "",
-                "error_categories": [],
-                "step_count": state.get("step_count", 0) + 1,
-                "total_token_usage": total_token_usage,
-                "total_cost_usd": round(total_cost_usd, 8),
-                "context_type": state.get("context_type", "default"),
-                "sql_rows": [],
-                "sql_row_count": 0,
-                "visualization": viz,
-                "result_metadata": None,
-            }
-            return {
-                "final_answer": answer,
-                "final_payload": payload,
-                "response_mode": "answer",
-                "intent": "mixed",
-                "intent_reason": "visualization_auto_finalize",
-                "errors": [],
-                "confidence": "high",
-                "step_count": state.get("step_count", 0) + 1,
-                "tool_history": leader_tool_history,
-                "generated_sql": "",
-                "validated_sql": "",
-                "sql_result": {},
-                "visualization": viz,
-                "result_ref": None,
-                "artifacts": artifacts,
-            }
-        else:
+        if not (viz and isinstance(viz, dict) and viz.get("success")):
             # Visualization attempted but failed — return error, don't fall back to SQL
             viz_error = (
                 viz.get("error", "Unknown visualization error")
@@ -2225,6 +2162,7 @@ def leader_agent(state: AgentState) -> AgentState:
                     "sql_rows": [],
                     "sql_row_count": 0,
                     "visualization": viz if isinstance(viz, dict) else None,
+                    "visualizations": visualization_results,
                     "result_metadata": None,
                 },
                 "response_mode": "answer",
@@ -2238,6 +2176,7 @@ def leader_agent(state: AgentState) -> AgentState:
                 "validated_sql": "",
                 "sql_result": {},
                 "visualization": viz if isinstance(viz, dict) else None,
+                "visualizations": visualization_results,
                 "result_ref": None,
                 "artifacts": artifacts,
             }
@@ -2313,6 +2252,7 @@ def leader_agent(state: AgentState) -> AgentState:
             "sql_rows": fallback_result.get("sql_result", {}).get("rows", []),
             "sql_row_count": fallback_result.get("sql_result", {}).get("row_count", 0),
             "visualization": fallback_result.get("visualization"),
+            "visualizations": visualization_results,
             "result_metadata": fallback_result.get("result_ref"),
         }
         return {
@@ -2330,6 +2270,7 @@ def leader_agent(state: AgentState) -> AgentState:
             "validated_sql": fallback_result.get("validated_sql", ""),
             "sql_result": fallback_result.get("sql_result", {}),
             "visualization": fallback_result.get("visualization"),
+            "visualizations": visualization_results,
             "result_ref": fallback_result.get("result_ref"),
             "artifacts": fallback_artifacts,
         }
@@ -2809,8 +2750,14 @@ def _save_turn_artifacts(
             )
 
     # ── Standalone chart artifact ────────────────────────────────────────
-    viz = state.get("visualization", {})
-    if viz and viz.get("success") and viz.get("image_url"):
+    visualizations = _normalize_visualization_list(state.get("visualizations"))
+    if not visualizations:
+        viz = state.get("visualization", {})
+        if viz and viz.get("success") and viz.get("image_url"):
+            visualizations = [viz]
+
+    if visualizations:
+        primary_viz = visualizations[-1]
         store.save_artifact(
             TurnArtifact(
                 thread_id=thread_id,
@@ -2818,10 +2765,11 @@ def _save_turn_artifacts(
                 artifact_type="chart",
                 payload={
                     "success": True,
-                    "image_url": viz.get("image_url"),
-                    "image_format": viz.get("image_format", "png"),
-                    "image_size_bytes": viz.get("image_size_bytes", 0),
-                    "execution_time_ms": viz.get("execution_time_ms", 0),
+                    "image_url": primary_viz.get("image_url"),
+                    "image_format": primary_viz.get("image_format", "png"),
+                    "image_size_bytes": primary_viz.get("image_size_bytes", 0),
+                    "execution_time_ms": primary_viz.get("execution_time_ms", 0),
+                    "items": visualizations,
                 },
                 created_at=ts,
             )

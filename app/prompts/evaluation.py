@@ -27,11 +27,11 @@ GROUNDEDNESS_EVALUATION_PROMPT = PromptDefinition(
             "role": "user",
             "content": (
                 "EVIDENCE:\n"
-                "{evidence_text}\n\n"
+                "{{evidence_text}}\n\n"
                 "ANSWER:\n"
-                "{answer}\n\n"
+                "{{answer}}\n\n"
                 "EXPECTED KEYWORDS (for reference, not required to match exactly):\n"
-                "{keywords_text}\n\n"
+                "{{keywords_text}}\n\n"
                 "Evaluate groundedness:"
             ),
         },
