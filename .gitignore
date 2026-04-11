@@ -62,6 +62,7 @@ Thumbs.db
 # Local Codex metadata
 .codex/
 .agents/
+.claude/
 skills-lock.json
 
 # Runtime observability output
