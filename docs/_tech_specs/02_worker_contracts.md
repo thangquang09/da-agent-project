@@ -363,9 +363,21 @@ START → profiler_sampler → profiler_analyzer → report_planner
 }
 ```
 
----
+### Leader visualization accumulation
 
-## WorkerArtifact: Standard Contract
+- The leader loop accumulates all successful chart results in `visualization_results` (a `list[dict]`).
+- On each `create_visualization` success, the chart dict is appended to this list.
+- The `visualizations` field in `AgentState` and `AnswerPayload` carries the full list to the frontend.
+- The singular `visualization` field retains the **last** (primary) chart for backward compatibility.
+- **Auto-finalize removed**: leader no longer short-circuits on chart success. It always continues to synthesize a natural answer via `action="final"`.
+
+### Artifact persistence (multi-chart)
+
+- The `chart` artifact stores `items: list[dict]` containing all successful visualizations for the turn.
+- `image_url`, `image_format`, etc. at the top level use the **last** chart for backward compatibility.
+- Frontend renders all charts from `payload.items` with a tab selector.
+
+---
 
 All workers MUST return these fields for `artifact_evaluator` consumption:
 

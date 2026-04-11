@@ -82,7 +82,7 @@ DA Agent Lab — Hybrid Architecture v3
 - **Graph flow**: `app/graph/graph.py` → `build_sql_v3_graph()`
 - **State model**: `app/graph/state.py` → `AgentState`, `TaskProfile`, `WorkerArtifact`
 - **Nodes**: `app/graph/nodes.py`
-- **Workers**: `app/graph/standalone_visualization.py`, `app/tools/retrieve_rag_answer.py`
+- **Workers**: `app/graph/standalone_visualization.py`, `app/tools/retrieve_rag_answer.py`, `app/tools/table_metadata.py`
 - **Table metadata**: `app/tools/table_metadata.py` — business context persistence (`user_data.table_contexts`)
 - **Observability**: `app/observability/tracer.py`
 - **Artifact file store**: `app/artifacts/file_store.py`, `app/artifacts/helpers.py`

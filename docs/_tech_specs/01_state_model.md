@@ -80,7 +80,8 @@ class WorkerArtifact(TypedDict, total=False):
 | `validated_sql` | `str` | Sanitized + validated SQL |
 | `sql_result` | `dict` | Execution result `{rows, row_count, columns}` |
 | `analysis_result` | `dict` | LLM analysis of results |
-| `visualization` | `dict` | Chart spec/image data |
+| `visualization` | `dict` | Chart spec/image data (primary/last chart) |
+| `visualizations` | `list[dict]` | All successful chart results from leader loop (multi-chart support) |
 | `execution_mode` | `str` | `"linear"`, `"parallel"`, or `"leader_loop"` |
 | `result_ref` | `dict` | Lightweight metadata: `{result_id, row_count, columns, sample, stats}` |
 | `tool_history` | `list[dict]` | Observability log of subgraph tool calls; leader entries may include a bounded `plan` object |
@@ -113,6 +114,7 @@ class AnswerPayload(TypedDict, total=False):
     sql_rows: list[dict]
     sql_row_count: int
     visualization: dict | None
+    visualizations: list[dict]    # All successful chart results (multi-chart support)
     result_metadata: dict | None
 ```
 
