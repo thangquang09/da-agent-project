@@ -1058,20 +1058,19 @@ def fan_out_sections(state: AgentState) -> list[Send]:
 
 def _load_report_rows(section_result: dict[str, Any]) -> list[dict[str, Any]]:
     sql_result = section_result.get("sql_result", {})
-    rows = sql_result.get("rows", [])
-    if rows:
-        return rows
     result_ref = section_result.get("result_ref") or {}
     full_data_path = result_ref.get("full_data_path")
-    if not full_data_path:
-        return []
-    try:
-        return json.loads(Path(full_data_path).read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "Failed to load report rows from result_ref: {error}", error=str(exc)
-        )
-        return []
+    if full_data_path:
+        try:
+            return json.loads(Path(full_data_path).read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to load report rows from result_ref: {error}", error=str(exc)
+            )
+    rows = sql_result.get("rows", [])
+    if isinstance(rows, list):
+        return rows
+    return []
 
 
 def _resolve_report_schema_context(state: AgentState) -> str:
@@ -1318,6 +1317,8 @@ def section_pipeline_node(state: AgentState) -> AgentState:
     task_input: dict[str, Any] = {
         "task_id": section_id,
         "query": section.get("analysis_query", ""),
+        "original_user_query": state.get("report_request")
+        or state.get("user_query", ""),
         "target_db_path": state.get("target_db_path", ""),
         "schema_context": schema_context,
         "session_context": state.get("session_context", ""),

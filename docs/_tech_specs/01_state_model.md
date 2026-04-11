@@ -83,6 +83,7 @@ class WorkerArtifact(TypedDict, total=False):
 | `visualization` | `dict` | Chart spec/image data |
 | `execution_mode` | `str` | `"linear"`, `"parallel"`, or `"leader_loop"` |
 | `result_ref` | `dict` | Lightweight metadata: `{result_id, row_count, columns, sample, stats}` |
+| `tool_history` | `list[dict]` | Observability log of subgraph tool calls; leader entries may include a bounded `plan` object |
 
 ---
 
@@ -202,6 +203,27 @@ class ReportPlan(TypedDict, total=False):
 | `intent_reason` | `str` | Why intent was chosen |
 | `artifact_evaluation` | `dict` | Decision from `artifact_evaluator` |
 | `clarification_question` | `str` | Human question when `wait_for_user` |
+
+### Leader tool-history plan shape
+
+For leader-originated tool calls, `tool_history` entries may include:
+
+```python
+{
+    "tool": str,
+    "status": str,
+    "reason": str,
+    "plan": {
+        "goal": str,
+        "dimensions_to_check": list[str],
+        "why_this_tool": str,
+        "success_criteria": str,
+    },
+    "source": "leader_agent",
+}
+```
+
+`plan` is optional and used as a bounded micro-plan for multi-step reasoning, especially diagnostic and comparative queries.
 
 ---
 

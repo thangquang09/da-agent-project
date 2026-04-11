@@ -17,6 +17,7 @@ from app.prompts.evaluation import GROUNDEDNESS_EVALUATION_PROMPT
 from app.prompts.fallback import FALLBACK_ASSISTANT_PROMPT
 from app.prompts.leader import LEADER_AGENT_PROMPT_DEFINITION
 from app.prompts.report_critic import REPORT_CRITIC_PROMPT_DEFINITION
+from app.prompts.report_data_profiler import REPORT_DATA_PROFILER_PROMPT_DEFINITION
 from app.prompts.report_insight import REPORT_INSIGHT_PROMPT_DEFINITION
 from app.prompts.report_planner import REPORT_PLANNER_PROMPT_DEFINITION
 from app.prompts.report_writer import REPORT_WRITER_PROMPT_DEFINITION
@@ -267,6 +268,23 @@ class PromptManager:
             {"query": query, "schema": schema},
         )
 
+    def report_data_profiler_messages(
+        self,
+        query: str,
+        xml_database_context: str = "",
+        sample_data_summary: str = "",
+        business_context: str = "",
+    ) -> list[dict[str, str]]:
+        return self._compile_prompt(
+            REPORT_DATA_PROFILER_PROMPT_DEFINITION,
+            {
+                "query": query,
+                "xml_database_context": xml_database_context or "",
+                "sample_data_summary": sample_data_summary or "",
+                "business_context": business_context or "",
+            },
+        )
+
     def report_planner_messages(
         self,
         query: str,
@@ -288,6 +306,7 @@ class PromptManager:
         report_plan: str,
         section_results: str,
         critic_feedback: str = "",
+        domain_context: str = "",
     ) -> list[dict[str, str]]:
         return self._compile_prompt(
             REPORT_WRITER_PROMPT_DEFINITION,
@@ -296,6 +315,7 @@ class PromptManager:
                 "report_plan": report_plan,
                 "section_results": section_results,
                 "critic_feedback": critic_feedback or "",
+                "domain_context": domain_context or "",
             },
         )
 
@@ -328,9 +348,13 @@ class PromptManager:
         schema_context: str = "",
         previous_sql: str | None = None,
         error_message: str | None = None,
+        original_user_query: str = "",
     ) -> list[dict[str, str]]:
         if previous_sql and error_message:
-            from app.prompts.sql_worker import SQL_WORKER_SELF_CORRECTION_PROMPT_DEFINITION
+            from app.prompts.sql_worker import (
+                SQL_WORKER_SELF_CORRECTION_PROMPT_DEFINITION,
+            )
+
             return self._compile_prompt(
                 SQL_WORKER_SELF_CORRECTION_PROMPT_DEFINITION,
                 {
@@ -340,6 +364,7 @@ class PromptManager:
                     "schema_context": schema_context or "",
                     "previous_sql": previous_sql,
                     "error_message": error_message,
+                    "original_user_query": original_user_query or "",
                 },
             )
 
@@ -350,6 +375,7 @@ class PromptManager:
                 "session_context": session_context or "",
                 "xml_database_context": xml_database_context or "",
                 "schema_context": schema_context or "",
+                "original_user_query": original_user_query or "",
             },
         )
 

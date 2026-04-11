@@ -25,7 +25,7 @@ def ask_sql_analyst_tool(
 
 | Field | Source | Notes |
 |-------|--------|-------|
-| `state` | Parent `AgentState` | Used to extract: `target_db_path`, `schema_context`, `session_context`, `xml_database_context`, `table_contexts`, `last_action`, `thread_id`, `run_id` |
+| `state` | Parent `AgentState` | Used to extract: `target_db_path`, `schema_context`, `session_context`, `xml_database_context`, `table_contexts`, `last_action`, `thread_id`, `run_id`, and the original parent query for follow-up-safe SQL generation |
 | `query` | `str` | User's SQL question |
 | `allow_decomposition` | `bool` | If `True` and query is multi-part, calls `task_planner` for parallelization |
 
@@ -36,6 +36,13 @@ def ask_sql_analyst_tool(
 3. Calls `_execute_sql_analyst_task` per task (subgraph: generate → validate → execute → analyze)
 4. If single task → generates natural language answer via `_generate_natural_response`
 5. If multiple tasks → calls `aggregate_results` for fan-in
+
+### Query propagation note
+
+- Each task now carries both:
+  - `query`: the focused sub-question
+  - `original_user_query`: the parent user question
+- SQL worker prompts use `original_user_query` as extra context so sub-queries stay anchored to the user's real intent.
 
 ### Returns
 
@@ -114,6 +121,16 @@ def ask_sql_analyst_parallel_tool(
 3. Runs in parallel via `_dispatch_parallel_sql_tasks`
 4. Fan-in via `aggregate_results`
 5. Returns `task_results: list[dict]` for each subtask
+
+### Leader micro-plan note
+
+- `ask_sql_analyst_parallel` is now the preferred execution path for leader diagnostic micro-plans.
+- The leader may attach a bounded `plan` object to its own `tool_history` entry describing:
+  - goal
+  - dimensions to inspect
+  - why the chosen tool fits
+  - success criteria
+- This plan is not part of the worker return contract itself; it lives at the leader orchestration layer and is mirrored into scratchpad context for subsequent leader steps.
 
 ### Returns
 

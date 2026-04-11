@@ -51,8 +51,10 @@ flowchart TD
     MEMORY --> END
 
     subgraph report_subgraph
-        PLAN[report_planner] --> EXEC[report_executor]
-        EXEC --> WRITE[report_writer]
+        PROF2[report_data_profiler] --> PLAN[report_planner]
+        PLAN --> EXEC[report_executor]
+        EXEC --> INSIGHT[report_insight_generator]
+        INSIGHT --> WRITE[report_writer]
         WRITE --> CRITIC[report_critic]
         CRITIC -->|<i>REVISE</i>| WRITE
         CRITIC -->|<i>APPROVED</i>| FINAL[report_finalize]
@@ -63,7 +65,7 @@ flowchart TD
 
 DA Agent Lab — Hybrid Architecture v3
 
-### 9 nodes chính
+### 9 nodes chính (outer graph) + 7 nodes trong report_subgraph
 
 
 | Node                      | File                 | Obs type | Vai trò                             |
@@ -74,7 +76,7 @@ DA Agent Lab — Hybrid Architecture v3
 | `leader_agent`            | `nodes.py:1535`      | `agent`  | Tool-calling loop 5 bước            |
 | `artifact_evaluator`      | `nodes.py:1023`      | `agent`  | Deterministic eval của artifacts    |
 | `clarify_question_node`   | `nodes.py:878`       | `memory` | Interrupt, hỏi user làm rõ          |
-| `report_subgraph`         | `report_subgraph.py` | subgraph | planning→execution→writing→critique |
+| `report_subgraph`         | `report_subgraph.py` | subgraph | profiler_sampler→profiler_analyzer→report_planner→[Send fan-out section_pipeline]→sections_sort→report_writer→report_critic→report_finalize |
 | `capture_action_node`     | `nodes.py`           | `memory` | Ghi nhận final action               |
 | `compact_and_save_memory` | `nodes.py`           | `memory` | Tóm tắt + lưu memory                |
 
@@ -105,7 +107,24 @@ Dùng bởi `leader_agent` (chọn tool) và `artifact_evaluator` (check coverag
 
 **File**: `app/graph/nodes.py:1535`
 
-Tool-calling loop 5 bước (max). Mỗi bước: LLM trả `{action, tool, args, reason}` → dispatch worker → wrap thành `WorkerArtifact` → update scratchpad.
+Tool-calling loop 5 bước (max). Mỗi bước: LLM trả `{action, tool, args, reason}` và có thể kèm `plan` nhỏ có cấu trúc → dispatch worker → wrap thành `WorkerArtifact` → update scratchpad.
+
+### Micro-plan trong leader
+
+- `plan` là bounded plan object, không tạo node planner mới và không đổi graph topology.
+- Shape hiện tại:
+
+```json
+{
+  "goal": "...",
+  "dimensions_to_check": ["segment", "time", "category"],
+  "why_this_tool": "...",
+  "success_criteria": "..."
+}
+```
+
+- Leader normalize object này, lưu vào `tool_history`, và render lại vào scratchpad cho bước suy luận tiếp theo.
+- Với câu hỏi kiểu `vì sao` / `compare`, prompt hiện khuyến khích leader decomposition thành 2-4 sub-query qua `ask_sql_analyst_parallel` trước khi finalize.
 
 ### 5 tools leader gọi được
 
@@ -120,6 +139,11 @@ Tool-calling loop 5 bước (max). Mỗi bước: LLM trả `{action, tool, args
 
 
 Khi `action="final"` → leader trả `final_answer` trực tiếp, không qua evaluator.
+
+### Scratchpad behavior
+
+- Với SQL tools, scratchpad hiện giữ thêm `columns`, `data_rows` preview, `subtask_results`, và `plan` của step hiện tại nếu có.
+- Nếu summary quá lớn, `data_rows` / `subtask_results` sẽ bị lược bớt và thay bằng note truncated để tránh context phình quá mức.
 
 ---
 
@@ -207,30 +231,42 @@ Câu hỏi sinh theo logic:
 
 **File**: `app/graph/report_subgraph.py`
 
-Trigger khi `leader_agent` gọi `generate_report`.
+Trigger khi `leader_agent` gọi `generate_report`. Pipeline **8 nodes** sử dụng `Send()` fan-out.
 
 ```mermaid
 flowchart LR
-    PLAN[report_planner] --> EXEC[report_executor]
-    EXEC --> WRITE[report_writer]
+    SAMP[profiler_sampler] --> PROF[profiler_analyzer]
+    PROF --> PLAN[report_planner]
+    PLAN -->|Send per section| PIPE[section_pipeline]
+    PIPE -->|fan-in| SORT[sections_sort]
+    SORT --> WRITE[report_writer]
     WRITE --> CRITIC[report_critic]
     CRITIC -->|<i>REVISE</i>| WRITE
     CRITIC -->|<i>APPROVED</i>| FINAL[report_finalize]
 ```
 
-
-
-
-| Node                   | Model                  | Vai trò                               |
-| ---------------------- | ---------------------- | ------------------------------------- |
-| `report_planner_node`  | `model_report_planner` | Lên kế hoạch sections                 |
-| `report_executor_node` | —                      | Fan-out SQL tasks (max 4 threads)     |
-| `report_writer_node`   | `model_report_writer`  | Viết markdown từ section results      |
-| `report_critic_node`   | `model_report_critic`  | Critique report, quyết revise/approve |
-| `report_finalize_node` | —                      | Gắn final_markdown vào answer         |
-
+| Node                    | Model                        | Vai trò                                                                                      |
+| ----------------------- | ---------------------------- | -------------------------------------------------------------------------------------------- |
+| `profiler_sampler`      | — (SQL only)                 | `SELECT * FROM table ORDER BY RANDOM() LIMIT 100` + column stats (min/max/unique/nulls), caps at 2 tables, 15 cols/table |
+| `profiler_analyzer`     | `model_report_data_profiler` | LLM analyzes schema + sample data + business_context → domain_summary + suggested_sections |
+| `report_planner`        | `model_report_planner`       | Dùng profiler suggestions (hoặc fallback LLM) → ReportPlan + domain_context                  |
+| `section_pipeline`      | — (Send fan-out)             | Mỗi section chạy độc lập: SQL → sandbox → insight. 1 sandbox duy nhất, reuse                 |
+| `sections_sort`         | —                            | Sắp xếp sections theo `section_order` sau fan-in                                             |
+| `report_writer`         | `model_report_writer`        | Tổng hợp Executive Summary, section narratives, Recommendations từ domain_context            |
+| `report_critic`         | `model_report_critic`        | Kiểm tra grounding numeric claims, Executive Summary, Recommendations                        |
+| `report_finalize`       | —                            | Gắn final_markdown vào answer                                                                |
 
 Critic loop: **tối đa 2 revise**, hash detect change.
+
+**Key Architecture Decisions (Report V2 — 2026-04-10):**
+
+- **Send() fan-out**: Mỗi section chạy pipeline riêng (SQL → sandbox → insight) thay vì batch executor rồi batch insight. Giảm peak memory, tăng parallelism.
+- **Profiler tách thành 2 nodes**: `profiler_sampler` (SQL thuần, không LLM) → `profiler_analyzer` (LLM + sample data). Profiler nhận được data thật (100 random rows + column stats) thay vì chỉ schema XML.
+- **Single sandbox reuse**: Tất cả sections dùng chung 1 sandbox instance (`get_visualization_service()` singleton). Tránh spawn nhiều containers.
+- **`_report_sections_raw` với `operator.add`**: Fan-in reducer tự động gom kết quả từ các Send() branch.
+- Conditional viz: sections với `requires_visualization=false` skip chart → tiết kiệm thời gian sandbox.
+- Writer bắt buộc có Executive Summary (highlight critical finding) và Recommendations.
+- Insight được phép business interpretation: kết nối pattern → hành động.
 
 ---
 
@@ -275,17 +311,17 @@ Mỗi run capture: `run_id`, `thread_id`, routing decision, `tool_history`, `val
 
 ### Config models
 
-
-| Field                  | Ý nghĩa                               |
-| ---------------------- | ------------------------------------- |
-| `model_preclassifier`  | Task grounder (`gpt-4o-mini`)         |
-| `model_leader`         | Leader agent LLM                      |
-| `model_synthesis`      | Visualization code gen, report writer |
-| `model_report_planner` | Report planning                       |
-| `model_report_critic`  | Report critique                       |
+| Field                          | Ý nghĩa                               |
+| ------------------------------ | ------------------------------------- |
+| `model_preclassifier`          | Task grounder (`gpt-4o-mini`)         |
+| `model_leader`                 | Leader agent LLM                      |
+| `model_synthesis`              | Visualization code gen, report writer |
+| `model_report_planner`         | Report planning                       |
+| `model_report_writer`          | Report assembly                       |
+| `model_report_critic`          | Report critique                       |
+| `model_report_data_profiler`   | Dataset profiling trước khi planning  |
 
 
 ---
 
 > Document phản ánh codebase thực tế tại thời điểm viết. Tham chiếu line numbers trong source files để verify.
-

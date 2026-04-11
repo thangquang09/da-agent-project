@@ -14,13 +14,13 @@ SQL_WORKER_GENERATION_PROMPT = PromptDefinition(
                 "Respond with ONLY the SQL query, no explanations.\n\n"
                 "=== CRITICAL POSTGRESQL RULES ===\n\n"
                 "1. IDENTIFIER QUOTING (Case Sensitivity):\n"
-                "   - ALWAYS enclose table names and column names in double quotes (e.g., \"Table_Name\", \"Column Name\")\n"
-                "   - PostgreSQL folds unquoted identifiers to lowercase. Without quotes, \"MyColumn\" becomes \"mycolumn\"\n"
-                "   - Example: SELECT \"User Name\", COUNT(*) FROM \"Orders\" WHERE \"Status\" = 'completed'\n\n"
+                '   - ALWAYS enclose table names and column names in double quotes (e.g., "Table_Name", "Column Name")\n'
+                '   - PostgreSQL folds unquoted identifiers to lowercase. Without quotes, "MyColumn" becomes "mycolumn"\n'
+                '   - Example: SELECT "User Name", COUNT(*) FROM "Orders" WHERE "Status" = \'completed\'\n\n'
                 "2. TYPE CASTING:\n"
                 "   - Use CAST(column AS type) or the :: operator: column::type\n"
                 "   - ALWAYS cast numeric aggregates (AVG, SUM, STDDEV) to FLOAT/NUMERIC for JSON serialization\n"
-                "   - Example: CAST(AVG(\"Price\") AS FLOAT) or AVG(\"Price\")::NUMERIC\n\n"
+                '   - Example: CAST(AVG("Price") AS FLOAT) or AVG("Price")::NUMERIC\n\n'
                 "3. STRING OPERATIONS:\n"
                 "   - Use ILIKE for case-insensitive pattern matching (e.g., \"Name\" ILIKE '%john%')\n"
                 "   - Use || for string concatenation (not +)\n"
@@ -40,7 +40,7 @@ SQL_WORKER_GENERATION_PROMPT = PromptDefinition(
                 "   - Boolean: TRUE/FALSE (not 1/0)\n\n"
                 "7. JOIN SYNTAX:\n"
                 "   - Use explicit JOIN...ON syntax (not comma-style joins)\n"
-                "   - Example: FROM \"Orders\" o INNER JOIN \"Customers\" c ON o.\"CustomerID\" = c.\"ID\""
+                '   - Example: FROM "Orders" o INNER JOIN "Customers" c ON o."CustomerID" = c."ID"'
             ),
         },
         {
@@ -57,6 +57,10 @@ SQL_WORKER_GENERATION_PROMPT = PromptDefinition(
                 "{{#if schema_context}}"
                 "Structured schema overview:\n"
                 "{{schema_context}}\n\n"
+                "{{/if}}"
+                "{{#if original_user_query}}"
+                "Original user question (for context):\n"
+                "{{original_user_query}}\n\n"
                 "{{/if}}"
                 "Question: {{query}}\n\n"
                 "Generate SQL:"
@@ -79,13 +83,13 @@ SQL_WORKER_SELF_CORRECTION_PROMPT_DEFINITION = PromptDefinition(
                 "1. 'column does not exist' or 'attribute.* not found':\n"
                 "   - Cause: Missing double quotes or wrong case\n"
                 "   - Fix: Add double quotes around the column name exactly as in schema\n"
-                "   - Example: \"Column Name\" not column_name or \"Column name\"\n\n"
+                '   - Example: "Column Name" not column_name or "Column name"\n\n'
                 "2. 'relation does not exist':\n"
                 "   - Cause: Table name not properly quoted\n"
                 "   - Fix: Add double quotes around table name exactly as in schema\n\n"
                 "3. 'operator does not exist' (e.g., text = integer):\n"
                 "   - Cause: Type mismatch in comparison or operation\n"
-                "   - Fix: Explicitly CAST one side: \"Price\"::NUMERIC > 100 or CAST(\"Price\" AS INTEGER)\n\n"
+                '   - Fix: Explicitly CAST one side: "Price"::NUMERIC > 100 or CAST("Price" AS INTEGER)\n\n'
                 "4. 'column must appear in GROUP BY clause':\n"
                 "   - Cause: Selecting non-aggregated column without grouping\n"
                 "   - Fix: Add column to GROUP BY or use aggregate function on it\n\n"
@@ -94,7 +98,7 @@ SQL_WORKER_SELF_CORRECTION_PROMPT_DEFINITION = PromptDefinition(
                 "   - Fix: Use subquery or CTE to break into steps\n\n"
                 "=== IDENTIFIER QUOTING REMINDER ===\n"
                 "ALWAYS use double quotes for ALL table and column names:\n"
-                "SELECT \"Column Name\" FROM \"Table_Name\" WHERE \"Status\" = 'active'\n\n"
+                'SELECT "Column Name" FROM "Table_Name" WHERE "Status" = \'active\'\n\n'
                 "=== LIMIT RULES ===\n"
                 "- Raw rows: LIMIT 200 | Aggregates/GROUP BY: no LIMIT | 'top N': LIMIT N"
             ),
@@ -113,6 +117,10 @@ SQL_WORKER_SELF_CORRECTION_PROMPT_DEFINITION = PromptDefinition(
                 "{{#if schema_context}}"
                 "Structured schema overview:\n"
                 "{{schema_context}}\n\n"
+                "{{/if}}"
+                "{{#if original_user_query}}"
+                "Original user question (for context):\n"
+                "{{original_user_query}}\n\n"
                 "{{/if}}"
                 "Question: {{query}}\n\n"
                 "Previous Failed SQL:\n"

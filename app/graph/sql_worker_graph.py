@@ -173,8 +173,11 @@ def _task_generate_sql(task_state: TaskState) -> dict[str, Any]:
             session_context=session_context,
             xml_database_context=task_state.get("xml_database_context", ""),
             schema_context=task_state.get("schema_context", ""),
-            previous_sql=task_state.get("generated_sql") if task_state.get("sql_last_error") else None,
+            previous_sql=task_state.get("generated_sql")
+            if task_state.get("sql_last_error")
+            else None,
             error_message=task_state.get("sql_last_error"),
+            original_user_query=task_state.get("original_user_query", ""),
         )
         response = client.chat_completion(
             messages=messages,
@@ -314,18 +317,39 @@ def _task_execute_sql(task_state: TaskState) -> dict[str, Any]:
                 "Failed to save result to result_store: {error}", error=str(exc)
             )
 
+        # Keep state lightweight: carry only sampled rows in-memory and reference
+        # full result via result_ref/full_data_path when needed.
+        if isinstance(result_ref, dict):
+            sampled_rows = result_ref.get("sample")
+            if not isinstance(sampled_rows, list):
+                sampled_rows = []
+            lightweight_result = {
+                "rows": sampled_rows,
+                "row_count": result_ref.get("row_count", result.get("row_count", 0)),
+                "columns": result_ref.get("columns", result.get("columns", [])),
+                "latency_ms": result.get("latency_ms", 0),
+                "is_sample": True,
+                "sample_count": len(sampled_rows),
+                "has_full_data": bool(result_ref.get("has_full_data", False)),
+            }
+        else:
+            # Fallback if result store fails: keep original result shape.
+            lightweight_result = result
+
         return {
-            "sql_result": result,
+            "sql_result": lightweight_result,
             "status": "success",
             "sql_last_error": None,  # clear any previous errors on success
-            "execution_time_ms": result.get("latency_ms", 0),
+            "execution_time_ms": lightweight_result.get("latency_ms", 0),
             "result_ref": result_ref,
             "tool_history": [
                 {
                     "tool": "execute_sql",
                     "status": "ok",
-                    "row_count": result.get("row_count", 0),
-                    "latency_ms": result.get("latency_ms", 0),
+                    "row_count": lightweight_result.get("row_count", 0),
+                    "latency_ms": lightweight_result.get("latency_ms", 0),
+                    "sample_count": lightweight_result.get("sample_count", 0),
+                    "has_full_data": lightweight_result.get("has_full_data", False),
                 }
             ],
         }

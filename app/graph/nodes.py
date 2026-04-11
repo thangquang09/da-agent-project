@@ -25,7 +25,6 @@ from app.tools import (
 )
 
 
-
 def _extract_first_json_object(text: str) -> dict[str, Any] | None:
     match = re.search(r"\{.*\}", text, flags=re.DOTALL)
     if not match:
@@ -39,10 +38,13 @@ def _extract_first_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _get_merged_table_contexts(in_flight: dict[str, str] | None = None) -> dict[str, str]:
+def _get_merged_table_contexts(
+    in_flight: dict[str, str] | None = None,
+) -> dict[str, str]:
     """Merge persisted table contexts (from data panel uploads) with in-flight contexts."""
     try:
         from app.tools.table_metadata import get_all_table_contexts
+
         merged = get_all_table_contexts()
     except Exception:  # noqa: BLE001
         merged = {}
@@ -109,7 +111,6 @@ def _generate_data_summary(rows: list[dict[str, Any]], query: str) -> str:
             if total > 3:
                 summary += f" (and {total - 3} more)"
         return summary
-
 
 
 def _context_evidence(retrieved_context: list[dict[str, Any]]) -> list[str]:
@@ -767,19 +768,59 @@ def process_uploaded_files(state: AgentState) -> AgentState:
 
 def _summarize_tool_result(tool_name: str, result: dict[str, Any]) -> str:
     if tool_name in {"ask_sql_analyst", "ask_sql_analyst_parallel"}:
-        return json.dumps(
-            {
-                "status": result.get("status"),
-                "task_count": result.get("task_count"),
-                "execution_mode": result.get("execution_mode"),
-                "answer_summary": result.get("answer_summary"),
-                "row_count": result.get("sql_result", {}).get("row_count", 0),
-                "generated_sql": str(result.get("generated_sql", ""))[:800],
-                "errors": result.get("errors", []),
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
+        sql_result = result.get("sql_result", {})
+        rows = sql_result.get("rows", [])
+        columns = sql_result.get("columns", [])
+        if not columns and rows:
+            columns = list(rows[0].keys())
+
+        summary: dict[str, Any] = {
+            "status": result.get("status"),
+            "task_count": result.get("task_count"),
+            "execution_mode": result.get("execution_mode"),
+            "answer_summary": result.get("answer_summary"),
+            "row_count": sql_result.get("row_count", 0),
+            "columns": columns[:20],
+            "generated_sql": str(result.get("generated_sql", ""))[:800],
+            "errors": result.get("errors", []),
+        }
+
+        data_rows_preview = rows[:20]
+        if data_rows_preview:
+            summary["data_rows"] = data_rows_preview
+
+        task_results = result.get("task_results", [])
+        if task_results and len(task_results) > 1:
+            subtask_summaries = []
+            for task_result in task_results[:6]:
+                sub_result = task_result.get("sql_result", {})
+                sub_rows = sub_result.get("rows", [])
+                subtask_summaries.append(
+                    {
+                        "task_id": task_result.get("task_id"),
+                        "query": str(task_result.get("query", ""))[:200],
+                        "status": task_result.get("status"),
+                        "row_count": sub_result.get("row_count", 0),
+                        "data_rows": sub_rows[:10],
+                        "answer_summary": str(task_result.get("answer_summary", ""))[
+                            :300
+                        ],
+                    }
+                )
+            summary["subtask_results"] = subtask_summaries
+
+        summary_json = json.dumps(summary, ensure_ascii=False, indent=2, default=str)
+        if len(summary_json) > 4000:
+            summary.pop("data_rows", None)
+            summary.pop("subtask_results", None)
+            summary["data_rows_note"] = (
+                f"({len(rows)} rows available, truncated for scratchpad)"
+            )
+            summary_json = json.dumps(
+                summary, ensure_ascii=False, indent=2, default=str
+            )
+
+        return summary_json
     elif tool_name == "create_visualization":
         # Filter out bytes data that can't be JSON serialized
         viz = result.get("visualization", {})
@@ -803,6 +844,41 @@ def _summarize_tool_result(tool_name: str, result: dict[str, Any]) -> str:
             indent=2,
         )
     return json.dumps(result, ensure_ascii=False, indent=2)[:1500]
+
+
+def _normalize_leader_plan(raw_plan: Any) -> dict[str, Any]:
+    if not isinstance(raw_plan, dict):
+        return {}
+
+    plan: dict[str, Any] = {}
+
+    goal = str(raw_plan.get("goal", "")).strip()
+    if goal:
+        plan["goal"] = goal[:300]
+
+    dimensions = raw_plan.get("dimensions_to_check", [])
+    if isinstance(dimensions, list):
+        cleaned_dimensions = [
+            str(item).strip()[:80] for item in dimensions if str(item).strip()
+        ]
+        if cleaned_dimensions:
+            plan["dimensions_to_check"] = cleaned_dimensions[:8]
+
+    why_this_tool = str(raw_plan.get("why_this_tool", "")).strip()
+    if why_this_tool:
+        plan["why_this_tool"] = why_this_tool[:300]
+
+    success_criteria = str(raw_plan.get("success_criteria", "")).strip()
+    if success_criteria:
+        plan["success_criteria"] = success_criteria[:300]
+
+    return plan
+
+
+def _format_leader_plan(plan: dict[str, Any]) -> str:
+    if not plan:
+        return ""
+    return json.dumps(plan, ensure_ascii=False, indent=2, default=str)
 
 
 def _generate_clarification_question(
@@ -829,7 +905,7 @@ def _generate_clarification_question(
                 f"Tôi không chắc câu hỏi của bạn cần lấy dữ liệu từ đâu. "
                 f"Bạn muốn tôi truy vấn database chính, xem file bạn upload, "
                 f"hay hỏi về kiến thức/tài liệu? "
-                f"(Câu hỏi gốc: \"{user_query}\")"
+                f'(Câu hỏi gốc: "{user_query}")'
             )
         elif data_source == "unknown":
             return (
@@ -839,13 +915,13 @@ def _generate_clarification_question(
             )
         else:
             return (
-                f"Câu hỏi của bạn hơi mơ hồ: \"{user_query}\". "
+                f'Câu hỏi của bạn hơi mơ hồ: "{user_query}". '
                 f"Bạn có thể diễn đạt lại cụ thể hơn không?"
             )
     elif confidence == "low":
         return (
             f"Tôi không chắc về câu hỏi của bạn. "
-            f"Bạn có thể nói rõ hơn \"{user_query}\" không?"
+            f'Bạn có thể nói rõ hơn "{user_query}" không?'
         )
     elif missing:
         cap_labels = {
@@ -862,7 +938,7 @@ def _generate_clarification_question(
         )
     else:
         return (
-            f"Câu hỏi \"{user_query}\" chưa rõ ràng. "
+            f'Câu hỏi "{user_query}" chưa rõ ràng. '
             f"Bạn có thể cung cấp thêm chi tiết không?"
         )
 
@@ -1022,8 +1098,10 @@ def _evaluate_artifacts(state: AgentState) -> AgentState:
 
     # Check for failed artifacts with retry
     failed_with_retry = [
-        a for a in artifacts
-        if a.get("status") == "failed" and a.get("recommended_next_action") in ("retry_sql", "ask_rag")
+        a
+        for a in artifacts
+        if a.get("status") == "failed"
+        and a.get("recommended_next_action") in ("retry_sql", "ask_rag")
     ]
 
     # Check for terminal artifact
@@ -1039,7 +1117,9 @@ def _evaluate_artifacts(state: AgentState) -> AgentState:
         reason = f"terminal artifact: {terminal_artifact.get('artifact_type')}"
     elif failed_with_retry:
         decision = "retry"
-        reason = f"failed artifact needs retry: {failed_with_retry[0].get('artifact_type')}"
+        reason = (
+            f"failed artifact needs retry: {failed_with_retry[0].get('artifact_type')}"
+        )
     elif not missing_types and artifacts:
         decision = "finalize"
         reason = f"all capabilities covered: {collected_types}"
@@ -1128,7 +1208,7 @@ def _should_decompose_sql_query(query: str) -> bool:
         return False
     markers = [
         "\n\n",
-        "\"\n",
+        '"\n',
         "compare",
         "so sánh",
         " đồng thời ",
@@ -1166,34 +1246,44 @@ def _normalize_parallel_sql_tasks(
 
 def _extract_inline_data_from_query(query: str) -> list[dict[str, Any]]:
     """Extract numeric data from user query for standalone visualization.
-    
+
     Looks for patterns like:
     - "vẽ biểu đồ với 10, 20, 30"
     - "biểu đồ cho các giá trị 10, 30, 60"
     - "show pie chart: 10%, 30%, 60%"
-    
+
     Returns list of dicts with "value" key, or empty list if no data found.
     """
     # Patterns that indicate inline data visualization request
     viz_keywords = [
-        "vẽ", "biểu đồ", "chart", "plot", "graph", "đồ thị",
-        "pie", "bar", "line", "column", "pie chart", "biểu đồ tròn",
+        "vẽ",
+        "biểu đồ",
+        "chart",
+        "plot",
+        "graph",
+        "đồ thị",
+        "pie",
+        "bar",
+        "line",
+        "column",
+        "pie chart",
+        "biểu đồ tròn",
     ]
-    
+
     if not any(kw in query.lower() for kw in viz_keywords):
         return []
-    
+
     # Extract numbers (integers or floats)
     numbers = re.findall(r"\b\d+\.?\d*\b", query)
-    
+
     if not numbers:
         return []
-    
+
     # Check if these numbers look like data (not dates, IDs, etc.)
     # Strategy: if there's a list/comma pattern, these are likely data values
     # e.g. "10, 30, 60" in the query suggests data values
-    
-    # Simple heuristic: if numbers are separated by commas/spaces and 
+
+    # Simple heuristic: if numbers are separated by commas/spaces and
     # surrounded by viz keywords, treat as data
     data_values = []
     for n in numbers:
@@ -1205,39 +1295,48 @@ def _extract_inline_data_from_query(query: str) -> list[dict[str, Any]]:
             # - Very large round numbers (might be page numbers, IDs)
             if 1900 <= val <= 2099:
                 continue
-            if val > 100 and '.' not in n:
+            if val > 100 and "." not in n:
                 continue
             if val > 10000:
                 continue
             data_values.append({"value": val})
         except ValueError:
             continue
-    
+
     return data_values
 
 
 def _is_inline_data_query(query: str) -> bool:
     """Detect if query is requesting inline data visualization.
-    
+
     Checks:
     1. Query asks for visualization/chart
     2. Contains numeric values that look like data (not dates/IDs)
     3. Data values are comma-separated (suggests a list)
     """
     viz_keywords = [
-        "vẽ", "biểu đồ", "chart", "plot", "graph", "đồ thị",
-        "pie", "bar", "line", "column", "pie chart",
+        "vẽ",
+        "biểu đồ",
+        "chart",
+        "plot",
+        "graph",
+        "đồ thị",
+        "pie",
+        "bar",
+        "line",
+        "column",
+        "pie chart",
     ]
-    
+
     if not any(kw in query.lower() for kw in viz_keywords):
         return False
-    
+
     # Check for comma-separated numbers suggesting data list
     # Pattern: number followed by comma/space/number
     comma_numbers = re.findall(r"\d+\.?\d*\s*[,，]\s*\d+\.?\d*", query)
     if comma_numbers:
         return True
-    
+
     # Pattern: numbers in a list context like "10 20 30"
     numbers = re.findall(r"\b\d+\.?\d*\b", query)
     if len(numbers) >= 2:
@@ -1246,7 +1345,7 @@ def _is_inline_data_query(query: str) -> bool:
             pattern = f"{re.escape(numbers[i])}\\s+\\d"
             if re.search(pattern, query):
                 return True
-    
+
     return False
 
 
@@ -1257,7 +1356,9 @@ def _execute_sql_analyst_task(task: dict[str, Any]) -> dict[str, Any]:
     return worker.invoke(task)
 
 
-def _dispatch_parallel_sql_tasks(tasks: list[dict[str, str]], runner) -> list[dict[str, Any]]:  # noqa: ANN001
+def _dispatch_parallel_sql_tasks(
+    tasks: list[dict[str, str]], runner
+) -> list[dict[str, Any]]:  # noqa: ANN001
     from concurrent.futures import ThreadPoolExecutor
 
     with ThreadPoolExecutor(max_workers=min(len(tasks), 4)) as executor:
@@ -1304,6 +1405,7 @@ def ask_sql_analyst_tool(
     state: AgentState, query: str, *, allow_decomposition: bool = True
 ) -> dict[str, Any]:
     enriched_state = _ensure_v3_schema_context(state)
+    original_user_query = state.get("user_query", "") or query
     base_state: AgentState = {
         "user_query": query,
         "target_db_path": enriched_state.get("target_db_path", ""),
@@ -1335,6 +1437,7 @@ def ask_sql_analyst_tool(
                 "task_id": "1",
                 "type": "sql_query",
                 "query": query,
+                "original_user_query": original_user_query,
                 "target_db_path": enriched_state.get("target_db_path", ""),
                 "schema_context": enriched_state.get("schema_context", ""),
                 "session_context": enriched_state.get("session_context", ""),
@@ -1345,6 +1448,7 @@ def ask_sql_analyst_tool(
     for task in task_plan:
         task["run_id"] = enriched_state.get("run_id", "")
         task["thread_id"] = enriched_state.get("thread_id", "")
+        task["original_user_query"] = original_user_query
 
     results: list[dict[str, Any]]
     if len(task_plan) > 1:
@@ -1410,7 +1514,9 @@ def ask_sql_analyst_tool(
                 )
                 answer_summary = natural_answer
             except Exception:  # noqa: BLE001
-                answer_summary = _generate_data_summary(sql_result.get("rows", []), query)
+                answer_summary = _generate_data_summary(
+                    sql_result.get("rows", []), query
+                )
             confidence = "high" if sql_result.get("rows") else "medium"
         else:
             answer_summary = str(result.get("error", "SQL analyst failed"))
@@ -1440,7 +1546,9 @@ def ask_sql_analyst_tool(
         "confidence": confidence,
         # WorkerArtifact — for standardized supervisor evaluation
         "artifact_type": "sql_result",
-        "artifact_status": "success" if successful_results and not failed_results else ("partial" if successful_results else "failed"),
+        "artifact_status": "success"
+        if successful_results and not failed_results
+        else ("partial" if successful_results else "failed"),
         "artifact_path": "",
         "metadata": {
             "sql_result": sql_result,
@@ -1451,11 +1559,14 @@ def ask_sql_analyst_tool(
             "validated_sql": validated_sql,
             "table": (
                 validated_sql.split("FROM")[1].split()[0].strip('"')
-                if "FROM" in validated_sql else "unknown"
+                if "FROM" in validated_sql
+                else "unknown"
             ),
         },
         "artifact_terminal": len(successful_results) > 0 and not failed_results,
-        "artifact_recommended_action": "finalize" if (successful_results and not failed_results) else ("retry_sql" if failed_results else "clarify"),
+        "artifact_recommended_action": "finalize"
+        if (successful_results and not failed_results)
+        else ("retry_sql" if failed_results else "clarify"),
     }
 
 
@@ -1587,7 +1698,9 @@ def ask_sql_analyst_parallel_tool(
         "task_results": task_results,
         # WorkerArtifact — for standardized supervisor evaluation
         "artifact_type": "sql_result",
-        "artifact_status": "success" if successful_results and not failed_results else ("partial" if successful_results else "failed"),
+        "artifact_status": "success"
+        if successful_results and not failed_results
+        else ("partial" if successful_results else "failed"),
         "artifact_path": "",
         "metadata": {
             "sql_result": aggregate_update.get("sql_result", {}),
@@ -1600,7 +1713,9 @@ def ask_sql_analyst_parallel_tool(
             "parallel_tasks": [r.get("task_id") for r in task_results],
         },
         "artifact_terminal": len(successful_results) > 0 and not failed_results,
-        "artifact_recommended_action": "finalize" if (successful_results and not failed_results) else ("retry_sql" if failed_results else "clarify"),
+        "artifact_recommended_action": "finalize"
+        if (successful_results and not failed_results)
+        else ("retry_sql" if failed_results else "clarify"),
     }
 
 
@@ -1665,7 +1780,9 @@ def leader_agent(state: AgentState) -> AgentState:
                 }
         elif tool_name in ("ask_sql_analyst", "ask_sql_analyst_parallel"):
             terminal = tool_result.get("artifact_terminal", False)
-            recommended_action = tool_result.get("artifact_recommended_action", "finalize")
+            recommended_action = tool_result.get(
+                "artifact_recommended_action", "finalize"
+            )
             sql_result = tool_result.get("sql_result", {})
             metadata = {
                 "row_count": sql_result.get("row_count", 0),
@@ -1700,7 +1817,9 @@ def leader_agent(state: AgentState) -> AgentState:
         }
 
     if "report" in required_caps:
-        tool_query = query.strip() or "Generate a detailed report for the available dataset."
+        tool_query = (
+            query.strip() or "Generate a detailed report for the available dataset."
+        )
         tool_result: dict[str, Any] = {}
         artifacts.append(_make_artifact("generate_report", tool_result, "partial"))
         leader_tool_history.append(
@@ -1776,10 +1895,13 @@ def leader_agent(state: AgentState) -> AgentState:
             break
 
         action = str(parsed.get("action", "")).strip().lower()
+        plan = _normalize_leader_plan(parsed.get("plan"))
         if action == "final":
             answer = str(parsed.get("answer", "")).strip()
             confidence = str(parsed.get("confidence", "medium")).strip().lower()
-            intent = str(parsed.get("intent", inferred_intent or "unknown")).strip().lower()
+            intent = (
+                str(parsed.get("intent", inferred_intent or "unknown")).strip().lower()
+            )
             if confidence not in {"high", "medium", "low"}:
                 confidence = "medium"
             if intent not in {"sql", "rag", "mixed", "unknown"}:
@@ -1804,10 +1926,16 @@ def leader_agent(state: AgentState) -> AgentState:
                 "total_cost_usd": round(total_cost_usd, 8),
                 "context_type": state.get("context_type", "default"),
                 "sql_rows": sql_artifacts.get("sql_result", {}).get("rows", []),
-                "sql_row_count": sql_artifacts.get("sql_result", {}).get("row_count", 0),
+                "sql_row_count": sql_artifacts.get("sql_result", {}).get(
+                    "row_count", 0
+                ),
                 "visualization": sql_artifacts.get("visualization"),
                 "result_metadata": sql_artifacts.get("result_ref"),
             }
+            if plan:
+                payload["evidence"] = payload.get("evidence", []) + [
+                    f"leader_plan_goal={plan.get('goal', '')}"
+                ]
             return {
                 "final_answer": answer,
                 "final_payload": payload,
@@ -1817,7 +1945,8 @@ def leader_agent(state: AgentState) -> AgentState:
                 "errors": sql_artifacts.get("errors", []),
                 "confidence": confidence,
                 "step_count": state.get("step_count", 0) + step,
-                "tool_history": leader_tool_history + sql_artifacts.get("tool_history", []),
+                "tool_history": leader_tool_history
+                + sql_artifacts.get("tool_history", []),
                 "generated_sql": sql_artifacts.get("generated_sql", ""),
                 "validated_sql": sql_artifacts.get("validated_sql", ""),
                 "sql_result": sql_artifacts.get("sql_result", {}),
@@ -1846,7 +1975,9 @@ def leader_agent(state: AgentState) -> AgentState:
             inferred_intent = "sql" if inferred_intent == "unknown" else inferred_intent
         elif tool_name == "ask_sql_analyst_parallel":
             raw_tasks = tool_args.get("tasks", [])
-            normalized_tasks = _normalize_parallel_sql_tasks(raw_tasks, tool_query or query)
+            normalized_tasks = _normalize_parallel_sql_tasks(
+                raw_tasks, tool_query or query
+            )
             tool_result = _run_traced_substep(
                 "leader_tool_ask_sql_analyst_parallel",
                 {
@@ -1854,12 +1985,14 @@ def leader_agent(state: AgentState) -> AgentState:
                     "execution_mode": "parallel",
                     "task_results": normalized_tasks,
                 },
-                lambda normalized_tasks=normalized_tasks, query=query: ask_sql_analyst_parallel_tool(
-                    state, normalized_tasks, query
+                lambda normalized_tasks=normalized_tasks, query=query: (
+                    ask_sql_analyst_parallel_tool(state, normalized_tasks, query)
                 ),
                 observation_type="tool",
             )
-            artifacts.append(_make_artifact("ask_sql_analyst_parallel", tool_result, "success"))
+            artifacts.append(
+                _make_artifact("ask_sql_analyst_parallel", tool_result, "success")
+            )
             sql_artifacts = tool_result
             inferred_intent = "sql" if inferred_intent == "unknown" else inferred_intent
         elif tool_name == "retrieve_rag_answer":
@@ -1874,7 +2007,9 @@ def leader_agent(state: AgentState) -> AgentState:
                 ),
                 observation_type="retriever",
             )
-            artifacts.append(_make_artifact("retrieve_rag_answer", tool_result, "success"))
+            artifacts.append(
+                _make_artifact("retrieve_rag_answer", tool_result, "success")
+            )
             inferred_intent = "rag" if inferred_intent == "unknown" else "mixed"
         elif tool_name == "create_visualization":
             from app.graph.standalone_visualization import inline_data_worker
@@ -1902,7 +2037,10 @@ def leader_agent(state: AgentState) -> AgentState:
                 }
                 tool_result = _run_traced_substep(
                     "leader_tool_create_visualization",
-                    {"user_query": tool_query, "step_count": state.get("step_count", 0)},
+                    {
+                        "user_query": tool_query,
+                        "step_count": state.get("step_count", 0),
+                    },
                     lambda viz_task_state=viz_task_state: inline_data_worker(
                         viz_task_state
                     ),
@@ -1912,9 +2050,7 @@ def leader_agent(state: AgentState) -> AgentState:
             # Auto-finalize if visualization succeeded — compose answer from viz metadata only
             viz_result = tool_result.get("visualization", {})
             if isinstance(viz_result, dict) and viz_result.get("success"):
-                viz_answer = (
-                    f"Đã tạo biểu đồ {viz_result.get('chart_type', 'chart')} thành công."
-                )
+                viz_answer = f"Đã tạo biểu đồ {viz_result.get('chart_type', 'chart')} thành công."
                 payload = {
                     "answer": viz_answer,
                     "evidence": [
@@ -1935,12 +2071,15 @@ def leader_agent(state: AgentState) -> AgentState:
                     "visualization": viz_result,
                     "result_metadata": None,
                 }
-                artifacts.append(_make_artifact("create_visualization", tool_result, "success"))
+                artifacts.append(
+                    _make_artifact("create_visualization", tool_result, "success")
+                )
                 leader_tool_history.append(
                     {
                         "tool": "create_visualization",
                         "status": "ok",
                         "reason": "auto_finalize_on_success",
+                        "plan": plan,
                         "source": "leader_agent",
                     }
                 )
@@ -1982,6 +2121,7 @@ def leader_agent(state: AgentState) -> AgentState:
                     "tool": tool_name,
                     "status": "ok",
                     "reason": reason,
+                    "plan": plan,
                     "source": "leader_agent",
                 }
             )
@@ -2007,12 +2147,15 @@ def leader_agent(state: AgentState) -> AgentState:
                 "tool": tool_name,
                 "status": "ok",
                 "reason": reason,
+                "plan": plan,
                 "source": "leader_agent",
             }
         )
-        scratchpad_entries.append(
-            f"[Step {step}] tool={tool_name}\n{_summarize_tool_result(tool_name, tool_result)}"
-        )
+        scratchpad_entry = f"[Step {step}] tool={tool_name}\n"
+        if plan:
+            scratchpad_entry += f"Plan:\n{_format_leader_plan(plan)}\n"
+        scratchpad_entry += _summarize_tool_result(tool_name, tool_result)
+        scratchpad_entries.append(scratchpad_entry)
 
     # Domain-aware fallback: depends on what tools were already attempted
     if "create_visualization" in used_high_level_tools:
@@ -2020,8 +2163,7 @@ def leader_agent(state: AgentState) -> AgentState:
         if viz and isinstance(viz, dict) and viz.get("success"):
             # Visualization succeeded — compose answer from viz metadata only
             answer = (
-                f"Đã tạo biểu đồ thành công. "
-                f"Loại: {viz.get('chart_type', 'chart')}"
+                f"Đã tạo biểu đồ thành công. Loại: {viz.get('chart_type', 'chart')}"
             )
             payload = {
                 "answer": answer,
@@ -2062,7 +2204,11 @@ def leader_agent(state: AgentState) -> AgentState:
             }
         else:
             # Visualization attempted but failed — return error, don't fall back to SQL
-            viz_error = viz.get("error", "Unknown visualization error") if isinstance(viz, dict) else "Visualization generation failed"
+            viz_error = (
+                viz.get("error", "Unknown visualization error")
+                if isinstance(viz, dict)
+                else "Visualization generation failed"
+            )
             return {
                 "final_answer": f"Không thể tạo biểu đồ: {viz_error}",
                 "final_payload": {
@@ -2118,7 +2264,12 @@ def leader_agent(state: AgentState) -> AgentState:
             "response_mode": "answer",
             "intent": "rag",
             "intent_reason": "rag_no_fallback",
-            "errors": [{"category": "RAG_IRRELEVANT_CONTEXT", "message": "No relevant context found"}],
+            "errors": [
+                {
+                    "category": "RAG_IRRELEVANT_CONTEXT",
+                    "message": "No relevant context found",
+                }
+            ],
             "confidence": "low",
             "step_count": state.get("step_count", 0) + 1,
             "tool_history": leader_tool_history,
@@ -2133,7 +2284,11 @@ def leader_agent(state: AgentState) -> AgentState:
         # No specific tool attempted — last resort fallback to SQL (only for truly unknown cases)
         fallback_result = ask_sql_analyst_tool(state, query)
         # Build artifact for the fallback SQL call
-        fallback_artifact = _make_artifact("ask_sql_analyst", fallback_result, "success" if not fallback_result.get("errors") else "partial")
+        fallback_artifact = _make_artifact(
+            "ask_sql_analyst",
+            fallback_result,
+            "success" if not fallback_result.get("errors") else "partial",
+        )
         fallback_artifacts = artifacts + [fallback_artifact]
         answer = fallback_result.get("answer_summary", "Không thể hoàn tất phân tích.")
         payload = {
@@ -2169,7 +2324,8 @@ def leader_agent(state: AgentState) -> AgentState:
             "errors": fallback_result.get("errors", []),
             "confidence": fallback_result.get("confidence", "medium"),
             "step_count": state.get("step_count", 0) + 1,
-            "tool_history": leader_tool_history + fallback_result.get("tool_history", []),
+            "tool_history": leader_tool_history
+            + fallback_result.get("tool_history", []),
             "generated_sql": fallback_result.get("generated_sql", ""),
             "validated_sql": fallback_result.get("validated_sql", ""),
             "sql_result": fallback_result.get("sql_result", {}),
@@ -2605,6 +2761,7 @@ def _save_turn_artifacts(
         if report_md:
             # Save report markdown to file
             from app.artifacts.helpers import save_report_markdown_to_file
+
             report_md_path = save_report_markdown_to_file(
                 markdown=report_md,
                 thread_id=thread_id,

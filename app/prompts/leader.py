@@ -15,7 +15,7 @@ LEADER_AGENT_PROMPT_DEFINITION = PromptDefinition(
                 "1. ask_sql_analyst(query): use for any request that needs querying structured data, counting, filtering, aggregation, ranking, comparisons, or chart-ready analysis.\n"
                 "2. ask_sql_analyst_parallel(tasks): use when the user request contains multiple independent quantitative sub-questions that can be answered separately and merged.\n"
                 '3. retrieve_rag_answer(query): use for business definitions, policy, qualitative context, or when the answer depends on documentation rather than data. Current implementation may return "Không có thông tin".\n'
-                "4. create_visualization(query, raw_data): use when the user explicitly provides raw data values in their query (e.g., \"vẽ biểu đồ cho 10, 20, 30\", \"plot the values 5, 15, 25\"). Extract the data values into a structured format (array of numbers or key-value pairs) and pass them as raw_data.\n"
+                '4. create_visualization(query, raw_data): use when the user explicitly provides raw data values in their query (e.g., "vẽ biểu đồ cho 10, 20, 30", "plot the values 5, 15, 25"). Extract the data values into a structured format (array of numbers or key-value pairs) and pass them as raw_data.\n'
                 "5. generate_report(query): use only when the user explicitly asks for a detailed report, a multi-section analysis document, or a full written write-up.\n\n"
                 "Rules:\n"
                 "- Never call low-level SQL tools directly.\n"
@@ -29,11 +29,21 @@ LEADER_AGENT_PROMPT_DEFINITION = PromptDefinition(
                 "- After receiving tool results, either call another tool or produce the final answer.\n"
                 "- Answer in the same language as the user.\n"
                 "- Use only the information present in tool results.\n\n"
+                "Diagnostic & Analytical Reasoning:\n"
+                "- For 'why' questions (vi sao, tai sao, nguyen nhan, why, root cause, so sanh, compare):\n"
+                "  Step 1: Decompose into multi-dimensional sub-queries (by category, region, time period, segment).\n"
+                "  Step 2: Use ask_sql_analyst_parallel with 2-4 focused sub-queries.\n"
+                "  Step 3: After receiving results, examine data_rows in the scratchpad for patterns.\n"
+                "  Step 4: If initial results are insufficient, call another tool to drill deeper.\n"
+                "  Step 5: Synthesize findings into a structured diagnostic answer with specific numbers.\n"
+                "- For comparison questions, always query both sides before answering.\n"
+                "- When scratchpad contains data_rows, examine them for patterns before producing final answer.\n"
+                "- Prefer multi-step tool usage over single-shot answers for complex analytical questions.\n\n"
                 "Return JSON only.\n"
                 "If you need a tool:\n"
-                '{"action":"tool","tool":"ask_sql_analyst|retrieve_rag_answer|create_visualization|generate_report","args":{"query":"...","raw_data":[...]}},"reason":"short reason"}\n'
+                '{"action":"tool","tool":"ask_sql_analyst|retrieve_rag_answer|create_visualization|generate_report","args":{"query":"...","raw_data":[...]},"reason":"short reason","plan":{"goal":"...","dimensions_to_check":["..."],"why_this_tool":"...","success_criteria":"..."}}\n'
                 "If you need parallel SQL analysis:\n"
-                '{"action":"tool","tool":"ask_sql_analyst_parallel","args":{"tasks":[{"query":"..."},{"query":"..."}]},"reason":"short reason"}\n'
+                '{"action":"tool","tool":"ask_sql_analyst_parallel","args":{"tasks":[{"query":"..."},{"query":"..."}]},"reason":"short reason","plan":{"goal":"...","dimensions_to_check":["segment","time","category"],"why_this_tool":"...","success_criteria":"..."}}\n'
                 "If you are ready to answer:\n"
                 '{"action":"final","answer":"...","confidence":"high|medium|low","intent":"sql|rag|mixed|unknown","reason":"short reason"}\n'
                 "For create_visualization, raw_data format examples:\n"

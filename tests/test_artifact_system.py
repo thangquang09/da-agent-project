@@ -12,6 +12,7 @@ Since this environment may not have PostgreSQL running, integration-style tests
 that would need a real DB are skipped via pytest.mark.skip unless
 DATABASE_URL is set and reachable.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,6 +21,8 @@ import pytest
 
 from app.graph.graph import build_sql_v3_graph, _route_after_leader
 from app.graph.nodes import (
+    _format_leader_plan,
+    _normalize_leader_plan,
     _evaluate_artifacts,
     artifact_evaluator,
 )
@@ -52,7 +55,8 @@ def _make_minimal_state(
             "  </table>\n</database_context>"
         ),
         "artifacts": artifacts or [],
-        "task_profile": task_profile or {
+        "task_profile": task_profile
+        or {
             "task_mode": "simple",
             "data_source": "database",
             "required_capabilities": ["sql"],
@@ -86,7 +90,9 @@ class FakeLeaderLLM:
                                 {
                                     "action": "tool",
                                     "tool": "ask_sql_analyst",
-                                    "args": {"query": "Điểm toán trung bình là bao nhiêu?"},
+                                    "args": {
+                                        "query": "Điểm toán trung bình là bao nhiêu?"
+                                    },
                                     "reason": "Needs SQL",
                                 }
                             )
@@ -128,6 +134,71 @@ class FakeSQLWorkerLLM:
         }
 
 
+class FakeLeaderPlanLLM:
+    """Returns a tool call with a structured micro-plan, then final."""
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def chat_completion(self, **kwargs):
+        self.call_count += 1
+        if self.call_count == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "action": "tool",
+                                    "tool": "ask_sql_analyst_parallel",
+                                    "args": {
+                                        "tasks": [
+                                            {
+                                                "query": "Doanh thu theo danh mục tháng này"
+                                            },
+                                            {
+                                                "query": "Doanh thu theo khu vực tháng này"
+                                            },
+                                        ]
+                                    },
+                                    "reason": "Need segmented diagnostic evidence",
+                                    "plan": {
+                                        "goal": "Tìm các chiều đóng góp vào sụt giảm doanh thu",
+                                        "dimensions_to_check": [
+                                            "category",
+                                            "region",
+                                            "time",
+                                        ],
+                                        "why_this_tool": "Cần nhiều truy vấn độc lập để so sánh các chiều",
+                                        "success_criteria": "Xác định được các nhóm giảm mạnh nhất với số liệu cụ thể",
+                                    },
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ]
+            }
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "action": "final",
+                                "answer": "Danh mục A và khu vực North giảm mạnh nhất.",
+                                "confidence": "high",
+                                "intent": "sql",
+                                "reason": "Done",
+                            },
+                            ensure_ascii=False,
+                        )
+                    }
+                }
+            ]
+        }
+
+
 def test_leader_agent_returns_artifacts_key(monkeypatch):
     """leader_agent must return state containing the 'artifacts' key."""
     from app.graph.nodes import leader_agent
@@ -149,9 +220,7 @@ def test_leader_agent_returns_artifacts_key(monkeypatch):
     monkeypatch.setattr(
         "app.graph.sql_worker_graph.LLMClient.from_env", lambda: fake_sql
     )
-    monkeypatch.setattr(
-        "app.graph.nodes.get_schema_overview", fake_get_schema_overview
-    )
+    monkeypatch.setattr("app.graph.nodes.get_schema_overview", fake_get_schema_overview)
     monkeypatch.setattr(
         "app.graph.sql_worker_graph.get_schema_overview", fake_get_schema_overview
     )
@@ -185,9 +254,7 @@ def test_leader_agent_populates_sql_result_artifact(monkeypatch):
     monkeypatch.setattr(
         "app.graph.sql_worker_graph.LLMClient.from_env", lambda: fake_sql
     )
-    monkeypatch.setattr(
-        "app.graph.nodes.get_schema_overview", fake_get_schema_overview
-    )
+    monkeypatch.setattr("app.graph.nodes.get_schema_overview", fake_get_schema_overview)
     monkeypatch.setattr(
         "app.graph.sql_worker_graph.get_schema_overview", fake_get_schema_overview
     )
@@ -226,9 +293,7 @@ def test_leader_agent_artifacts_preserve_on_loop_back(monkeypatch):
 
     # The existing artifact must be preserved
     artifact_types = {a.get("artifact_type") for a in artifacts}
-    assert "rag_context" in artifact_types, (
-        "Loop-back must preserve existing artifacts"
-    )
+    assert "rag_context" in artifact_types, "Loop-back must preserve existing artifacts"
 
 
 def test_task_grounder_report_capability_overrides_mixed_caps():
@@ -299,6 +364,113 @@ def test_prompt_manager_handles_none_task_profile():
     user_content = messages[-1]["content"]
     # Should NOT contain "Task profile" since it is None
     assert "Task profile" not in user_content
+
+
+def test_prompt_manager_leader_prompt_documents_micro_plan_schema():
+    pm = PromptManager()
+    messages = pm.leader_agent_messages(
+        query="Vì sao doanh thu giảm?",
+        session_context="",
+        xml_database_context="",
+        scratchpad="",
+        task_profile=None,
+    )
+
+    system_content = messages[0]["content"]
+    assert '"plan":{' in system_content
+    assert '"dimensions_to_check"' in system_content
+    assert '"success_criteria"' in system_content
+
+
+def test_normalize_leader_plan_keeps_only_supported_fields():
+    plan = _normalize_leader_plan(
+        {
+            "goal": "Find the drivers of decline",
+            "dimensions_to_check": ["category", "region", "", "time"],
+            "why_this_tool": "Parallel evidence is needed",
+            "success_criteria": "Return top drivers with numbers",
+            "extra": "ignore me",
+        }
+    )
+
+    assert plan == {
+        "goal": "Find the drivers of decline",
+        "dimensions_to_check": ["category", "region", "time"],
+        "why_this_tool": "Parallel evidence is needed",
+        "success_criteria": "Return top drivers with numbers",
+    }
+    assert '"goal": "Find the drivers of decline"' in _format_leader_plan(plan)
+
+
+def test_leader_agent_records_micro_plan_in_tool_history(monkeypatch):
+    from app.graph.nodes import leader_agent
+
+    fake_llm = FakeLeaderPlanLLM()
+
+    def fake_parallel_tool(state, tasks, parent_query):  # noqa: ANN001
+        return {
+            "status": "ok",
+            "task_count": len(tasks),
+            "execution_mode": "parallel",
+            "answer_summary": "Danh mục A và khu vực North giảm mạnh nhất.",
+            "sql_result": {
+                "row_count": 2,
+                "columns": ["segment", "delta"],
+                "rows": [
+                    {"segment": "A", "delta": -25},
+                    {"segment": "North", "delta": -18},
+                ],
+            },
+            "generated_sql": "SELECT * FROM t",
+            "validated_sql": "SELECT * FROM t",
+            "tool_history": [],
+            "errors": [],
+            "result_ref": None,
+            "visualization": None,
+            "task_results": [
+                {
+                    "task_id": "1",
+                    "query": "Doanh thu theo danh mục tháng này",
+                    "status": "success",
+                    "sql_result": {
+                        "row_count": 1,
+                        "rows": [{"segment": "A", "delta": -25}],
+                    },
+                    "answer_summary": "Danh mục A giảm mạnh.",
+                },
+                {
+                    "task_id": "2",
+                    "query": "Doanh thu theo khu vực tháng này",
+                    "status": "success",
+                    "sql_result": {
+                        "row_count": 1,
+                        "rows": [{"segment": "North", "delta": -18}],
+                    },
+                    "answer_summary": "North giảm mạnh.",
+                },
+            ],
+            "artifact_terminal": True,
+            "artifact_recommended_action": "finalize",
+        }
+
+    monkeypatch.setattr("app.graph.nodes.LLMClient.from_env", lambda: fake_llm)
+    monkeypatch.setattr(
+        "app.graph.nodes.ask_sql_analyst_parallel_tool", fake_parallel_tool
+    )
+
+    result = leader_agent(_make_minimal_state())
+
+    first_entry = result["tool_history"][0]
+    assert first_entry["tool"] == "ask_sql_analyst_parallel"
+    assert (
+        first_entry["plan"]["goal"] == "Tìm các chiều đóng góp vào sụt giảm doanh thu"
+    )
+    assert first_entry["plan"]["dimensions_to_check"] == [
+        "category",
+        "region",
+        "time",
+    ]
+    assert result["final_answer"] == "Danh mục A và khu vực North giảm mạnh nhất."
 
 
 # =============================================================================

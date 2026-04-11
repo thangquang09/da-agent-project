@@ -65,6 +65,7 @@ class TaskState(TypedDict, total=False):
     task_id: str
     task_type: TaskType
     query: str
+    original_user_query: str
     target_db_path: str
     schema_context: str
     session_context: str  # Conversation history for follow-up questions

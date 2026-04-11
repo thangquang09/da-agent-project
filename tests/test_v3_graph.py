@@ -3,6 +3,7 @@ from __future__ import annotations
 from tests.conftest import FakeV3LLMClient, REPORT_QUERY, REPORT_WITH_VIZ_QUERY
 
 from app.main import run_query
+from app.prompts import prompt_manager
 from app.graph.report_subgraph import (
     _build_report_insight_messages,
     _deterministic_critic_issues,
@@ -10,6 +11,11 @@ from app.graph.report_subgraph import (
     _validate_section_semantics,
     profiler_sampler_node,
     report_finalize_node,
+    section_pipeline_node,
+)
+from app.graph.nodes import (
+    _summarize_tool_result,
+    ask_sql_analyst_tool,
 )
 
 MULTI_QUERY = (
@@ -356,6 +362,183 @@ def test_deterministic_critic_flags_missing_recommendations_and_missing_caveats(
 
     assert any("Recommendations" in issue for issue in issues)
     assert any("strong analytical claims" in issue for issue in issues)
+
+
+def test_sql_worker_messages_include_original_user_query_when_provided():
+    messages = prompt_manager.sql_worker_messages(
+        query="Tim top 5 san pham theo doanh thu Q1 2024",
+        original_user_query="Top 5 san pham ban chay nhat quy vua?",
+    )
+
+    user_content = messages[-1]["content"]
+    assert "Original user question (for context):" in user_content
+    assert "Top 5 san pham ban chay nhat quy vua?" in user_content
+    assert "Question: Tim top 5 san pham theo doanh thu Q1 2024" in user_content
+
+
+def test_sql_worker_messages_omit_original_user_query_when_empty():
+    messages = prompt_manager.sql_worker_messages(query="simple query")
+
+    assert "Original user question (for context):" not in messages[-1]["content"]
+
+
+def test_ask_sql_analyst_tool_propagates_original_user_query(monkeypatch):
+    captured_tasks: list[dict[str, object]] = []
+
+    def _fake_execute(task):  # noqa: ANN001
+        captured_tasks.append(dict(task))
+        return {
+            "status": "success",
+            "sql_result": {
+                "rows": [{"value": 1}],
+                "row_count": 1,
+                "columns": ["value"],
+            },
+            "generated_sql": "SELECT 1 AS value",
+            "validated_sql": "SELECT 1 AS value",
+            "tool_history": [],
+            "result_ref": None,
+            "visualization": None,
+        }
+
+    monkeypatch.setattr("app.graph.nodes._execute_sql_analyst_task", _fake_execute)
+
+    result = ask_sql_analyst_tool(
+        {
+            "user_query": "Top 5 san pham ban chay nhat quy vua?",
+            "target_db_path": "",
+            "schema_context": "{}",
+            "xml_database_context": "<database></database>",
+            "session_context": "",
+        },
+        "Tim top 5 san pham theo doanh thu Q1 2024",
+        allow_decomposition=False,
+    )
+
+    assert result["status"] == "ok"
+    assert len(captured_tasks) == 1
+    assert captured_tasks[0]["query"] == "Tim top 5 san pham theo doanh thu Q1 2024"
+    assert (
+        captured_tasks[0]["original_user_query"]
+        == "Top 5 san pham ban chay nhat quy vua?"
+    )
+
+
+def test_section_pipeline_uses_report_request_as_original_user_query(monkeypatch):
+    captured_task_input: dict[str, object] = {}
+
+    class _FakeWorker:
+        def invoke(self, task_input):  # noqa: ANN001
+            captured_task_input.update(task_input)
+            return {"status": "failed", "error": "boom", "sql_result": {}}
+
+    monkeypatch.setattr(
+        "app.graph.report_subgraph.get_sql_worker_graph",
+        lambda: _FakeWorker(),
+    )
+
+    update = section_pipeline_node(
+        {
+            "report_request": "Viết báo cáo giải thích vì sao doanh thu giảm.",
+            "target_db_path": "",
+            "schema_context": "{}",
+            "xml_database_context": "<database></database>",
+            "_current_section": {
+                "section_id": "sec-1",
+                "title": "Nguyen nhan giam doanh thu",
+                "analysis_query": "So sánh doanh thu tháng này với tháng trước theo danh mục.",
+            },
+        }
+    )
+
+    assert (
+        captured_task_input["query"]
+        == "So sánh doanh thu tháng này với tháng trước theo danh mục."
+    )
+    assert (
+        captured_task_input["original_user_query"]
+        == "Viết báo cáo giải thích vì sao doanh thu giảm."
+    )
+    assert update["_report_sections_raw"][0]["status"] == "failed"
+
+
+def test_summarize_tool_result_includes_rows_columns_and_parallel_subtasks():
+    summary = _summarize_tool_result(
+        "ask_sql_analyst_parallel",
+        {
+            "status": "ok",
+            "task_count": 2,
+            "execution_mode": "parallel",
+            "answer_summary": "summary",
+            "generated_sql": "SELECT * FROM t",
+            "errors": [],
+            "sql_result": {
+                "row_count": 3,
+                "columns": ["category", "revenue"],
+                "rows": [
+                    {"category": "A", "revenue": 100},
+                    {"category": "B", "revenue": 80},
+                    {"category": "C", "revenue": 50},
+                ],
+            },
+            "task_results": [
+                {
+                    "task_id": "1",
+                    "query": "Revenue by category",
+                    "status": "success",
+                    "answer_summary": "A dropped",
+                    "sql_result": {
+                        "row_count": 2,
+                        "rows": [{"category": "A", "delta": -20}],
+                    },
+                },
+                {
+                    "task_id": "2",
+                    "query": "Revenue by region",
+                    "status": "success",
+                    "answer_summary": "North dropped",
+                    "sql_result": {
+                        "row_count": 2,
+                        "rows": [{"region": "North", "delta": -15}],
+                    },
+                },
+            ],
+        },
+    )
+
+    parsed = __import__("json").loads(summary)
+    assert parsed["columns"] == ["category", "revenue"]
+    assert len(parsed["data_rows"]) == 3
+    assert len(parsed["subtask_results"]) == 2
+    assert parsed["subtask_results"][0]["data_rows"][0]["category"] == "A"
+
+
+def test_summarize_tool_result_drops_heavy_rows_when_over_cap():
+    heavy_rows = [
+        {"col1": "x" * 600, "col2": "y" * 600, "col3": "z" * 600} for _ in range(20)
+    ]
+
+    summary = _summarize_tool_result(
+        "ask_sql_analyst",
+        {
+            "status": "ok",
+            "task_count": 1,
+            "execution_mode": "linear",
+            "answer_summary": "summary",
+            "generated_sql": "SELECT * FROM t",
+            "errors": [],
+            "sql_result": {
+                "row_count": len(heavy_rows),
+                "columns": ["col1", "col2", "col3"],
+                "rows": heavy_rows,
+            },
+        },
+    )
+
+    parsed = __import__("json").loads(summary)
+    assert len(summary) < 4000
+    assert "data_rows" not in parsed
+    assert "data_rows_note" in parsed
 
 
 # ---------------------------------------------------------------------------

@@ -34,10 +34,11 @@
 - task_grounder + leader (2 steps) + sql_worker + rag + synthesis
 - **Total: ~7,000-10,000 tokens**
 
-**Report query** (multi-section):
+**Report query** (multi-section, 8-node Send() pipeline):
 
-- task_grounder + leader + sql_worker + report_planner + report_writer + report_critic
-- **Total: ~12,000-20,000 tokens**
+- task_grounder + leader + **profiler_sampler** (SQL only) + **profiler_analyzer** (LLM + sample data) + report_planner + **section_pipeline** × N sections (SQL+sandbox+insight each) + report_writer + report_critic
+- **Total: ~18,000-30,000 tokens** (profiler_sampler: 0 LLM tokens, profiler_analyzer: ~2-3K with sample data + business context, each section pipeline: ~3-4K for insight + sandbox)
+- Send() fan-out means per-section LLM calls happen in parallel, reducing wall-clock time but same total tokens
 
 ### 1.3 Context Growth
 
@@ -45,11 +46,13 @@ Scratchpad trong `leader_agent` tăng mỗi step:
 
 ```
 [Step 1] tool=ask_sql_analyst
-{status, row_count, generated_sql (truncated 800 chars)...}
+Plan:
+{goal, dimensions_to_check, why_this_tool, success_criteria}
+{status, row_count, columns, data_rows, generated_sql (truncated 800 chars)...}
 ```
 
-- Mỗi step thêm ~500-1,500 chars vào scratchpad
-- Max 5 steps → scratchpad có thể grow tới ~7KB
+- Mỗi step thêm ~700-2,000 chars vào scratchpad tùy số hàng preview và số subtasks
+- Max 5 steps → scratchpad có thể grow nhanh hơn trước, nên code hiện truncate `data_rows` / `subtask_results` nếu summary vượt ~4KB mỗi step
 
 XML database context:
 
@@ -141,7 +144,7 @@ app = workflow.compile(checkpointer=checkpointer)
 | Component              | Growth                    | Mitigation                                 |
 | ---------------------- | ------------------------- | ------------------------------------------ |
 | `artifacts` list       | Max 5 items (leader loop) | Auto-cleanup on finalize                   |
-| `scratchpad`           | Grows ~1KB/step           | Truncated summary at 800 chars/tool result |
+| `scratchpad`           | Grows ~1-2KB/step         | Truncate `data_rows`/`subtask_results` when step summary > ~4KB |
 | `session_context`      | 5 recent turns            | Compacts at 10+ turns                      |
 | `xml_database_context` | Schema size               | Built once, cached in state                |
 
@@ -176,6 +179,9 @@ Current mitigations:
 | task_planner  | `gpt-4o`      | `MODEL_TASK_PLANNER`   | Query decomposition     |
 | aggregation   | `gpt-4o`      | `MODEL_AGGREGATION`    | Parallel result merge   |
 | fallback      | `gpt-4o-mini` | `MODEL_FALLBACK`       | Simple error handling   |
+| model_report_data_profiler | `gpt-4o` | `MODEL_REPORT_DATA_PROFILER` | Dataset profiling from real sample data |
+| model_report_writer | `gpt-4o` | `MODEL_REPORT_WRITER` | Report assembly with domain context |
+| model_report_critic | `gpt-4o` | `MODEL_REPORT_CRITIC` | Report validation and refinement |
 
 
 ### 4.2 Cost Optimization Gaps
@@ -284,5 +290,4 @@ Metrics logged:
 | MEDIUM   | Adaptive model routing           | -30% token cost           |
 | MEDIUM   | Session memory compaction tuning | Better long conversation  |
 | LOW      | Persistent checkpointer (Redis)  | Multi-instance deployment |
-
 
