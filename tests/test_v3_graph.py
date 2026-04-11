@@ -3,11 +3,15 @@ from __future__ import annotations
 from tests.conftest import FakeV3LLMClient, REPORT_QUERY, REPORT_WITH_VIZ_QUERY
 
 from app.main import run_query
+from app.graph.report_subgraph import (
+    _build_report_insight_messages,
+    report_finalize_node,
+)
 
 MULTI_QUERY = (
     '"Có bao nhiêu học sinh nam và bao nhiêu học sinh nữ trong tập dữ liệu này?"\n\n'
     '"Điểm toán (math score) trung bình của toàn bộ học sinh là bao nhiêu?"\n\n'
-    '"Có bao nhiêu học sinh đã hoàn thành khóa luyện thi (test prep course = \'completed\')?"'
+    "\"Có bao nhiêu học sinh đã hoàn thành khóa luyện thi (test prep course = 'completed')?\""
 )
 
 
@@ -88,14 +92,18 @@ def test_v3_simple_sql_fast_path_does_not_call_report_analysis(
     fake_v3_llm, monkeypatch, analytics_db_path
 ):
     def _unexpected(*args, **kwargs):  # noqa: ANN002, ANN003
-        raise AssertionError("report-only sandbox analysis should not run for simple SQL queries")
+        raise AssertionError(
+            "report-only sandbox analysis should not run for simple SQL queries"
+        )
 
     service = type(
         "UnexpectedVisualizationService",
         (),
         {"generate_grounded_report_analysis": staticmethod(_unexpected)},
     )()
-    monkeypatch.setattr("app.graph.report_subgraph.get_visualization_service", lambda: service)
+    monkeypatch.setattr(
+        "app.graph.report_subgraph.get_visualization_service", lambda: service
+    )
 
     result = run_query(
         "Điểm toán trung bình của toàn bộ học sinh là bao nhiêu?",
@@ -124,6 +132,89 @@ def test_v3_report_with_visualization_language_still_routes_to_report_path(
     assert result.get("report_markdown")
 
 
+def test_report_insight_prompt_uses_grouped_rows_without_cross_row_metrics():
+    section = {
+        "title": "Family Structure Impact on Survival",
+        "analysis_query": "Analyze family size and survival",
+        "computed_stats": {
+            "row_count": 9,
+            "metrics": {
+                "max_value": {
+                    "value": 0.724138,
+                    "display_value": "0.724138",
+                    "label": "survival_rate",
+                },
+                "total_value": {
+                    "value": 891,
+                    "display_value": "891",
+                    "label": "total_passengers",
+                },
+            },
+            "grouped_rows": [
+                {
+                    "family_size": 0,
+                    "total_passengers": 537,
+                    "survived_count": 163,
+                    "survival_rate": 0.303538,
+                },
+                {
+                    "family_size": 3,
+                    "total_passengers": 29,
+                    "survived_count": 21,
+                    "survival_rate": 0.724138,
+                },
+            ],
+            "row_bindings": {
+                "group_columns": ["family_size"],
+                "metric_columns": [
+                    "total_passengers",
+                    "survived_count",
+                    "survival_rate",
+                ],
+            },
+            "data_quality": {"warnings": []},
+        },
+    }
+
+    messages = _build_report_insight_messages(
+        {"report_request": "Analyze the Titanic dataset", "report_data_profile": {}},
+        section,
+    )
+
+    message_text = messages[-1]["content"]
+    assert '"grouped_rows"' in message_text
+    assert '"row_bindings"' in message_text
+    assert '"max_value"' not in message_text
+
+
+def test_report_finalize_uses_safe_fallback_when_critic_still_rejects():
+    state = {
+        "critic_verdict": "REVISE",
+        "report_plan": {"title": "Titanic Report"},
+        "report_draft": "# bad draft\n\nUnsupported synthesis",
+        "report_sections": [
+            {
+                "section_id": "1",
+                "title": "Family Structure and Survival Patterns",
+                "status": "done",
+                "insight_markdown": "Hành khách đi một mình có tỷ lệ sống sót 30,35%.",
+                "limitations": ["Thiếu biến vị trí cabin trong phân tích này."],
+                "sql_result": {"row_count": 2},
+            }
+        ],
+        "step_count": 5,
+    }
+
+    update = report_finalize_node(state)
+
+    assert "Unsupported synthesis" not in update["final_payload"]["report_markdown"]
+    assert (
+        "Hành khách đi một mình có tỷ lệ sống sót 30,35%."
+        in update["final_payload"]["report_markdown"]
+    )
+    assert update["tool_history"][0]["used_safe_fallback"] is True
+
+
 # ---------------------------------------------------------------------------
 # Helper fake clients for unhappy-path / error-recovery tests
 # ---------------------------------------------------------------------------
@@ -149,7 +240,9 @@ class FailOnceSQLClient(FakeV3LLMClient):
         self._sql_call_count += 1
         if self._sql_call_count == 1:
             # First attempt: reference a table that does not exist → execution error
-            return {"choices": [{"message": {"content": "SELECT * FROM NonExistentTable"}}]}
+            return {
+                "choices": [{"message": {"content": "SELECT * FROM NonExistentTable"}}]
+            }
         # Subsequent attempts (if any): delegate to the correct parent implementation
         return super()._sql_response(user)
 
@@ -225,7 +318,9 @@ def test_v3_sql_self_correction_on_invalid_sql(monkeypatch, analytics_db_path):
     assert result.get("intent") == "sql"
 
     # Either the pipeline surfaces the failure, or it self-corrects and returns a grounded answer.
-    has_error_signal = bool(result.get("errors")) or bool(result.get("error_categories"))
+    has_error_signal = bool(result.get("errors")) or bool(
+        result.get("error_categories")
+    )
     recovered_successfully = "66.08" in result.get("answer", "")
     assert has_error_signal or recovered_successfully
 
@@ -261,12 +356,16 @@ def test_v3_sql_self_correction_on_dml_injection(monkeypatch, analytics_db_path)
     assert result.get("intent") == "sql"
 
     # Either the validator failure is surfaced, or the worker self-corrects and succeeds.
-    has_error_signal = bool(result.get("errors")) or bool(result.get("error_categories"))
+    has_error_signal = bool(result.get("errors")) or bool(
+        result.get("error_categories")
+    )
     recovered_successfully = "66.08" in result.get("answer", "")
     assert has_error_signal or recovered_successfully
 
 
-def test_v3_sql_exhausted_retries_returns_graceful_error(monkeypatch, analytics_db_path):
+def test_v3_sql_exhausted_retries_returns_graceful_error(
+    monkeypatch, analytics_db_path
+):
     """SQL LLM always returns invalid SQL — simulates a stubborn persistent failure.
 
     After max attempts the pipeline should return a graceful degraded answer and
@@ -292,9 +391,8 @@ def test_v3_sql_exhausted_retries_returns_graceful_error(monkeypatch, analytics_
     assert result["answer"] != ""
 
     # The errors list or error_categories must be non-empty to signal the failure
-    has_error_signal = (
-        bool(result.get("errors"))
-        or bool(result.get("error_categories"))
+    has_error_signal = bool(result.get("errors")) or bool(
+        result.get("error_categories")
     )
     assert has_error_signal, (
         "Expected errors or error_categories to be populated after exhausted retries, "

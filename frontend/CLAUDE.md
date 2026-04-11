@@ -13,28 +13,44 @@ npm run lint     # ESLint
 
 ## Architecture
 
-Three-panel layout (`src/app/page.tsx`):
+Four-panel layout (`src/app/page.tsx`):
 
 | Panel | Component | Width |
 |-------|-----------|-------|
-| Left sidebar | `Sidebar` | 280px — thread history |
-| Center chat | `ChatPanel` | flex — messages + input |
-| Right artifact | `ArtifactPanel` | 480px default, 560px for report artifacts |
+| Left sidebar | `Sidebar` | 280px — thread history + theme toggle |
+| Center chat | `ChatPanel` | flex — header + messages + input |
+| Data panel | `DataUploadPanel` | 320px — file upload + tables list |
+| Right artifact | `ArtifactPanel` | 360–1200px resizable — report/sql/chart/trace |
 
 ## State
 
-Single Zustand store (`src/stores/chatStore.ts`) manages:
-- Thread list, active thread, messages
-- Artifact panel (open/close/content)
-- File uploads, streaming state
+Two Zustand stores:
 
-## Report UX
+- **`chatStore.ts`** — threads, messages, artifacts, data panel, streaming
+- **`themeStore.ts`** — light/dark/system theme with localStorage persistence
 
-- Report-mode assistant bubbles stay short and point users to the `Report` artifact instead of dumping the full document into chat.
-- The right-side report panel renders the report as a document surface, not raw markdown.
-- If backend returns `report_sections[].chart_image`, `ReportView` tries to inject section charts under matching H2 sections and falls back to an appendix-style block for unmatched charts.
+## Key Flows
+
+- **Query**: `sendMessage()` → SSE streaming via `lib/sse.ts` → update assistant message
+- **History**: `selectThread()` → fetch turns + artifacts → reconstruct messages with artifact buttons
+- **Data upload**: `uploadFiles()` → POST multipart → auto-refresh tables list
+- **Artifact view**: `openArtifact()` → render in right panel (resizable)
 
 ## API
 
 All backend calls in `src/lib/api.ts`. SSE streaming via `src/lib/sse.ts`.
 Backend URL configured via `NEXT_PUBLIC_API_URL` env var (default: `http://localhost:8001`).
+
+Artifact images returned from the backend may use relative `/artifacts/...` paths. Frontend image renderers must normalize these to the backend origin via `src/lib/url.ts` before passing them to `<img>`.
+
+## Trace Rendering
+
+- `TraceGraph` uses `buildGraphLayout()` from `src/lib/traceLayout.ts`
+- Execution nodes must use unique React Flow IDs per occurrence, not raw `node.node` names, because report fan-out can emit repeated node names such as `section_pipeline_node`
+- The graph keeps a best-effort static topology and adds sequential execution edges so repeated nodes still render deterministically
+
+## Full Documentation
+
+> **Detailed frontend architecture**: `docs/_tech_specs/05_frontend_architecture.md`
+
+Covers: directory structure, component details, type system, CSS architecture, theme system, adding new features checklist, known limitations.

@@ -12,6 +12,12 @@
 import type { Node, Edge } from "@xyflow/react";
 import type { TraceNode } from "@/lib/types";
 
+interface TraceLayoutEntry {
+  rfId: string;
+  trace: TraceNode;
+  index: number;
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface TraceNodeData extends Record<string, unknown> {
@@ -107,21 +113,31 @@ export function buildGraphLayout(
 ): { nodes: Node[]; edges: Edge[] } {
   if (traceNodes.length === 0) return { nodes: [], edges: [] };
 
-  const nameSet = new Set(traceNodes.map((n) => n.node));
-  const nodeMap = new Map(traceNodes.map((n) => [n.node, n]));
+  const entries: TraceLayoutEntry[] = traceNodes.map((trace, index) => ({
+    rfId: `${trace.node}-${trace.attempt}-${index}`,
+    trace,
+    index,
+  }));
+  const entriesByName = new Map<string, TraceLayoutEntry[]>();
+  for (const entry of entries) {
+    const existing = entriesByName.get(entry.trace.node) ?? [];
+    existing.push(entry);
+    entriesByName.set(entry.trace.node, existing);
+  }
+  const nameSet = new Set(entries.map((entry) => entry.trace.node));
 
   // Separate parallel task nodes
-  const parallelTaskNames = traceNodes
-    .map((n) => n.node)
-    .filter(isParallelTaskNode);
+  const parallelTaskEntries = entries.filter((entry) =>
+    isParallelTaskNode(entry.trace.node)
+  );
 
   // Determine render order: main chain interleaved with group anchors
   // We keep the original execution_flow order but cluster groups together.
   const mainChain: string[] = [];
   const seenGroups = { report: false, parallel: false };
 
-  for (const tn of traceNodes) {
-    const name = tn.node;
+  for (const entry of entries) {
+    const name = entry.trace.node;
     if (isParallelTaskNode(name)) {
       if (!seenGroups.parallel) {
         seenGroups.parallel = true;
@@ -133,7 +149,7 @@ export function buildGraphLayout(
         mainChain.push("__report_group__");
       }
     } else {
-      mainChain.push(name);
+      mainChain.push(entry.rfId);
     }
   }
 
@@ -143,16 +159,17 @@ export function buildGraphLayout(
   let y = 40;
 
   // Helper to push a single non-group node
-  function pushNode(name: string, overrideY?: number): void {
-    const tn = nodeMap.get(name);
-    if (!tn) return;
+  function pushNode(entryId: string, overrideY?: number): void {
+    const entry = entries.find((item) => item.rfId === entryId);
+    if (!entry) return;
+    const tn = entry.trace;
     const posY = overrideY !== undefined ? overrideY : y;
     rfNodes.push({
-      id: name,
+      id: entry.rfId,
       type: "traceNode",
       position: { x: CENTER_X - NODE_W / 2, y: posY },
       data: {
-        label: name,
+        label: tn.node,
         status: tn.status === "error" ? "error" : "ok",
         latencyMs: tn.latency_ms,
         observationType: tn.observation_type,
@@ -167,18 +184,17 @@ export function buildGraphLayout(
   for (const slot of mainChain) {
     if (slot === "__parallel_group__") {
       // Render all parallel task nodes side by side
-      const count = parallelTaskNames.length;
+      const count = parallelTaskEntries.length;
       const totalWidth = count * NODE_W + (count - 1) * H_GAP;
       const startX = CENTER_X - totalWidth / 2;
-      parallelTaskNames.forEach((name, i) => {
-        const tn = nodeMap.get(name);
-        if (!tn) return;
+      parallelTaskEntries.forEach((entry, i) => {
+        const tn = entry.trace;
         rfNodes.push({
-          id: name,
+          id: entry.rfId,
           type: "traceNode",
           position: { x: startX + i * (NODE_W + H_GAP), y },
           data: {
-            label: name,
+            label: tn.node,
             status: tn.status === "error" ? "error" : "ok",
             latencyMs: tn.latency_ms,
             observationType: tn.observation_type,
@@ -192,10 +208,10 @@ export function buildGraphLayout(
       y += NODE_H + V_GAP;
     } else if (slot === "__report_group__") {
       // Render group container + child nodes stacked inside
-      const reportTraceNodes = traceNodes.filter((n) => isReportNode(n.node));
+      const reportEntries = entries.filter((entry) => isReportNode(entry.trace.node));
       const groupPadding = 20;
       const innerH =
-        reportTraceNodes.length * (NODE_H + V_GAP) - V_GAP + groupPadding * 2;
+        reportEntries.length * (NODE_H + V_GAP) - V_GAP + groupPadding * 2;
       const groupW = NODE_W + groupPadding * 2;
       const groupX = CENTER_X - groupW / 2;
 
@@ -211,9 +227,10 @@ export function buildGraphLayout(
       });
 
       let innerY = groupPadding;
-      for (const rtn of reportTraceNodes) {
+      for (const entry of reportEntries) {
+        const rtn = entry.trace;
         rfNodes.push({
-          id: rtn.node,
+          id: entry.rfId,
           type: "traceNode",
           position: { x: groupPadding, y: innerY },
           parentId: "__report_group_container__",
@@ -242,14 +259,17 @@ export function buildGraphLayout(
   // ─── Edges ──────────────────────────────────────────────────────────────────
   let edgeIdx = 0;
 
-  // Static topology edges (filtered to nodes in trace)
+  // Static topology edges (best effort: connect first occurrence of each node name)
   for (const [src, tgt, label] of KNOWN_EDGES) {
     if (!nameSet.has(src) || !nameSet.has(tgt)) continue;
+    const srcEntry = entriesByName.get(src)?.[0];
+    const tgtEntry = entriesByName.get(tgt)?.[0];
+    if (!srcEntry || !tgtEntry) continue;
     const edgeId = `e-${src}-${tgt}-${edgeIdx++}`;
     rfEdges.push({
       id: edgeId,
-      source: src,
-      target: tgt,
+      source: srcEntry.rfId,
+      target: tgtEntry.rfId,
       label: label ?? undefined,
       type: "smoothstep",
       animated: label === "retry" || label === "revise",
@@ -270,30 +290,43 @@ export function buildGraphLayout(
   }
 
   // Parallel task nodes → connect dispatch → each task → aggregate
-  if (parallelTaskNames.length > 0) {
-    const dispatchInTrace = nameSet.has("leader_parallel_dispatch");
-    const aggregateInTrace = nameSet.has("leader_parallel_aggregate");
+  if (parallelTaskEntries.length > 0) {
+    const dispatchEntry = entriesByName.get("leader_parallel_dispatch")?.[0];
+    const aggregateEntry = entriesByName.get("leader_parallel_aggregate")?.[0];
 
-    for (const taskName of parallelTaskNames) {
-      if (dispatchInTrace) {
+    for (const taskEntry of parallelTaskEntries) {
+      if (dispatchEntry) {
         rfEdges.push({
-          id: `e-dispatch-${taskName}-${edgeIdx++}`,
-          source: "leader_parallel_dispatch",
-          target: taskName,
+          id: `e-dispatch-${taskEntry.rfId}-${edgeIdx++}`,
+          source: dispatchEntry.rfId,
+          target: taskEntry.rfId,
           type: "smoothstep",
           style: { stroke: "#94a3b8", strokeWidth: 1.5 },
         });
       }
-      if (aggregateInTrace) {
+      if (aggregateEntry) {
         rfEdges.push({
-          id: `e-${taskName}-aggregate-${edgeIdx++}`,
-          source: taskName,
-          target: "leader_parallel_aggregate",
+          id: `e-${taskEntry.rfId}-aggregate-${edgeIdx++}`,
+          source: taskEntry.rfId,
+          target: aggregateEntry.rfId,
           type: "smoothstep",
           style: { stroke: "#94a3b8", strokeWidth: 1.5 },
         });
       }
     }
+  }
+
+  // Sequential execution edges preserve flow even when the same node runs multiple times.
+  for (let index = 1; index < entries.length; index += 1) {
+    const previous = entries[index - 1];
+    const current = entries[index];
+    rfEdges.push({
+      id: `e-seq-${previous.rfId}-${current.rfId}-${edgeIdx++}`,
+      source: previous.rfId,
+      target: current.rfId,
+      type: "smoothstep",
+      style: { stroke: "#cbd5e1", strokeWidth: 1 },
+    });
   }
 
   return { nodes: rfNodes, edges: rfEdges };

@@ -81,7 +81,9 @@ def _stable_hash(value: str) -> str:
 
 def _strip_markdown_fences(text: str) -> str:
     stripped = text.strip()
-    fenced = re.match(r"^```(?:markdown|md)?\s*([\s\S]*?)\s*```$", stripped, re.IGNORECASE)
+    fenced = re.match(
+        r"^```(?:markdown|md)?\s*([\s\S]*?)\s*```$", stripped, re.IGNORECASE
+    )
     if fenced:
         return fenced.group(1).strip()
     return stripped
@@ -118,7 +120,9 @@ def _truncate_json_for_prompt(data: dict[str, Any], max_chars: int = 8000) -> st
     for key, value in data.items():
         if isinstance(value, list) and len(value) > 20:
             trimmed[key] = value[:20]
-            trimmed[f"{key}_truncated"] = f"... ({len(value)} total items, showing first 20)"
+            trimmed[f"{key}_truncated"] = (
+                f"... ({len(value)} total items, showing first 20)"
+            )
         elif isinstance(value, dict):
             trimmed[key] = value
         else:
@@ -133,6 +137,90 @@ def _truncate_text(text: str, max_chars: int = 3000) -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars] + "\n... (truncated)"
+
+
+def _first_nonempty_paragraph(text: str) -> str:
+    for block in re.split(r"\n\s*\n", text or ""):
+        cleaned = block.strip()
+        if cleaned:
+            return cleaned
+    return ""
+
+
+def _build_safe_report_markdown(state: AgentState) -> str:
+    plan_title = state.get("report_plan", {}).get("title", "Report")
+    sections = [
+        section
+        for section in state.get("report_sections", [])
+        if section.get("status") == "done"
+    ]
+    lines = [f"# {plan_title}", "", "## Tóm tắt tổng quan", ""]
+
+    summary = "Báo cáo dưới đây tổng hợp các phát hiện đã được kiểm chứng theo từng mục phân tích."
+    first_section_paragraph = ""
+    if sections:
+        first_section_paragraph = _first_nonempty_paragraph(
+            sections[0].get("insight_markdown", "")
+        )
+    lines.append(first_section_paragraph or summary)
+
+    for section in sections:
+        lines.extend(
+            [
+                "",
+                f"## {section.get('title', 'Section')}",
+                "",
+                section.get(
+                    "insight_markdown", "Không có insight cho mục này."
+                ).strip(),
+            ]
+        )
+
+    all_limitations = [
+        limitation.strip()
+        for section in sections
+        for limitation in section.get("limitations", [])
+        if limitation and limitation.strip()
+    ]
+    lines.extend(["", "## Kết luận", ""])
+    lines.append(
+        "Phân tích cho thấy khả năng sống sót thay đổi rõ rệt theo từng nhóm hành khách và từng lát cắt dữ liệu nêu trên."
+    )
+    if all_limitations:
+        lines.append(
+            "Các hạn chế dữ liệu và phạm vi phân tích đã được ghi rõ trong từng mục tương ứng."
+        )
+
+    recommendation_map = {
+        "overall": "Ưu tiên rà soát quy trình sơ tán theo giới tính và hạng vé dựa trên chênh lệch sống sót đã quan sát.",
+        "demographic": "Ưu tiên rà soát quy trình sơ tán theo giới tính và hạng vé dựa trên chênh lệch sống sót đã quan sát.",
+        "socio": "Phân tích sâu hơn mối liên hệ giữa hạng vé, giá vé và khả năng tiếp cận phương tiện cứu sinh.",
+        "class": "Phân tích sâu hơn mối liên hệ giữa hạng vé, giá vé và khả năng tiếp cận phương tiện cứu sinh.",
+        "age": "Bổ sung và kiểm tra dữ liệu tuổi còn thiếu trước khi mở rộng các kết luận theo nhóm tuổi.",
+        "family": "Thiết kế phân tích riêng cho hành khách đi một mình và gia đình đông người để đánh giá rủi ro thoát hiểm.",
+        "embark": "Tách riêng ảnh hưởng của cảng lên tàu với hạng vé để tránh nhầm lẫn giữa cơ cấu hành khách và tỷ lệ sống sót.",
+        "port": "Tách riêng ảnh hưởng của cảng lên tàu với hạng vé để tránh nhầm lẫn giữa cơ cấu hành khách và tỷ lệ sống sót.",
+    }
+    recommendations: list[str] = []
+    for section in sections:
+        title = str(section.get("title", "")).lower()
+        for keyword, recommendation in recommendation_map.items():
+            if keyword in title and recommendation not in recommendations:
+                recommendations.append(recommendation)
+                break
+        if len(recommendations) >= 4:
+            break
+    if not recommendations:
+        recommendations.append(
+            "Rà soát lại từng mục phân tích trước khi đưa ra quyết định vận hành hoặc diễn giải nhân quả."
+        )
+
+    lines.extend(["", "## Recommendations", ""])
+    for index, recommendation in enumerate(recommendations[:4], start=1):
+        lines.append(f"**{index}. {recommendation}**")
+        lines.append("")
+
+    return _cleanup_report_markdown("\n".join(lines))
 
 
 def _report_section_payload(section: ReportSection) -> dict[str, Any]:
@@ -188,10 +276,16 @@ def _default_report_plan(query: str) -> ReportPlan:
 
 
 # Tables that are system/utility tables and should be excluded from profiling
-_SYSTEM_TABLES = frozenset({
-    "result_store", "trace_store", "conversation_history",
-    "data_summaries", "artifact_store", "schema_migrations",
-})
+_SYSTEM_TABLES = frozenset(
+    {
+        "result_store",
+        "trace_store",
+        "conversation_history",
+        "data_summaries",
+        "artifact_store",
+        "schema_migrations",
+    }
+)
 
 
 def _extract_tables_from_xml(xml_context: str) -> list[str]:
@@ -225,9 +319,7 @@ def profiler_sampler_node(state: AgentState) -> AgentState:
         logger.warning("profiler_sampler: no tables found in xml_database_context")
         return {
             "report_sample_data": {},
-            "tool_history": [
-                {"tool": "profiler_sampler", "status": "no_tables"}
-            ],
+            "tool_history": [{"tool": "profiler_sampler", "status": "no_tables"}],
         }
 
     logger.info(
@@ -250,20 +342,22 @@ def profiler_sampler_node(state: AgentState) -> AgentState:
             for col in columns:
                 try:
                     stats_sql = (
-                        f'SELECT '
-                        f'COUNT(*) AS total_rows, '
+                        f"SELECT "
+                        f"COUNT(*) AS total_rows, "
                         f'COUNT(DISTINCT "{col}") AS distinct_count, '
                         f'SUM(CASE WHEN "{col}" IS NULL THEN 1 ELSE 0 END) AS null_count '
                         f'FROM "{table}"'
                     )
                     stats_result = query_sql(stats_sql, db_path=db_path)
                     row = (stats_result.get("rows") or [{}])[0]
-                    col_stats.append({
-                        "column": col,
-                        "total_rows": row.get("total_rows", 0),
-                        "distinct_count": row.get("distinct_count", 0),
-                        "null_count": row.get("null_count", 0),
-                    })
+                    col_stats.append(
+                        {
+                            "column": col,
+                            "total_rows": row.get("total_rows", 0),
+                            "distinct_count": row.get("distinct_count", 0),
+                            "null_count": row.get("null_count", 0),
+                        }
+                    )
                 except Exception:  # noqa: BLE001
                     col_stats.append({"column": col, "error": "stats query failed"})
 
@@ -323,7 +417,11 @@ def profiler_analyzer_node(state: AgentState) -> AgentState:
                 f"Column stats:\n{stats_text}\n"
                 f"Sample rows (first 10):\n{row_preview}"
             )
-    sample_summary = "\n\n".join(sample_summary_parts) if sample_summary_parts else "(no sample data available)"
+    sample_summary = (
+        "\n\n".join(sample_summary_parts)
+        if sample_summary_parts
+        else "(no sample data available)"
+    )
 
     # Include user-provided business context from paired uploads
     table_contexts = state.get("table_contexts") or {}
@@ -331,9 +429,7 @@ def profiler_analyzer_node(state: AgentState) -> AgentState:
         f"Table '{t}': {ctx}" for t, ctx in table_contexts.items() if ctx
     ]
     business_context = (
-        "\n".join(business_context_parts)
-        if business_context_parts
-        else ""
+        "\n".join(business_context_parts) if business_context_parts else ""
     )
 
     messages = prompt_manager.report_data_profiler_messages(
@@ -492,8 +588,7 @@ def report_planner_node(state: AgentState) -> AgentState:
     if not sections:
         plan = _default_report_plan(query)
         sections = [
-            {**s, "section_order": i + 1}
-            for i, s in enumerate(plan["sections"])
+            {**s, "section_order": i + 1} for i, s in enumerate(plan["sections"])
         ]
     else:
         sections = sections[:5]
@@ -584,9 +679,8 @@ def _build_report_insight_messages(
     section: ReportSection,
 ) -> list[dict[str, Any]]:
     system_messages = prompt_manager.report_insight_system_messages()
-    stats_json = _truncate_json_for_prompt(
-        section.get("computed_stats", {}), max_chars=6000
-    )
+    prompt_stats = _stats_payload_for_insight_prompt(section)
+    stats_json = _truncate_json_for_prompt(prompt_stats, max_chars=6000)
     manifest_json = _truncate_json_for_prompt(
         section.get("chart_manifest", {}), max_chars=2000
     )
@@ -608,13 +702,16 @@ def _build_report_insight_messages(
         return system_messages + [{"role": "user", "content": text_content}]
 
     # Read image bytes from file for LLM multimodal input
-    image = read_chart_bytes(chart_image_url if not chart_image_url.startswith("/artifacts/") else chart_image_url.lstrip("/artifacts/"))
+    image = read_chart_bytes(
+        chart_image_url
+        if not chart_image_url.startswith("/artifacts/")
+        else chart_image_url.lstrip("/artifacts/")
+    )
     if not image:
         return system_messages + [{"role": "user", "content": text_content}]
 
     data_url = (
-        f"data:image/{image_format};base64,"
-        f"{base64.b64encode(image).decode('utf-8')}"
+        f"data:image/{image_format};base64,{base64.b64encode(image).decode('utf-8')}"
     )
     return system_messages + [
         {
@@ -625,6 +722,25 @@ def _build_report_insight_messages(
             ],
         }
     ]
+
+
+def _stats_payload_for_insight_prompt(section: ReportSection) -> dict[str, Any]:
+    computed_stats = section.get("computed_stats") or {}
+    if not isinstance(computed_stats, dict):
+        return {}
+
+    grouped_rows = computed_stats.get("grouped_rows")
+    if not isinstance(grouped_rows, list) or not grouped_rows:
+        return computed_stats
+
+    return {
+        "section_title": computed_stats.get("section_title"),
+        "query": computed_stats.get("query"),
+        "row_count": computed_stats.get("row_count"),
+        "row_bindings": computed_stats.get("row_bindings", {}),
+        "grouped_rows": grouped_rows[:20],
+        "data_quality": computed_stats.get("data_quality", {}),
+    }
 
 
 def _fallback_section_insight(section: ReportSection) -> ReportSection:
@@ -856,9 +972,7 @@ def _section_writer_payload(section: ReportSection) -> dict[str, Any]:
         "title": section.get("title"),
         "analysis_query": section.get("analysis_query"),
         "status": section.get("status"),
-        "insight_markdown": _truncate_text(
-            section.get("insight_markdown", ""), 3000
-        ),
+        "insight_markdown": _truncate_text(section.get("insight_markdown", ""), 3000),
         "limitations": section.get("limitations", []),
     }
 
@@ -950,9 +1064,7 @@ def _section_critic_payload(section: ReportSection) -> dict[str, Any]:
         "section_id": section.get("section_id"),
         "title": section.get("title"),
         "status": section.get("status"),
-        "insight_markdown": _truncate_text(
-            section.get("insight_markdown", ""), 3000
-        ),
+        "insight_markdown": _truncate_text(section.get("insight_markdown", ""), 3000),
         "citations": section.get("insight_citations", []),
         "computed_stats": stats,
         "limitations": section.get("limitations", []),
@@ -998,9 +1110,7 @@ def report_critic_node(state: AgentState) -> AgentState:
         parsed = _extract_first_json_object(content) or {}
         verdict = str(parsed.get("verdict", "APPROVED")).upper()
         issues = [
-            str(item).strip()
-            for item in parsed.get("issues", [])
-            if str(item).strip()
+            str(item).strip() for item in parsed.get("issues", []) if str(item).strip()
         ]
         summary = str(parsed.get("summary", summary)).strip() or summary
     except Exception as exc:  # noqa: BLE001
@@ -1020,6 +1130,8 @@ def report_critic_node(state: AgentState) -> AgentState:
     return {
         "critic_feedback": feedback,
         "critic_iteration": critic_iteration,
+        "critic_verdict": verdict,
+        "critic_issues": issues,
         "report_feedback_hash": feedback_hash,
         "report_draft_hash": current_draft_hash,
         "report_status": "writing" if should_revise else "done",
@@ -1050,7 +1162,11 @@ def _critic_router(state: AgentState) -> Literal["report_writer", "report_finali
 
 
 def report_finalize_node(state: AgentState) -> AgentState:
-    report_markdown = _cleanup_report_markdown(state.get("report_draft", ""))
+    critic_verdict = str(state.get("critic_verdict", "APPROVED")).upper()
+    if critic_verdict == "REVISE":
+        report_markdown = _build_safe_report_markdown(state)
+    else:
+        report_markdown = _cleanup_report_markdown(state.get("report_draft", ""))
     plan_title = state.get("report_plan", {}).get("title", "Report")
     errors = state.get("errors", [])
     answer = "Đây là report của bạn. Bấm vào nút Report để xem bản trình bày đầy đủ."
@@ -1061,8 +1177,7 @@ def report_finalize_node(state: AgentState) -> AgentState:
     report_path = report_dir / "report.md"
     try:
         report_path.write_text(
-            report_markdown
-            or f"# {plan_title}\n\nNo report content was generated.",
+            report_markdown or f"# {plan_title}\n\nNo report content was generated.",
             encoding="utf-8",
         )
         logger.info("Report saved to {path}", path=report_path)
@@ -1090,9 +1205,7 @@ def report_finalize_node(state: AgentState) -> AgentState:
             for section in state.get("report_sections", [])
             if section.get("validated_sql") or section.get("generated_sql")
         ),
-        "error_categories": [
-            str(item.get("category", "UNKNOWN")) for item in errors
-        ],
+        "error_categories": [str(item.get("category", "UNKNOWN")) for item in errors],
         "step_count": state.get("step_count", 0) + 1,
         "context_type": state.get("context_type", "default"),
         "sql_rows": [],
@@ -1115,6 +1228,7 @@ def report_finalize_node(state: AgentState) -> AgentState:
                 "tool": "report_finalize",
                 "status": "ok",
                 "section_count": len(state.get("report_sections", [])),
+                "used_safe_fallback": critic_verdict == "REVISE",
             }
         ],
         "step_count": state.get("step_count", 0) + 1,

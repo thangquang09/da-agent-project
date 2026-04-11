@@ -17,6 +17,7 @@ REPORT_CRITIC_PROMPT_DEFINITION = PromptDefinition(
                 "1. Identify every quantitative or comparative claim in the draft.\n"
                 "2. Check whether each claim is supported by the matching section insight, citations, or computed stats.\n"
                 "3. Check whether the writer introduced extra sections, duplicated content, or rewrote a section in a way that changes meaning.\n"
+                "3a. If section evidence contains grouped_rows, every sentence that combines multiple numbers must map to one grouped_rows item unless it explicitly contrasts separate groups.\n"
                 "4. If any claim cannot be verified from the provided evidence, verdict must be REVISE.\n"
                 "5. If the draft repeats sections, repeats conclusions, or adds unsupported synthesis, verdict must be REVISE.\n"
                 "Any numeric claim that is not supported by the provided citations or computed stats must be flagged.\n"

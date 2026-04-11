@@ -109,7 +109,7 @@ class E2BVisualizationService:
         """Context manager entry."""
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __exit__(self, _exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
         """Context manager exit - ensures sandbox cleanup."""
         self.close()
 
@@ -249,7 +249,9 @@ class E2BVisualizationService:
                 return base64.b64decode(jpeg_data), "jpeg"
         return None, ""
 
-    def _extract_json_result(self, execution: Any, marker: str) -> dict[str, Any] | None:
+    def _extract_json_result(
+        self, execution: Any, marker: str
+    ) -> dict[str, Any] | None:
         """Extract a JSON result emitted via display(JSON(...)) or stdout."""
         for result in execution.results:
             payload = None
@@ -455,9 +457,7 @@ class E2BVisualizationService:
                 )
 
             image_data, image_format = self._extract_image(execution)
-            json_payload = self._extract_json_result(
-                execution, "__report_analysis__"
-            )
+            json_payload = self._extract_json_result(execution, "__report_analysis__")
             html_payload = self._extract_html_result(
                 execution, 'data-report-analysis="true"'
             )
@@ -500,7 +500,7 @@ class E2BVisualizationService:
         user_query: str,
         data_path: str,
         chart_type: str,
-        data_sample: list[dict],
+        data__sample: list[dict],
     ) -> str:
         """Generate Python code for visualization based on chart type."""
 
@@ -524,7 +524,9 @@ class E2BVisualizationService:
         return template_fn(data_path, user_query, columns_info, data_sample)
 
     @staticmethod
-    def _infer_column_types_from_rows(data_rows: list[dict[str, Any]]) -> dict[str, str]:
+    def _infer_column_types_from_rows(
+        data_rows: list[dict[str, Any]],
+    ) -> dict[str, str]:
         """Infer column types from Python values in the first non-null row.
 
         Returns a mapping of column_name → "integer"|"float"|"datetime"|"text".
@@ -549,7 +551,11 @@ class E2BVisualizationService:
                 else:
                     # String — check if it looks like a date
                     s = str(val).strip()
-                    if len(s) >= 8 and ("-" in s or "/" in s) and any(c.isdigit() for c in s):
+                    if (
+                        len(s) >= 8
+                        and ("-" in s or "/" in s)
+                        and any(c.isdigit() for c in s)
+                    ):
                         col_types[col] = "datetime"
                     else:
                         col_types[col] = "text"
@@ -646,6 +652,13 @@ def metric_entry(value, label=None):
     return entry
 
 
+def normalized_row_entry(row, columns):
+    return {{
+        col: normalize_number(row[col])
+        for col in columns
+    }}
+
+
 def detect_datetime_column(frame, known_types=None):
     """Find a datetime column.
 
@@ -685,6 +698,11 @@ stats = {{
     "row_count": int(len(df)),
     "metrics": {{}},
     "series": [],
+    "grouped_rows": [],
+    "row_bindings": {{
+        "group_columns": category_cols,
+        "metric_columns": numeric_cols,
+    }},
     "rankings": {{}},
     "comparisons": {{}},
     "data_quality": {{
@@ -764,6 +782,12 @@ else:
         if col != datetime_col:
             x_col = col
             break
+
+    if category_cols and numeric_cols:
+        stats["grouped_rows"] = [
+            normalized_row_entry(row, df.columns)
+            for _, row in df.head(50).iterrows()
+        ]
 
     if x_col and y_col:
         manifest["chart_type"] = "bar"
@@ -879,7 +903,7 @@ plt.show()
 '''
 
     def _bar_chart_template(
-        self, data_path: str, query: str, columns_info: str, sample: list
+        self, data_path: str, query: str, columns_info: str, _sample: list
     ) -> str:
         return f'''import pandas as pd
 import seaborn as sns
@@ -918,7 +942,7 @@ plt.show()
 '''
 
     def _line_chart_template(
-        self, data_path: str, query: str, columns_info: str, sample: list
+        self, data_path: str, query: str, columns_info: str, _sample: list
     ) -> str:
         return f'''import pandas as pd
 import seaborn as sns
@@ -965,7 +989,7 @@ plt.show()
 '''
 
     def _scatter_chart_template(
-        self, data_path: str, query: str, columns_info: str, sample: list
+        self, data_path: str, query: str, columns_info: str, _sample: list
     ) -> str:
         return f'''import pandas as pd
 import seaborn as sns
@@ -1003,7 +1027,7 @@ plt.show()
 '''
 
     def _histogram_template(
-        self, data_path: str, query: str, columns_info: str, sample: list
+        self, data_path: str, query: str, columns_info: str, _sample: list
     ) -> str:
         return f'''import pandas as pd
 import seaborn as sns
@@ -1033,7 +1057,7 @@ plt.show()
 '''
 
     def _pie_chart_template(
-        self, data_path: str, query: str, columns_info: str, sample: list
+        self, data_path: str, query: str, columns_info: str, _sample: list
     ) -> str:
         return f'''import pandas as pd
 import matplotlib.pyplot as plt
@@ -1075,7 +1099,7 @@ plt.show()
 '''
 
     def _auto_chart_template(
-        self, data_path: str, query: str, columns_info: str, sample: list
+        self, data_path: str, query: str, columns_info: str, _sample: list
     ) -> str:
         """Auto-detect best chart type based on data."""
         return f'''import pandas as pd
@@ -1168,7 +1192,9 @@ class DockerVisualizationService(E2BVisualizationService):
             if bootstrap_command is not None
             else settings.docker_sandbox_bootstrap_command
         )
-        self.timeout_seconds = timeout_seconds or settings.docker_sandbox_timeout_seconds
+        self.timeout_seconds = (
+            timeout_seconds or settings.docker_sandbox_timeout_seconds
+        )
         self.workdir = workdir or settings.docker_sandbox_workdir
         self.api_key = None
         self._sandbox = None
@@ -1386,7 +1412,9 @@ class DockerVisualizationService(E2BVisualizationService):
                 execution_time_ms=execution_time_ms,
             )
 
-        image_data = self._extract_marked_binary(execution.stdout, "__CHART_PNG_BASE64__")
+        image_data = self._extract_marked_binary(
+            execution.stdout, "__CHART_PNG_BASE64__"
+        )
         if not image_data:
             return VisualizationResult(
                 success=False,
@@ -1448,7 +1476,9 @@ class DockerVisualizationService(E2BVisualizationService):
             execution.stdout, "__REPORT_CHART_MANIFEST__"
         )
         chart_html = self._extract_marked_text(execution.stdout, "__REPORT_HTML__")
-        image_data = self._extract_marked_binary(execution.stdout, "__CHART_PNG_BASE64__")
+        image_data = self._extract_marked_binary(
+            execution.stdout, "__CHART_PNG_BASE64__"
+        )
 
         if not computed_stats:
             return ReportAnalysisResult(
@@ -1516,7 +1546,7 @@ class DockerVisualizationService(E2BVisualizationService):
         return None
 
     def _wrap_visualization_code(self, python_code: str) -> str:
-        return f'''import base64
+        return f"""import base64
 import io
 import traceback
 
@@ -1541,11 +1571,13 @@ try:
 except Exception:
     traceback.print_exc()
     raise
-'''
+"""
 
     def _indent_code(self, python_code: str, spaces: int) -> str:
         prefix = " " * spaces
-        return "\n".join(prefix + line if line.strip() else line for line in python_code.splitlines())
+        return "\n".join(
+            prefix + line if line.strip() else line for line in python_code.splitlines()
+        )
 
 
 class NullVisualizationService:
@@ -1580,11 +1612,18 @@ class NullVisualizationService:
 
 
 # Singleton instance
-_visualization_service: E2BVisualizationService | DockerVisualizationService | NullVisualizationService | None = None
+_visualization_service: (
+    E2BVisualizationService
+    | DockerVisualizationService
+    | NullVisualizationService
+    | None
+) = None
 _visualization_service_key: str | None = None
 
 
-def get_visualization_service() -> E2BVisualizationService | DockerVisualizationService | NullVisualizationService:
+def get_visualization_service() -> (
+    E2BVisualizationService | DockerVisualizationService | NullVisualizationService
+):
     """Get or create the visualization service singleton."""
     global _visualization_service, _visualization_service_key
     settings = load_settings()
@@ -1594,7 +1633,9 @@ def get_visualization_service() -> E2BVisualizationService | DockerVisualization
             try:
                 _visualization_service.close()
             except Exception:  # noqa: BLE001
-                logger.warning("Failed to close previous visualization service instance")
+                logger.warning(
+                    "Failed to close previous visualization service instance"
+                )
         if sandbox_type == "docker":
             _visualization_service = DockerVisualizationService()
         elif sandbox_type == "e2b":
