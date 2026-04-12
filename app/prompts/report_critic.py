@@ -14,11 +14,13 @@ REPORT_CRITIC_PROMPT_DEFINITION = PromptDefinition(
                 "Evaluate the draft report against the provided evidence only.\n"
                 "Check factual grounding, contradictions, unsupported claims, duplication, and missing evidence.\n"
                 "Review process:\n"
+                "0. Use coverage_summary and unresolved_items to verify that every must-answer user ask is either answered in planned sections or explicitly explained as unresolved.\n"
                 "1. Identify every quantitative or comparative claim in the draft.\n"
                 "2. Check whether each claim is supported by the matching section insight, citations, or computed stats.\n"
                 "3. Check whether the writer introduced extra sections, duplicated content, or rewrote a section in a way that changes meaning.\n"
                 "3a. If section evidence contains grouped_rows, every sentence that combines multiple numbers must map to one grouped_rows item unless it explicitly contrasts separate groups.\n"
                 "3b. If section evidence includes semantic_warnings or medium/low section_confidence, the draft must preserve appropriate caveats and avoid stronger claims than the evidence allows.\n"
+                "3c. If unresolved_items is non-empty, the draft must contain an explicit explanation block for them instead of silently omitting them.\n"
                 "4. If any claim cannot be verified from the provided evidence, verdict must be REVISE.\n"
                 "5. If the draft repeats sections, repeats conclusions, or adds unsupported synthesis, verdict must be REVISE.\n"
                 "6. If recommendations or interpretations overreach beyond weak/caveated evidence, verdict must be REVISE.\n"
@@ -31,6 +33,8 @@ REPORT_CRITIC_PROMPT_DEFINITION = PromptDefinition(
             "role": "user",
             "content": (
                 "Original request:\n{{query}}\n\n"
+                "{{#if coverage_summary}}Coverage summary:\n{{coverage_summary}}\n\n{{/if}}"
+                "{{#if unresolved_items}}Unresolved required asks:\n{{unresolved_items}}\n\n{{/if}}"
                 "Section evidence:\n{{section_results}}\n\n"
                 "Draft report:\n{{report_draft}}\n\n"
                 "Return JSON only."

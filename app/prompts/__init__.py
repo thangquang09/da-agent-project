@@ -13,6 +13,9 @@ from app.prompts.report_critic import REPORT_CRITIC_PROMPT_DEFINITION
 from app.prompts.report_data_profiler import REPORT_DATA_PROFILER_PROMPT_DEFINITION
 from app.prompts.report_insight import REPORT_INSIGHT_PROMPT_DEFINITION
 from app.prompts.report_planner import REPORT_PLANNER_PROMPT_DEFINITION
+from app.prompts.report_request_grounder import (
+    REPORT_REQUEST_GROUNDER_PROMPT_DEFINITION,
+)
 from app.prompts.report_writer import REPORT_WRITER_PROMPT_DEFINITION
 from app.prompts.sql_worker import SQL_WORKER_GENERATION_PROMPT
 from app.prompts.synthesis import SYNTHESIS_PROMPT_DEFINITION
@@ -32,6 +35,7 @@ __all__ = [
     "FALLBACK_ASSISTANT_PROMPT",
     "LEADER_AGENT_PROMPT_DEFINITION",
     "REPORT_DATA_PROFILER_PROMPT_DEFINITION",
+    "REPORT_REQUEST_GROUNDER_PROMPT_DEFINITION",
     "REPORT_PLANNER_PROMPT_DEFINITION",
     "REPORT_INSIGHT_PROMPT_DEFINITION",
     "REPORT_WRITER_PROMPT_DEFINITION",

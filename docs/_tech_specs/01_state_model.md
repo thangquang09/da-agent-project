@@ -135,7 +135,16 @@ class AnswerPayload(TypedDict, total=False):
 | Field | Type | Purpose |
 |-------|------|---------|
 | `report_request` | `str` | User's report request |
-| `report_plan` | `ReportPlan` | Planned sections (includes `domain_context` from profiler) |
+| `report_original_request` | `str` | Preserved raw report request for downstream planning/writing |
+| `report_user_objective` | `str` | Grounded analytical objective extracted from the raw request |
+| `report_user_questions` | `list[ReportQuestion]` | Explicit questions that must be answered or explained |
+| `report_user_hypotheses` | `list[ReportHypothesis]` | Explicit hypotheses extracted from the request |
+| `report_constraints` | `ReportConstraint` | Output language, viz preference, section/style constraints |
+| `report_followup_context` | `ReportFollowupContext` | Follow-up mode + summarized session context for report planning |
+| `report_planning_brief` | `ReportPlanningBrief` | Structured brief passed into the planner |
+| `report_question_coverage` | `ReportCoverageSummary` | Coverage proof for must-answer questions |
+| `report_unresolved_items` | `list[ReportUnresolvedItem]` | Required asks the planner could not cover directly |
+| `report_plan` | `ReportPlan` | Planned sections (includes `domain_context`, coverage summary, unresolved items) |
 | `report_sections` | `list[ReportSection]` | Executed sections |
 | `report_draft` | `str` | Writer output |
 | `report_final` | `str` | Finalized report |
@@ -152,6 +161,7 @@ class AnswerPayload(TypedDict, total=False):
 class ReportSection(TypedDict, total=False):
     section_id: str
     title: str
+    business_question: str
     analysis_query: str
     analysis_type: Literal["descriptive", "comparative", "trend", "distribution", "composition", "correlation", "cohort", "funnel"]
     target_metrics: list[str]
@@ -159,6 +169,10 @@ class ReportSection(TypedDict, total=False):
     expected_grain: str
     confidence_notes: str
     requires_visualization: bool  # planner decides; False = skip sandbox chart
+    inclusion_reason: str
+    addresses_question_ids: list[str]
+    tests_hypothesis_ids: list[str]
+    must_include: bool
     sql_result: dict[str, Any]
     computed_stats: dict[str, Any] | None
     chart_image: dict[str, Any] | None
@@ -187,6 +201,8 @@ class ReportPlan(TypedDict, total=False):
     sections: list[ReportSection]
     conclusion_instruction: str
     domain_context: str  # profiler-derived domain summary passed to writer
+    coverage_summary: ReportCoverageSummary
+    unresolved_items: list[ReportUnresolvedItem]
 ```
 
 ---

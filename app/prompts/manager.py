@@ -20,6 +20,9 @@ from app.prompts.report_critic import REPORT_CRITIC_PROMPT_DEFINITION
 from app.prompts.report_data_profiler import REPORT_DATA_PROFILER_PROMPT_DEFINITION
 from app.prompts.report_insight import REPORT_INSIGHT_PROMPT_DEFINITION
 from app.prompts.report_planner import REPORT_PLANNER_PROMPT_DEFINITION
+from app.prompts.report_request_grounder import (
+    REPORT_REQUEST_GROUNDER_PROMPT_DEFINITION,
+)
 from app.prompts.report_writer import REPORT_WRITER_PROMPT_DEFINITION
 from app.prompts.sql_worker import SQL_WORKER_GENERATION_PROMPT
 from app.prompts.synthesis import SYNTHESIS_PROMPT_DEFINITION
@@ -276,18 +279,39 @@ class PromptManager:
             },
         )
 
+    def report_request_grounder_messages(
+        self,
+        report_original_request: str,
+        session_context: str = "",
+        last_action: str = "",
+        task_profile: str = "",
+    ) -> list[dict[str, str]]:
+        return self._compile_prompt(
+            REPORT_REQUEST_GROUNDER_PROMPT_DEFINITION,
+            {
+                "report_original_request": report_original_request,
+                "session_context": session_context or "",
+                "last_action": last_action or "",
+                "task_profile": task_profile or "",
+            },
+        )
+
     def report_planner_messages(
         self,
         query: str,
-        session_context: str = "",
+        planning_brief: str = "",
         xml_database_context: str = "",
+        profiler_guidance: str = "",
+        sample_data_summary: str = "",
     ) -> list[dict[str, str]]:
         return self._compile_prompt(
             REPORT_PLANNER_PROMPT_DEFINITION,
             {
                 "query": query,
-                "session_context": session_context or "",
+                "planning_brief": planning_brief or "",
                 "xml_database_context": xml_database_context or "",
+                "profiler_guidance": profiler_guidance or "",
+                "sample_data_summary": sample_data_summary or "",
             },
         )
 
@@ -298,6 +322,8 @@ class PromptManager:
         section_results: str,
         critic_feedback: str = "",
         domain_context: str = "",
+        coverage_summary: str = "",
+        unresolved_items: str = "",
     ) -> list[dict[str, str]]:
         return self._compile_prompt(
             REPORT_WRITER_PROMPT_DEFINITION,
@@ -307,6 +333,8 @@ class PromptManager:
                 "section_results": section_results,
                 "critic_feedback": critic_feedback or "",
                 "domain_context": domain_context or "",
+                "coverage_summary": coverage_summary or "",
+                "unresolved_items": unresolved_items or "",
             },
         )
 
@@ -315,6 +343,8 @@ class PromptManager:
         query: str,
         section_results: str,
         report_draft: str,
+        coverage_summary: str = "",
+        unresolved_items: str = "",
     ) -> list[dict[str, str]]:
         return self._compile_prompt(
             REPORT_CRITIC_PROMPT_DEFINITION,
@@ -322,6 +352,8 @@ class PromptManager:
                 "query": query,
                 "section_results": section_results,
                 "report_draft": report_draft,
+                "coverage_summary": coverage_summary or "",
+                "unresolved_items": unresolved_items or "",
             },
         )
 

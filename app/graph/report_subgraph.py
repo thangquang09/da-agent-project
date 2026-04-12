@@ -13,7 +13,7 @@ from langgraph.types import Send
 
 from app.config import load_settings
 from app.graph.sql_worker_graph import get_sql_worker_graph
-from app.graph.state import AgentState, ReportPlan, ReportSection
+from app.graph.state import AgentState, ReportPlan, ReportSection, SectionPlan
 from app.llm import LLMClient
 from app.logger import logger
 from app.observability import get_current_tracer
@@ -196,6 +196,461 @@ def _keyword_tokens(text: str) -> list[str]:
     ]
 
 
+def _question_id_list(
+    questions: list[dict[str, Any]], *, priority: str | None = None
+) -> list[str]:
+    ids: list[str] = []
+    for question in questions:
+        if priority and str(question.get("priority", "must")) != priority:
+            continue
+        question_id = str(question.get("question_id", "")).strip()
+        if question_id:
+            ids.append(question_id)
+    return ids
+
+
+def _hypothesis_id_list(hypotheses: list[dict[str, Any]]) -> list[str]:
+    ids: list[str] = []
+    for hypothesis in hypotheses:
+        hypothesis_id = str(hypothesis.get("hypothesis_id", "")).strip()
+        if hypothesis_id:
+            ids.append(hypothesis_id)
+    return ids
+
+
+def _detect_output_language(text: str) -> str:
+    return "vi" if _is_probably_vietnamese(text) else "en"
+
+
+def _detect_requested_visualizations(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(
+        token in lowered
+        for token in [
+            "biểu đồ",
+            "chart",
+            "charts",
+            "visualization",
+            "visualizations",
+            "trực quan",
+            "dashboard",
+        ]
+    )
+
+
+def _detect_answer_style(text: str) -> str:
+    lowered = (text or "").lower()
+    if any(token in lowered for token in ["executive", "ban lãnh đạo", "lãnh đạo"]):
+        return "executive"
+    if any(
+        token in lowered for token in ["technical", "kỹ thuật", "chi tiết kỹ thuật"]
+    ):
+        return "technical"
+    return "analyst"
+
+
+def _infer_question_intent_type(text: str) -> str:
+    lowered = (text or "").lower()
+    if any(token in lowered for token in ["trend", "theo thời gian", "over time"]):
+        return "trend"
+    if any(token in lowered for token in ["tại sao", "why", "nguyên nhân", "driver"]):
+        return "diagnostic"
+    if any(
+        token in lowered
+        for token in ["cao nhất", "thấp nhất", "highest", "lowest", "top"]
+    ):
+        return "ranking"
+    if any(token in lowered for token in ["phân phối", "distribution", "histogram"]):
+        return "distribution"
+    if any(token in lowered for token in ["tương quan", "correlation", "liên hệ"]):
+        return "correlation"
+    if any(
+        token in lowered
+        for token in ["so sánh", "compare", "vs", "versus", "khác nhau"]
+    ):
+        return "comparison"
+    return "descriptive"
+
+
+def _infer_hypothesis_test_type(text: str) -> str:
+    lowered = (text or "").lower()
+    if any(token in lowered for token in ["tương quan", "correlation", "liên hệ"]):
+        return "correlation"
+    if any(token in lowered for token in ["trend", "theo thời gian", "over time"]):
+        return "trend"
+    if any(token in lowered for token in ["so sánh", "compare", "vs", "versus"]):
+        return "compare"
+    return "explore"
+
+
+def _intent_to_analysis_type(intent_type: str) -> str:
+    return {
+        "comparison": "comparative",
+        "ranking": "comparative",
+        "trend": "trend",
+        "distribution": "distribution",
+        "correlation": "correlation",
+    }.get(intent_type, "descriptive")
+
+
+def _split_report_objective(text: str) -> tuple[str, str]:
+    stripped = str(text or "").strip()
+    patterns = [
+        r"\btrả lời các câu hỏi\b",
+        r"\btrả lời câu hỏi\b",
+        r"\banswer these questions\b",
+        r"\banswer the following questions\b",
+        r"\banswer the question\b",
+        r"\bquestions?\s*:\s*",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, stripped, flags=re.IGNORECASE)
+        if not match:
+            continue
+        objective = stripped[: match.start()].strip().rstrip(",;:-")
+        tail = stripped[match.end() :].strip().lstrip(":-")
+        return objective or stripped, tail
+    return stripped, ""
+
+
+def _fallback_question_texts(text: str) -> list[str]:
+    _, tail = _split_report_objective(text)
+    if not tail:
+        return []
+
+    tail = tail.replace("\n", " ").strip()
+    parts = [
+        part.strip(" ,;:-")
+        for part in re.split(r"\s*(?:\?|;|,|\band\b|\bvà\b)\s*", tail)
+        if part.strip(" ,;:-")
+    ]
+    questions: list[str] = []
+    for part in parts:
+        cleaned = part.strip()
+        if not cleaned:
+            continue
+        if not cleaned.endswith("?"):
+            cleaned = f"{cleaned}?"
+        questions.append(cleaned)
+    return questions
+
+
+def _summarize_last_action(last_action: Any) -> str:
+    if not isinstance(last_action, dict) or not last_action:
+        return ""
+    parts: list[str] = []
+    for key in ("tool", "action", "query", "summary"):
+        value = str(last_action.get(key, "")).strip()
+        if value:
+            parts.append(f"{key}={value}")
+    return "; ".join(parts)[:400]
+
+
+def _normalize_report_question(raw: Any, index: int) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        text = str(raw.get("text", "")).strip()
+        priority = str(raw.get("priority", "must") or "must").strip().lower()
+        source = (
+            str(raw.get("source", "current_query") or "current_query").strip().lower()
+        )
+        intent_type = str(raw.get("intent_type", "") or "").strip().lower()
+    else:
+        text = str(raw or "").strip()
+        priority = "must"
+        source = "current_query"
+        intent_type = ""
+
+    return {
+        "question_id": str(
+            raw.get("question_id", "") if isinstance(raw, dict) else ""
+        ).strip()
+        or f"q{index}",
+        "text": text,
+        "priority": priority if priority in {"must", "should"} else "must",
+        "source": source if source in {"current_query", "session"} else "current_query",
+        "intent_type": intent_type
+        if intent_type
+        in {
+            "descriptive",
+            "comparison",
+            "trend",
+            "diagnostic",
+            "ranking",
+            "distribution",
+            "correlation",
+        }
+        else _infer_question_intent_type(text),
+        "entities": _as_string_list(raw.get("entities"))
+        if isinstance(raw, dict)
+        else [],
+        "time_scope": str(raw.get("time_scope")).strip()
+        if isinstance(raw, dict) and raw.get("time_scope")
+        else None,
+        "requested_metrics": _as_string_list(raw.get("requested_metrics"))
+        if isinstance(raw, dict)
+        else [],
+        "requested_dimensions": _as_string_list(raw.get("requested_dimensions"))
+        if isinstance(raw, dict)
+        else [],
+    }
+
+
+def _normalize_report_hypothesis(raw: Any, index: int) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        text = str(raw.get("text", "")).strip()
+        priority = str(raw.get("priority", "should") or "should").strip().lower()
+        source = (
+            str(raw.get("source", "current_query") or "current_query").strip().lower()
+        )
+        test_type = str(raw.get("test_type", "") or "").strip().lower()
+    else:
+        text = str(raw or "").strip()
+        priority = "should"
+        source = "current_query"
+        test_type = ""
+
+    return {
+        "hypothesis_id": str(
+            raw.get("hypothesis_id", "") if isinstance(raw, dict) else ""
+        ).strip()
+        or f"h{index}",
+        "text": text,
+        "priority": priority if priority in {"must", "should"} else "should",
+        "source": source if source in {"current_query", "session"} else "current_query",
+        "test_type": test_type
+        if test_type in {"compare", "trend", "correlation", "explore"}
+        else _infer_hypothesis_test_type(text),
+        "entities": _as_string_list(raw.get("entities"))
+        if isinstance(raw, dict)
+        else [],
+    }
+
+
+def _normalize_report_constraints(raw: Any, original_request: str) -> dict[str, Any]:
+    data = raw if isinstance(raw, dict) else {}
+    answer_style = str(data.get("answer_style", "") or "").strip().lower()
+    return {
+        "output_language": str(data.get("output_language", "") or "").strip()
+        or _detect_output_language(original_request),
+        "requested_visualizations": bool(
+            data.get("requested_visualizations")
+            if "requested_visualizations" in data
+            else _detect_requested_visualizations(original_request)
+        ),
+        "requested_sections": _as_string_list(data.get("requested_sections")),
+        "excluded_topics": _as_string_list(data.get("excluded_topics")),
+        "time_scope": str(data.get("time_scope")).strip()
+        if data.get("time_scope")
+        else None,
+        "answer_style": answer_style
+        if answer_style in {"analyst", "executive", "technical"}
+        else _detect_answer_style(original_request),
+    }
+
+
+def _build_report_followup_context(
+    state: AgentState, followup_notes: str = ""
+) -> dict[str, Any]:
+    task_profile = state.get("task_profile") or {}
+    followup_mode = str(
+        task_profile.get("followup_mode", "fresh_query") or "fresh_query"
+    )
+    session_context_summary = str(followup_notes or "").strip()
+    if not session_context_summary:
+        session_context_summary = _truncate_text(state.get("session_context", ""), 500)
+    return {
+        "followup_mode": followup_mode
+        if followup_mode in {"fresh_query", "followup", "refine_previous_result"}
+        else "fresh_query",
+        "session_context_summary": session_context_summary,
+        "last_action_summary": _summarize_last_action(state.get("last_action")),
+        "conversation_turn": int(state.get("conversation_turn", 0) or 0),
+    }
+
+
+def _build_report_planning_brief(
+    state: AgentState,
+    *,
+    domain_context: str = "",
+    answerable_question_ids: list[str] | None = None,
+    risky_question_ids: list[str] | None = None,
+    unanswerable_question_ids: list[str] | None = None,
+    planning_risks: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "original_request": state.get("report_original_request")
+        or state.get("report_request")
+        or state.get("user_query", ""),
+        "objective": state.get("report_user_objective")
+        or state.get("report_request")
+        or state.get("user_query", ""),
+        "user_questions": state.get("report_user_questions") or [],
+        "user_hypotheses": state.get("report_user_hypotheses") or [],
+        "constraints": state.get("report_constraints") or {},
+        "followup_context": state.get("report_followup_context") or {},
+        "answerable_question_ids": answerable_question_ids or [],
+        "risky_question_ids": risky_question_ids or [],
+        "unanswerable_question_ids": unanswerable_question_ids or [],
+        "hypothesis_assessment": [],
+        "domain_context": domain_context,
+        "planning_risks": planning_risks or [],
+    }
+
+
+def _fallback_report_request_grounding(
+    original_request: str,
+    state: AgentState,
+) -> dict[str, Any]:
+    objective, _ = _split_report_objective(original_request)
+    questions = [
+        {
+            "text": question,
+            "priority": "must",
+            "intent_type": _infer_question_intent_type(question),
+            "entities": [],
+            "time_scope": None,
+            "requested_metrics": [],
+            "requested_dimensions": [],
+        }
+        for question in _fallback_question_texts(original_request)
+    ]
+    return {
+        "objective": objective or original_request,
+        "questions": questions,
+        "hypotheses": [],
+        "constraints": {
+            "output_language": _detect_output_language(original_request),
+            "requested_visualizations": _detect_requested_visualizations(
+                original_request
+            ),
+            "requested_sections": [],
+            "excluded_topics": [],
+            "time_scope": None,
+            "answer_style": _detect_answer_style(original_request),
+        },
+        "followup_notes": "",
+    }
+
+
+def _planner_sample_summary(sample_data: dict[str, Any]) -> str:
+    lines: list[str] = []
+    for table_name, table_info in sample_data.items():
+        if not isinstance(table_info, dict) or table_info.get("error"):
+            continue
+        columns = ", ".join(table_info.get("columns", [])[:10])
+        lines.append(
+            f"- {table_name}: rows~{table_info.get('table_row_count', table_info.get('sample_count', 0))}, columns=[{columns}]"
+        )
+    return "\n".join(lines)
+
+
+def _normalize_unresolved_items(raw_items: Any) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    if not isinstance(raw_items, list):
+        return items
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        item_type = str(raw.get("item_type", "question") or "question").strip().lower()
+        item: dict[str, Any] = {
+            "item_type": item_type
+            if item_type in {"question", "hypothesis"}
+            else "question",
+            "reason": str(raw.get("reason", "")).strip(),
+        }
+        question_id = str(raw.get("question_id", "")).strip()
+        hypothesis_id = str(raw.get("hypothesis_id", "")).strip()
+        if question_id:
+            item["question_id"] = question_id
+        if hypothesis_id:
+            item["hypothesis_id"] = hypothesis_id
+        if item.get("reason"):
+            items.append(item)
+    return items
+
+
+def _build_fallback_question_section(
+    question: dict[str, Any],
+    *,
+    order: int,
+    requested_visualizations: bool,
+) -> dict[str, Any]:
+    question_text = str(question.get("text", "")).strip()
+    intent_type = str(question.get("intent_type", "descriptive") or "descriptive")
+    analysis_type = _intent_to_analysis_type(intent_type)
+    return {
+        "section_id": f"question-{question.get('question_id', order)}",
+        "title": question_text[:80] or f"Question {order}",
+        "business_question": question_text,
+        "analysis_query": question_text,
+        "analysis_type": analysis_type,
+        "target_metrics": question.get("requested_metrics", []),
+        "target_dimensions": question.get("requested_dimensions", []),
+        "expected_grain": "dataset",
+        "confidence_notes": "Deterministic fallback section added to preserve must-answer coverage.",
+        "requires_visualization": requested_visualizations
+        or analysis_type in {"comparative", "trend", "distribution", "composition"},
+        "section_order": order,
+        "inclusion_reason": "Added automatically because the planner output did not map a must-answer user question.",
+        "addresses_question_ids": [question.get("question_id")],
+        "tests_hypothesis_ids": [],
+        "must_include": True,
+        "status": "pending",
+    }
+
+
+def _build_fallback_report_plan(query: str, state: AgentState) -> dict[str, Any]:
+    questions = state.get("report_user_questions") or []
+    constraints = state.get("report_constraints") or {}
+    sections: list[dict[str, Any]] = []
+    for index, question in enumerate(questions, start=1):
+        sections.append(
+            _build_fallback_question_section(
+                question,
+                order=index,
+                requested_visualizations=bool(
+                    constraints.get("requested_visualizations", False)
+                ),
+            )
+        )
+
+    if not sections:
+        sections = [
+            {
+                "section_id": "1",
+                "title": "Overview",
+                "business_question": query,
+                "analysis_query": query,
+                "analysis_type": "descriptive",
+                "target_metrics": [],
+                "target_dimensions": [],
+                "expected_grain": "dataset",
+                "confidence_notes": "Fallback plan due to missing planner output.",
+                "requires_visualization": bool(
+                    constraints.get("requested_visualizations", False)
+                ),
+                "section_order": 1,
+                "inclusion_reason": "Fallback overview section.",
+                "addresses_question_ids": [],
+                "tests_hypothesis_ids": [],
+                "must_include": True,
+                "status": "pending",
+            }
+        ]
+
+    return {
+        "title": f"Report: {query[:80]}".strip(),
+        "executive_summary_instruction": "Summarize the most important findings from the available data.",
+        "sections": sections,
+        "conclusion_instruction": "Conclude with grounded findings and limitations.",
+        "coverage_summary": {
+            "covered_question_ids": [],
+            "unanswered_question_ids": _question_id_list(questions, priority="must"),
+        },
+        "unresolved_items": [],
+    }
+
+
 def _select_tables_for_report(
     all_tables: list[str],
     *,
@@ -360,17 +815,33 @@ def _soften_overclaim_language(text: str, *, is_vietnamese: bool) -> str:
 
 
 def _build_safe_report_markdown(state: AgentState) -> str:
+    original_request = (
+        state.get("report_original_request")
+        or state.get("report_request")
+        or state.get("user_query", "")
+    )
+    is_vietnamese = _is_probably_vietnamese(original_request)
     plan_title = state.get("report_plan", {}).get("title", "Report")
     sections = [
         section
         for section in state.get("report_sections", [])
         if section.get("status") == "done"
     ]
-    lines = [f"# {plan_title}", "", "## Tóm tắt tổng quan", ""]
+    summary_heading = (
+        "## Tóm tắt tổng quan" if is_vietnamese else "## Executive Summary"
+    )
+    unresolved_heading = (
+        "## Questions Requiring Follow-up"
+        if not is_vietnamese
+        else "## Questions Requiring Follow-up"
+    )
+    conclusion_heading = "## Kết luận" if is_vietnamese else "## Conclusion"
+    lines = [f"# {plan_title}", "", summary_heading, ""]
 
     summary = (
-        "Báo cáo dưới đây chỉ tổng hợp các phát hiện đã được grounding ở từng mục. "
-        "Một số phần diễn giải mức cao đã bị lược bỏ do bản nháp trước đó chưa vượt qua bước phản biện."
+        "Báo cáo dưới đây chỉ tổng hợp các phát hiện đã được grounding ở từng mục. Một số phần diễn giải mức cao đã bị lược bỏ vì bản nháp tường thuật đầy đủ không sẵn có hoặc chưa vượt qua bước phản biện."
+        if is_vietnamese
+        else "This report only summarizes findings that were grounded in section-level evidence. Higher-level interpretation was reduced because the full narrative draft was unavailable or did not pass review."
     )
     first_section_paragraph = ""
     if sections:
@@ -391,32 +862,58 @@ def _build_safe_report_markdown(state: AgentState) -> str:
             ]
         )
 
+    unresolved_items = state.get("report_unresolved_items") or []
+    question_lookup = {
+        question.get("question_id"): question.get("text", "")
+        for question in state.get("report_user_questions", [])
+        if question.get("question_id")
+    }
+    if unresolved_items:
+        lines.extend(["", unresolved_heading, ""])
+        for item in unresolved_items:
+            question_text = question_lookup.get(item.get("question_id", ""), "")
+            reason = str(item.get("reason", "")).strip()
+            if question_text:
+                lines.append(f"- {question_text}: {reason}")
+            elif reason:
+                lines.append(f"- {reason}")
+
     all_limitations = [
         limitation.strip()
         for section in sections
         for limitation in section.get("limitations", [])
         if limitation and limitation.strip()
     ]
-    lines.extend(["", "## Kết luận", ""])
+    lines.extend(["", conclusion_heading, ""])
     lines.append(
         "Các kết luận dưới đây chỉ nên được hiểu là phần tổng hợp an toàn từ những mục đã có evidence trực tiếp."
+        if is_vietnamese
+        else "The conclusions below should be read as a conservative synthesis of sections with direct supporting evidence."
     )
     if all_limitations:
         lines.append(
             "Các hạn chế dữ liệu và phạm vi phân tích đã được ghi rõ trong từng mục tương ứng, và cần được xem xét trước khi đưa ra quyết định."
+            if is_vietnamese
+            else "Data limitations and analysis scope constraints are noted in the relevant sections and should be reviewed before acting on this report."
         )
 
     recommendations: list[str] = []
     if all_limitations:
         recommendations.append(
             "Rà soát kỹ các hạn chế dữ liệu đã được nêu trong từng mục trước khi chuyển các phát hiện này thành quyết định vận hành."
+            if is_vietnamese
+            else "Review the section-level data limitations carefully before turning these findings into operational decisions."
         )
     if sections:
         recommendations.append(
             "Đối chiếu lại các phát hiện quan trọng nhất với metric definition, grain phân tích, và câu hỏi kinh doanh gốc trước khi hành động."
+            if is_vietnamese
+            else "Cross-check the most important findings against metric definitions, analysis grain, and the original business questions before acting."
         )
     recommendations.append(
         "Nếu cần quyết định có tác động lớn, hãy chạy thêm phân tích chuyên sâu hoặc kiểm định bổ sung thay vì chỉ dựa vào bản tóm tắt an toàn này."
+        if is_vietnamese
+        else "For high-impact decisions, run deeper analysis or additional validation instead of relying only on this conservative summary."
     )
 
     lines.extend(["", "## Recommendations", ""])
@@ -434,6 +931,7 @@ def _report_section_payload(section: ReportSection) -> dict[str, Any]:
     return {
         "section_id": section.get("section_id", ""),
         "title": section.get("title", ""),
+        "business_question": section.get("business_question", ""),
         "insight_markdown": section.get("insight_markdown", ""),
         "chart_image": (
             {
@@ -450,6 +948,8 @@ def _report_section_payload(section: ReportSection) -> dict[str, Any]:
         "chart_manifest": section.get("chart_manifest"),
         "limitations": section.get("limitations", []),
         "analysis_type": section.get("analysis_type", "descriptive"),
+        "addresses_question_ids": section.get("addresses_question_ids", []),
+        "tests_hypothesis_ids": section.get("tests_hypothesis_ids", []),
         "semantic_warnings": section.get("semantic_warnings", []),
         "section_confidence": section.get("section_confidence", "medium"),
     }
@@ -702,6 +1202,11 @@ def _derive_report_confidence(
         reasons.append(
             f"Semantic validation emitted {semantic_warning_count} warning(s) about aggregation, grain, or evidence quality."
         )
+    unresolved_items = len(state.get("report_unresolved_items") or [])
+    if unresolved_items > 0:
+        reasons.append(
+            f"{unresolved_items} required user ask(s) remained unresolved and were carried forward with explicit caveats."
+        )
 
     if not reasons:
         reasons.append(
@@ -711,39 +1216,111 @@ def _derive_report_confidence(
 
 
 def _default_report_plan(query: str) -> ReportPlan:
-    return {
-        "title": f"Report: {query[:80]}".strip(),
-        "executive_summary_instruction": "Summarize the most important findings from the available data.",
-        "sections": [
-            {
-                "section_id": "1",
-                "title": "Overview",
-                "analysis_query": query,
-                "analysis_type": "descriptive",
-                "target_metrics": [],
-                "target_dimensions": [],
-                "expected_grain": "dataset",
-                "confidence_notes": "Fallback plan due to missing profiler guidance.",
-                "status": "pending",
-            },
-            {
-                "section_id": "2",
-                "title": "Key Breakdown",
-                "analysis_query": f"Provide a useful breakdown for: {query}",
-                "analysis_type": "comparative",
-                "target_metrics": [],
-                "target_dimensions": [],
-                "expected_grain": "segment",
-                "confidence_notes": "Fallback plan due to missing profiler guidance.",
-                "status": "pending",
-            },
-        ],
-        "conclusion_instruction": "Conclude with grounded findings and limitations.",
-    }
+    return _build_fallback_report_plan(query, {})
 
 
 # ---------------------------------------------------------------------------
-# NODE 1: Profiler Sampler — runs SQL to fetch 100 random rows + column stats
+# NODE 1: Request Grounder — preserve explicit asks before planning
+# ---------------------------------------------------------------------------
+
+
+def report_request_grounder_node(state: AgentState) -> AgentState:
+    original_request = (
+        state.get("report_request") or state.get("user_query", "")
+    ).strip()
+    serialized_last_action = json.dumps(
+        state.get("last_action") or {}, ensure_ascii=False, indent=2, default=str
+    )
+    serialized_task_profile = json.dumps(
+        state.get("task_profile") or {}, ensure_ascii=False, indent=2, default=str
+    )
+
+    grounded: dict[str, Any] = {}
+    try:
+        settings = load_settings()
+        client = LLMClient.from_env()
+        response = client.chat_completion(
+            messages=prompt_manager.report_request_grounder_messages(
+                report_original_request=original_request,
+                session_context=state.get("session_context", ""),
+                last_action=serialized_last_action,
+                task_profile=serialized_task_profile,
+            ),
+            model=settings.model_report_planner,
+            temperature=0.0,
+            stream=False,
+        )
+        content = (
+            response.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+        grounded = _extract_first_json_object(content) or {}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("report_request_grounder failed: {error}", error=str(exc))
+
+    if not grounded:
+        grounded = _fallback_report_request_grounding(original_request, state)
+
+    objective = str(grounded.get("objective", "")).strip() or original_request
+    raw_questions = grounded.get("questions") or []
+    raw_hypotheses = grounded.get("hypotheses") or []
+    normalized_questions: list[dict[str, Any]] = []
+    for index, raw_question in enumerate(raw_questions, start=1):
+        question = _normalize_report_question(raw_question, index)
+        if question.get("text"):
+            normalized_questions.append(question)
+
+    normalized_hypotheses: list[dict[str, Any]] = []
+    for index, raw_hypothesis in enumerate(raw_hypotheses, start=1):
+        hypothesis = _normalize_report_hypothesis(raw_hypothesis, index)
+        if hypothesis.get("text"):
+            normalized_hypotheses.append(hypothesis)
+    constraints = _normalize_report_constraints(
+        grounded.get("constraints"),
+        original_request,
+    )
+    followup_context = _build_report_followup_context(
+        state,
+        followup_notes=str(grounded.get("followup_notes", "")).strip(),
+    )
+    update: AgentState = {
+        "report_request": original_request,
+        "report_original_request": original_request,
+        "report_user_objective": objective,
+        "report_user_questions": normalized_questions,
+        "report_user_hypotheses": normalized_hypotheses,
+        "report_constraints": constraints,
+        "report_followup_context": followup_context,
+        "report_planning_brief": {
+            "original_request": original_request,
+            "objective": objective,
+            "user_questions": normalized_questions,
+            "user_hypotheses": normalized_hypotheses,
+            "constraints": constraints,
+            "followup_context": followup_context,
+            "answerable_question_ids": [],
+            "risky_question_ids": [],
+            "unanswerable_question_ids": [],
+            "hypothesis_assessment": [],
+            "domain_context": "",
+            "planning_risks": [],
+        },
+        "tool_history": [
+            {
+                "tool": "report_request_grounder",
+                "status": "ok",
+                "question_count": len(normalized_questions),
+                "hypothesis_count": len(normalized_hypotheses),
+            }
+        ],
+    }
+    return update
+
+
+# ---------------------------------------------------------------------------
+# NODE 2: Profiler Sampler — runs SQL to fetch 100 random rows + column stats
 # ---------------------------------------------------------------------------
 
 
@@ -775,7 +1352,11 @@ def profiler_sampler_node(state: AgentState) -> AgentState:
     for each relevant table. This gives the analyzer LLM actual data to reason about."""
     xml_ctx = state.get("xml_database_context", "")
     all_tables = _extract_tables_from_xml(xml_ctx)
-    query = state.get("report_request") or state.get("user_query", "")
+    query = (
+        state.get("report_original_request")
+        or state.get("report_request")
+        or state.get("user_query", "")
+    )
     db_path_raw = state.get("target_db_path", "")
     db_path = Path(db_path_raw) if db_path_raw else None
 
@@ -851,13 +1432,17 @@ def profiler_sampler_node(state: AgentState) -> AgentState:
 
 
 # ---------------------------------------------------------------------------
-# NODE 2: Profiler Analyzer — LLM reads schema + sample data → domain context
+# NODE 3: Profiler Analyzer — LLM reads schema + sample data → domain context
 # ---------------------------------------------------------------------------
 
 
 def profiler_analyzer_node(state: AgentState) -> AgentState:
     """LLM-based profiler: reads schema + ACTUAL sample data → domain analysis + sections."""
-    query = state.get("report_request") or state.get("user_query", "")
+    query = (
+        state.get("report_original_request")
+        or state.get("report_request")
+        or state.get("user_query", "")
+    )
     sample_data = state.get("report_sample_data") or {}
 
     # Build a compact sample summary for the prompt (limit to ~8K chars)
@@ -945,142 +1530,256 @@ def profiler_analyzer_node(state: AgentState) -> AgentState:
 
 
 # ---------------------------------------------------------------------------
-# NODE 3: Planner — produces _report_sections_planned for Send()
+# NODE 4: Planner — produces _report_sections_planned for Send()
 # ---------------------------------------------------------------------------
 
 
+def _normalize_planner_section(
+    raw: Any,
+    *,
+    index: int,
+    question_ids: set[str],
+    hypothesis_ids: set[str],
+) -> SectionPlan | None:
+    if not isinstance(raw, dict):
+        return None
+    analysis_query = str(
+        raw.get("analysis_query") or raw.get("business_question") or ""
+    ).strip()
+    if not analysis_query:
+        return None
+
+    title = str(raw.get("title", "")).strip() or f"Section {index}"
+    return {
+        "section_id": str(raw.get("section_id", "")).strip() or f"sec-{index}",
+        "title": title,
+        "business_question": str(raw.get("business_question", "")).strip()
+        or analysis_query,
+        "analysis_query": analysis_query,
+        "analysis_type": _normalize_analysis_type(
+            raw.get("analysis_type"),
+            query=analysis_query,
+            title=title,
+        ),
+        "target_metrics": _as_string_list(raw.get("target_metrics")),
+        "target_dimensions": _as_string_list(raw.get("target_dimensions")),
+        "expected_grain": str(raw.get("expected_grain", "dataset")).strip()
+        or "dataset",
+        "confidence_notes": str(raw.get("confidence_notes", "")).strip(),
+        "requires_visualization": bool(raw.get("requires_visualization", False)),
+        "section_order": index,
+        "inclusion_reason": str(raw.get("inclusion_reason", "")).strip()
+        or "Planner-selected section.",
+        "addresses_question_ids": [
+            question_id
+            for question_id in _as_string_list(raw.get("addresses_question_ids"))
+            if question_id in question_ids
+        ],
+        "tests_hypothesis_ids": [
+            hypothesis_id
+            for hypothesis_id in _as_string_list(raw.get("tests_hypothesis_ids"))
+            if hypothesis_id in hypothesis_ids
+        ],
+        "must_include": bool(
+            raw.get("must_include", _as_string_list(raw.get("addresses_question_ids")))
+        ),
+        "status": "pending",
+    }
+
+
 def report_planner_node(state: AgentState) -> AgentState:
-    query = state.get("report_request") or state.get("user_query", "")
+    query = (
+        state.get("report_original_request")
+        or state.get("report_request")
+        or state.get("user_query", "")
+    )
     settings = load_settings()
 
     profile = state.get("report_data_profile") or {}
-    suggested = profile.get("suggested_sections") or []
     domain_context = profile.get("domain_summary", "")
+    report_questions = state.get("report_user_questions") or []
+    report_hypotheses = state.get("report_user_hypotheses") or []
+    question_ids = set(_question_id_list(report_questions))
+    must_question_ids = _question_id_list(report_questions, priority="must")
+    hypothesis_ids = set(_hypothesis_id_list(report_hypotheses))
+    planning_risks = _as_string_list(profile.get("profiling_risks"))
+    planning_brief = _build_report_planning_brief(
+        state,
+        domain_context=domain_context,
+        planning_risks=planning_risks,
+    )
+    profiler_guidance = {
+        "domain_summary": domain_context,
+        "key_metrics": profile.get("key_metrics", []),
+        "key_dimensions": profile.get("key_dimensions", []),
+        "analytical_angles": profile.get("analytical_angles", []),
+        "suggested_sections": profile.get("suggested_sections", []),
+    }
 
     logger.info(
-        "report_planner: profile keys={keys}, suggested_sections={n}, domain_context={ctx}",
+        "report_planner: profile keys={keys}, grounded_questions={q}, domain_context={ctx}",
         keys=list(profile.keys()),
-        n=len(suggested),
+        q=len(report_questions),
         ctx=domain_context[:100] if domain_context else "(empty)",
     )
 
-    plan: dict[str, Any] | None = None
-
-    if suggested and isinstance(suggested, list):
-        logger.info(
-            "Report planner: {n} suggested sections from profiler: {titles}",
-            n=len(suggested),
-            titles=[s.get("title", "?") for s in suggested[:5]],
-        )
-        plan = {
-            "title": f"Report: {query[:80]}".strip(),
-            "executive_summary_instruction": (
-                f"Summarize the most important findings. "
-                f"Domain context: {domain_context}"
-            ),
-            "sections": suggested,
-            "conclusion_instruction": (
-                "Conclude with grounded findings, limitations, and 2-3 actionable recommendations."
-            ),
-            "domain_context": domain_context,
-        }
-        logger.info(
-            "Report planner: using profiler-suggested sections (count={n})",
-            n=len(suggested),
-        )
-    else:
-        # Fallback: include sample data summary so Planner isn't blind
-        sample_data = state.get("report_sample_data") or {}
-        sample_summary = ""
-        for table_name, table_info in sample_data.items():
-            if isinstance(table_info, dict) and "error" not in table_info:
-                cols = ", ".join(table_info.get("columns", [])[:10])
-                sample_summary += f"Table '{table_name}': columns=[{cols}]\n"
-
-        messages = prompt_manager.report_planner_messages(
-            query=query,
-            session_context=state.get("session_context", ""),
-            xml_database_context=state.get("xml_database_context", ""),
-        )
-        # Inject sample data hint into the last user message if available
-        if sample_summary:
-            messages[-1]["content"] += f"\n\nAvailable data preview:\n{sample_summary}"
-        try:
-            client = LLMClient.from_env()
-            response = client.chat_completion(
-                messages=messages,
-                model=settings.model_report_planner,
-                temperature=0.0,
-                stream=False,
-            )
-            content = (
-                response.get("choices", [{}])[0]
-                .get("message", {})
-                .get("content", "")
-                .strip()
-            )
-            parsed = _extract_first_json_object(content)
-            plan = (
-                parsed
-                if parsed and isinstance(parsed.get("sections"), list)
-                else _default_report_plan(query)
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Report planner failed: {error}", error=str(exc))
-            plan = _default_report_plan(query)
-
-    sections: list[ReportSection] = []
-    for idx, raw in enumerate(plan.get("sections", []), start=1):
-        if not isinstance(raw, dict):
-            continue
-        analysis_query = str(raw.get("analysis_query", "")).strip()
-        if not analysis_query:
-            continue
-        sections.append(
-            {
-                "section_id": str(raw.get("section_id", idx)),
-                "title": str(raw.get("title", f"Section {idx}")).strip()
-                or f"Section {idx}",
-                "analysis_query": analysis_query,
-                "analysis_type": _normalize_analysis_type(
-                    raw.get("analysis_type"),
-                    query=analysis_query,
-                    title=str(raw.get("title", f"Section {idx}")),
+    parsed_plan: dict[str, Any] = {}
+    try:
+        client = LLMClient.from_env()
+        response = client.chat_completion(
+            messages=prompt_manager.report_planner_messages(
+                query=query,
+                planning_brief=_truncate_json_for_prompt(planning_brief, 10000),
+                xml_database_context=state.get("xml_database_context", ""),
+                profiler_guidance=_truncate_json_for_prompt(profiler_guidance, 8000),
+                sample_data_summary=_planner_sample_summary(
+                    state.get("report_sample_data") or {}
                 ),
-                "target_metrics": _as_string_list(raw.get("target_metrics")),
-                "target_dimensions": _as_string_list(raw.get("target_dimensions")),
-                "expected_grain": str(raw.get("expected_grain", "dataset")).strip()
-                or "dataset",
-                "confidence_notes": str(raw.get("confidence_notes", "")).strip(),
-                "requires_visualization": bool(raw.get("requires_visualization", True)),
-                "section_order": idx,
-                "status": "pending",
-                "analysis_status": "pending",
-            }
+            ),
+            model=settings.model_report_planner,
+            temperature=0.0,
+            stream=False,
         )
+        content = (
+            response.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+        parsed_plan = _extract_first_json_object(content) or {}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Report planner failed: {error}", error=str(exc))
+
+    plan = (
+        parsed_plan
+        if isinstance(parsed_plan.get("sections"), list)
+        else _build_fallback_report_plan(query, state)
+    )
+    sections: list[SectionPlan] = []
+    for idx, raw in enumerate(plan.get("sections", []), start=1):
+        section = _normalize_planner_section(
+            raw,
+            index=idx,
+            question_ids=question_ids,
+            hypothesis_ids=hypothesis_ids,
+        )
+        if section:
+            sections.append(section)
 
     if not sections:
-        plan = _default_report_plan(query)
+        fallback_plan = _build_fallback_report_plan(query, state)
         sections = [
-            {**s, "section_order": i + 1} for i, s in enumerate(plan["sections"])
+            section
+            for idx, raw in enumerate(fallback_plan.get("sections", []), start=1)
+            if (
+                section := _normalize_planner_section(
+                    raw,
+                    index=idx,
+                    question_ids=question_ids,
+                    hypothesis_ids=hypothesis_ids,
+                )
+            )
         ]
-    else:
-        sections = sections[:5]
-        plan["sections"] = sections
+        plan = fallback_plan
 
+    unresolved_items = _normalize_unresolved_items(plan.get("unresolved_items"))
+    unresolved_question_ids = {
+        item.get("question_id")
+        for item in unresolved_items
+        if item.get("item_type") == "question" and item.get("question_id")
+    }
+    requested_visualizations = bool(
+        (state.get("report_constraints") or {}).get("requested_visualizations", False)
+    )
+    question_lookup = {
+        question.get("question_id"): question
+        for question in report_questions
+        if question.get("question_id")
+    }
+    question_to_section_ids: dict[str, list[str]] = {}
+    for section in sections:
+        for question_id in section.get("addresses_question_ids", []):
+            question_to_section_ids.setdefault(question_id, []).append(
+                section.get("section_id", "")
+            )
+
+    next_order = len(sections) + 1
+    for question_id in must_question_ids:
+        if (
+            question_id in question_to_section_ids
+            or question_id in unresolved_question_ids
+        ):
+            continue
+        question = question_lookup.get(question_id)
+        if not question:
+            continue
+        fallback_section = _build_fallback_question_section(
+            question,
+            order=next_order,
+            requested_visualizations=requested_visualizations,
+        )
+        sections.append(fallback_section)
+        question_to_section_ids.setdefault(question_id, []).append(
+            fallback_section["section_id"]
+        )
+        planning_risks.append(
+            f"Planner output omitted must-answer question {question_id}; added deterministic fallback section."
+        )
+        next_order += 1
+
+    covered_question_ids = sorted(question_to_section_ids)
+    unresolved_question_ids_sorted = sorted(unresolved_question_ids)
+    dropped_must_question_ids = [
+        question_id
+        for question_id in must_question_ids
+        if question_id not in question_to_section_ids
+        and question_id not in unresolved_question_ids
+    ]
+    coverage_summary = {
+        "must_question_ids": must_question_ids,
+        "covered_question_ids": covered_question_ids,
+        "unresolved_question_ids": unresolved_question_ids_sorted,
+        "dropped_must_question_ids": dropped_must_question_ids,
+        "question_to_section_ids": question_to_section_ids,
+    }
+
+    plan["title"] = str(plan.get("title", "")).strip() or f"Report: {query[:80]}"
+    plan["executive_summary_instruction"] = (
+        str(plan.get("executive_summary_instruction", "")).strip()
+        or "Summarize the most important grounded findings."
+    )
+    plan["conclusion_instruction"] = (
+        str(plan.get("conclusion_instruction", "")).strip()
+        or "Conclude with grounded findings, limitations, and cautious recommendations."
+    )
+    plan["sections"] = sections
+    plan["coverage_summary"] = coverage_summary
+    plan["unresolved_items"] = unresolved_items
     if domain_context:
         plan["domain_context"] = domain_context
+
+    planning_brief = _build_report_planning_brief(
+        state,
+        domain_context=domain_context,
+        answerable_question_ids=covered_question_ids,
+        unanswerable_question_ids=unresolved_question_ids_sorted,
+        planning_risks=planning_risks,
+    )
 
     return {
         "report_plan": plan,
         "_report_sections_planned": sections,
+        "report_planning_brief": planning_brief,
+        "report_question_coverage": coverage_summary,
+        "report_unresolved_items": unresolved_items,
         "report_status": "executing",
         "tool_history": [
             {
                 "tool": "report_planner",
                 "status": "ok",
                 "section_count": len(sections),
-                "used_profiler": bool(suggested),
+                "must_question_count": len(must_question_ids),
+                "unresolved_count": len(unresolved_items),
             }
         ],
     }
@@ -1159,7 +1858,7 @@ def _build_report_insight_messages(
     )
     domain_ctx = (state.get("report_data_profile") or {}).get("domain_summary", "")
     text_content = (
-        f"Original report request:\n{state.get('report_request') or state.get('user_query', '')}\n\n"
+        f"Original report request:\n{state.get('report_original_request') or state.get('report_request') or state.get('user_query', '')}\n\n"
         f"Section title:\n{section.get('title', '')}\n\n"
         f"Section analysis query:\n{section.get('analysis_query', '')}\n\n"
         f"Section analysis type:\n{section.get('analysis_type', 'descriptive')}\n\n"
@@ -1274,7 +1973,9 @@ def _apply_semantic_caveat(section: ReportSection, state: AgentState) -> ReportS
 
     insight_markdown = str(section.get("insight_markdown", "")).strip()
     is_vietnamese = _is_probably_vietnamese(
-        state.get("report_request") or state.get("user_query", "")
+        state.get("report_original_request")
+        or state.get("report_request")
+        or state.get("user_query", "")
     )
     if warnings:
         insight_markdown = _soften_overclaim_language(
@@ -1317,6 +2018,23 @@ def _deterministic_critic_issues(state: AgentState, report_draft: str) -> list[s
         r"^##\s+Recommendations\b", report_draft, flags=re.IGNORECASE | re.MULTILINE
     ):
         issues.append("Draft is missing the required '## Recommendations' section.")
+
+    unresolved_items = state.get("report_unresolved_items") or []
+    if unresolved_items and not re.search(
+        r"^##\s+Questions Requiring Follow-up\b",
+        report_draft,
+        flags=re.IGNORECASE | re.MULTILINE,
+    ):
+        issues.append(
+            "Draft is missing the required '## Questions Requiring Follow-up' section for unresolved user asks."
+        )
+
+    coverage_summary = state.get("report_question_coverage") or {}
+    dropped_must_question_ids = coverage_summary.get("dropped_must_question_ids") or []
+    if dropped_must_question_ids:
+        issues.append(
+            "Planner coverage is incomplete: at least one must-answer user question was not mapped or explained."
+        )
 
     lower_draft = report_draft.lower()
     strong_claim_markers = [
@@ -1376,7 +2094,8 @@ def section_pipeline_node(state: AgentState) -> AgentState:
     task_input: dict[str, Any] = {
         "task_id": section_id,
         "query": section.get("analysis_query", ""),
-        "original_user_query": state.get("report_request")
+        "original_user_query": state.get("report_original_request")
+        or state.get("report_request")
         or state.get("user_query", ""),
         "target_db_path": state.get("target_db_path", ""),
         "schema_context": schema_context,
@@ -1393,6 +2112,7 @@ def section_pipeline_node(state: AgentState) -> AgentState:
     report_section: ReportSection = {
         "section_id": section_id,
         "title": title,
+        "business_question": section.get("business_question", ""),
         "analysis_query": section.get("analysis_query", ""),
         "analysis_type": _normalize_analysis_type(
             section.get("analysis_type"),
@@ -1405,6 +2125,10 @@ def section_pipeline_node(state: AgentState) -> AgentState:
         "confidence_notes": section.get("confidence_notes", ""),
         "requires_visualization": bool(section.get("requires_visualization", True)),
         "section_order": section.get("section_order", 0),
+        "inclusion_reason": section.get("inclusion_reason", ""),
+        "addresses_question_ids": section.get("addresses_question_ids", []),
+        "tests_hypothesis_ids": section.get("tests_hypothesis_ids", []),
+        "must_include": bool(section.get("must_include", False)),
         "sql_result": result.get("sql_result", {}),
         "result_ref": result.get("result_ref"),
         "raw_result_ref": result.get("result_ref"),
@@ -1573,8 +2297,12 @@ def _section_writer_payload(section: ReportSection) -> dict[str, Any]:
     return {
         "section_id": section.get("section_id"),
         "title": section.get("title"),
+        "business_question": section.get("business_question"),
         "analysis_query": section.get("analysis_query"),
         "analysis_type": section.get("analysis_type", "descriptive"),
+        "inclusion_reason": section.get("inclusion_reason", ""),
+        "addresses_question_ids": section.get("addresses_question_ids", []),
+        "tests_hypothesis_ids": section.get("tests_hypothesis_ids", []),
         "status": section.get("status"),
         "analysis_status": section.get("analysis_status"),
         "section_confidence": section.get("section_confidence", "medium"),
@@ -1601,12 +2329,26 @@ def report_writer_node(state: AgentState) -> AgentState:
         default=str,
     )
     messages = prompt_manager.report_writer_messages(
-        query=state.get("report_request") or state.get("user_query", ""),
+        query=state.get("report_original_request")
+        or state.get("report_request")
+        or state.get("user_query", ""),
         report_plan=report_plan,
         section_results=section_results,
         critic_feedback=state.get("critic_feedback", ""),
         domain_context=(state.get("report_data_profile") or {}).get(
             "domain_summary", ""
+        ),
+        coverage_summary=json.dumps(
+            state.get("report_question_coverage", {}),
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        ),
+        unresolved_items=json.dumps(
+            state.get("report_unresolved_items", []),
+            ensure_ascii=False,
+            indent=2,
+            default=str,
         ),
     )
 
@@ -1629,18 +2371,7 @@ def report_writer_node(state: AgentState) -> AgentState:
         logger.warning("Report writer failed: {error}", error=str(exc))
 
     if not report_draft:
-        lines = [f"# {state.get('report_plan', {}).get('title', 'Report')}"]
-        for section in state.get("report_sections", []):
-            lines.append(f"## {section.get('title', 'Section')}")
-            if section.get("status") == "failed":
-                lines.append(
-                    f"Mục này thất bại: {section.get('error', 'Unknown error')}"
-                )
-            else:
-                lines.append(
-                    section.get("insight_markdown", "Không có insight cho mục này.")
-                )
-        report_draft = "\n\n".join(lines)
+        report_draft = _build_safe_report_markdown(state)
 
     report_draft = _cleanup_report_markdown(report_draft)
     report_draft = _ensure_report_recommendations(report_draft, state)
@@ -1673,8 +2404,11 @@ def _section_critic_payload(section: ReportSection) -> dict[str, Any]:
     return {
         "section_id": section.get("section_id"),
         "title": section.get("title"),
+        "business_question": section.get("business_question"),
         "status": section.get("status"),
         "analysis_type": section.get("analysis_type", "descriptive"),
+        "addresses_question_ids": section.get("addresses_question_ids", []),
+        "tests_hypothesis_ids": section.get("tests_hypothesis_ids", []),
         "section_confidence": section.get("section_confidence", "medium"),
         "insight_markdown": _truncate_text(section.get("insight_markdown", ""), 3000),
         "citations": section.get("insight_citations", []),
@@ -1706,9 +2440,23 @@ def report_critic_node(state: AgentState) -> AgentState:
         client = LLMClient.from_env()
         response = client.chat_completion(
             messages=prompt_manager.report_critic_messages(
-                query=state.get("report_request") or state.get("user_query", ""),
+                query=state.get("report_original_request")
+                or state.get("report_request")
+                or state.get("user_query", ""),
                 section_results=section_results,
                 report_draft=report_draft,
+                coverage_summary=json.dumps(
+                    state.get("report_question_coverage", {}),
+                    ensure_ascii=False,
+                    indent=2,
+                    default=str,
+                ),
+                unresolved_items=json.dumps(
+                    state.get("report_unresolved_items", []),
+                    ensure_ascii=False,
+                    indent=2,
+                    default=str,
+                ),
             ),
             model=settings.model_report_critic,
             temperature=0.0,
@@ -1861,9 +2609,10 @@ def build_report_subgraph():
 
     Flow:
         START
+          → report_request_grounder (LLM: preserve original objective/questions/hypotheses)
           → profiler_sampler (SQL: 100 random rows + column stats)
           → profiler_analyzer (LLM: domain context + suggested sections)
-          → report_planner (plan → _report_sections_planned)
+          → report_planner (mandatory planner with coverage mapping)
           → [fan_out_sections] ──Send()──→ section_pipeline (per-section: SQL → sandbox → insight)
           → sections_sort (fan-in: collect + sort)
           → report_writer
@@ -1872,6 +2621,10 @@ def build_report_subgraph():
     """
     builder = StateGraph(AgentState)
 
+    builder.add_node(
+        "report_request_grounder",
+        _instrument_node("report_request_grounder_node", report_request_grounder_node),
+    )
     builder.add_node(
         "profiler_sampler",
         _instrument_node("profiler_sampler_node", profiler_sampler_node),
@@ -1906,7 +2659,8 @@ def build_report_subgraph():
     )
 
     # Edges
-    builder.add_edge(START, "profiler_sampler")
+    builder.add_edge(START, "report_request_grounder")
+    builder.add_edge("report_request_grounder", "profiler_sampler")
     builder.add_edge("profiler_sampler", "profiler_analyzer")
     builder.add_edge("profiler_analyzer", "report_planner")
 

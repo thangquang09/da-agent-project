@@ -37,6 +37,8 @@ class FakeV3LLMClient:
             return self._leader_response(user)
         if "Bạn là Task Grounder" in system or "You are Task Grounder" in system:
             return self._task_grounder_response(user)
+        if "You are the Report Request Grounder" in system:
+            return self._report_request_grounder_response(user)
         if "You are a data domain analyst." in system:
             return self._report_data_profiler_response(user)
         if "You are a data analysis report planner." in system:
@@ -150,6 +152,28 @@ class FakeV3LLMClient:
             ]
         }
 
+    def _report_request_grounder_response(self, user: str) -> dict:
+        query = self._extract_report_request(user)
+        payload = {
+            "objective": query,
+            "questions": [],
+            "hypotheses": [],
+            "constraints": {
+                "output_language": "vi",
+                "requested_visualizations": REPORT_WITH_VIZ_QUERY in query,
+                "requested_sections": [],
+                "excluded_topics": [],
+                "time_scope": None,
+                "answer_style": "analyst",
+            },
+            "followup_notes": "",
+        }
+        return {
+            "choices": [
+                {"message": {"content": json.dumps(payload, ensure_ascii=False)}}
+            ]
+        }
+
     def _report_planner_response(self, user: str) -> dict:
         payload = {
             "title": "Báo cáo phân tích dữ liệu học sinh",
@@ -158,25 +182,38 @@ class FakeV3LLMClient:
                 {
                     "section_id": "1",
                     "title": "Cơ cấu giới tính",
+                    "business_question": "Có bao nhiêu học sinh nam và bao nhiêu học sinh nữ trong tập dữ liệu này?",
                     "analysis_query": "Có bao nhiêu học sinh nam và bao nhiêu học sinh nữ trong tập dữ liệu này?",
                     "analysis_type": "comparative",
                     "target_metrics": ["student_count"],
                     "target_dimensions": ["gender"],
                     "expected_grain": "gender",
                     "confidence_notes": "Counts are straightforward if grouping is preserved.",
+                    "inclusion_reason": "Provides the main demographic split in the dataset.",
+                    "addresses_question_ids": [],
+                    "tests_hypothesis_ids": [],
                 },
                 {
                     "section_id": "2",
                     "title": "Điểm toán trung bình",
+                    "business_question": "Điểm toán (math score) trung bình của toàn bộ học sinh là bao nhiêu?",
                     "analysis_query": "Điểm toán (math score) trung bình của toàn bộ học sinh là bao nhiêu?",
                     "analysis_type": "descriptive",
                     "target_metrics": ["average_math_score"],
                     "target_dimensions": [],
                     "expected_grain": "dataset",
                     "confidence_notes": "Average score should remain descriptive.",
+                    "inclusion_reason": "Summarizes the primary academic outcome in the dataset.",
+                    "addresses_question_ids": [],
+                    "tests_hypothesis_ids": [],
                 },
             ],
             "conclusion_instruction": "Kết luận ngắn gọn dựa trên dữ liệu.",
+            "coverage_summary": {
+                "covered_question_ids": [],
+                "unanswered_question_ids": [],
+            },
+            "unresolved_items": [],
         }
         return {
             "choices": [
@@ -360,6 +397,12 @@ class FakeV3LLMClient:
                 if marker in tail:
                     tail = tail.split(marker, 1)[0]
             return tail.strip()
+        return user.strip()
+
+    def _extract_report_request(self, user: str) -> str:
+        marker = "Report request:\n"
+        if marker in user:
+            return user.split(marker, 1)[1].split("\n\n", 1)[0].strip()
         return user.strip()
 
     def _extract_sql_question(self, user: str) -> str:

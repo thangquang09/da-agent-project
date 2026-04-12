@@ -90,6 +90,109 @@ class TaskState(TypedDict, total=False):
     thread_id: str
 
 
+class ReportQuestion(TypedDict, total=False):
+    question_id: str
+    text: str
+    priority: Literal["must", "should"]
+    source: Literal["current_query", "session"]
+    intent_type: Literal[
+        "descriptive",
+        "comparison",
+        "trend",
+        "diagnostic",
+        "ranking",
+        "distribution",
+        "correlation",
+    ]
+    entities: list[str]
+    time_scope: str | None
+    requested_metrics: list[str]
+    requested_dimensions: list[str]
+
+
+class ReportHypothesis(TypedDict, total=False):
+    hypothesis_id: str
+    text: str
+    priority: Literal["must", "should"]
+    source: Literal["current_query", "session"]
+    test_type: Literal["compare", "trend", "correlation", "explore"]
+    entities: list[str]
+
+
+class ReportConstraint(TypedDict, total=False):
+    output_language: str
+    requested_visualizations: bool
+    requested_sections: list[str]
+    excluded_topics: list[str]
+    time_scope: str | None
+    answer_style: Literal["analyst", "executive", "technical"]
+
+
+class ReportFollowupContext(TypedDict, total=False):
+    followup_mode: Literal["fresh_query", "followup", "refine_previous_result"]
+    session_context_summary: str
+    last_action_summary: str
+    conversation_turn: int
+
+
+class ReportPlanningBrief(TypedDict, total=False):
+    original_request: str
+    objective: str
+    user_questions: list[ReportQuestion]
+    user_hypotheses: list[ReportHypothesis]
+    constraints: ReportConstraint
+    followup_context: ReportFollowupContext
+    answerable_question_ids: list[str]
+    risky_question_ids: list[str]
+    unanswerable_question_ids: list[str]
+    hypothesis_assessment: list[dict[str, Any]]
+    domain_context: str
+    planning_risks: list[str]
+
+
+class ReportCoverageSummary(TypedDict, total=False):
+    must_question_ids: list[str]
+    covered_question_ids: list[str]
+    unresolved_question_ids: list[str]
+    dropped_must_question_ids: list[str]
+    question_to_section_ids: dict[str, list[str]]
+
+
+class ReportUnresolvedItem(TypedDict, total=False):
+    item_type: Literal["question", "hypothesis"]
+    question_id: str
+    hypothesis_id: str
+    reason: str
+
+
+class SectionPlan(TypedDict, total=False):
+    section_id: str
+    title: str
+    business_question: str
+    analysis_query: str
+    analysis_type: Literal[
+        "descriptive",
+        "comparative",
+        "trend",
+        "distribution",
+        "composition",
+        "correlation",
+        "cohort",
+        "funnel",
+    ]
+    target_metrics: list[str]
+    target_dimensions: list[str]
+    expected_grain: str
+    confidence_notes: str
+    requires_visualization: bool
+    section_order: int
+    inclusion_reason: str
+    addresses_question_ids: list[str]
+    tests_hypothesis_ids: list[str]
+    must_include: bool
+    status: Literal["pending", "done", "failed"]
+
+
 class AnswerPayload(TypedDict, total=False):
     answer: str
     report_markdown: str | None
@@ -170,6 +273,15 @@ class AgentState(TypedDict, total=False):
     ]  # {result_id, row_count, columns, sample, stats, has_full_data, full_data_path}
     response_mode: ResponseMode
     report_request: str
+    report_original_request: str
+    report_user_objective: str
+    report_user_questions: list[ReportQuestion]
+    report_user_hypotheses: list[ReportHypothesis]
+    report_constraints: ReportConstraint
+    report_followup_context: ReportFollowupContext
+    report_planning_brief: ReportPlanningBrief
+    report_question_coverage: ReportCoverageSummary
+    report_unresolved_items: list[ReportUnresolvedItem]
     report_plan: "ReportPlan"
     report_sections: list["ReportSection"]
     report_draft: str
@@ -189,9 +301,9 @@ class AgentState(TypedDict, total=False):
         list["ReportSection"], operator.add
     ]  # fan-in reducer target from Send()
     _report_sections_planned: list[
-        "ReportSection"
+        SectionPlan
     ]  # planner output → fan_out_sections reads this
-    _current_section: "ReportSection"  # per-section Send() payload
+    _current_section: SectionPlan  # per-section Send() payload
     critic_decision: Literal["revise", "finalize"]  # explicit routing field
 
 
@@ -224,6 +336,7 @@ class GraphOutputState(TypedDict, total=False):
 class ReportSection(TypedDict, total=False):
     section_id: str
     title: str
+    business_question: str
     analysis_query: str
     analysis_type: Literal[
         "descriptive",
@@ -241,6 +354,10 @@ class ReportSection(TypedDict, total=False):
     confidence_notes: str
     requires_visualization: bool  # planner decides; False = skip sandbox chart
     section_order: int  # original planner order for reassembly after Send() fan-in
+    inclusion_reason: str
+    addresses_question_ids: list[str]
+    tests_hypothesis_ids: list[str]
+    must_include: bool
     sql_result: dict[str, Any]
     result_ref: dict[str, Any] | None
     raw_result_ref: dict[str, Any] | None
@@ -268,6 +385,8 @@ class ReportSection(TypedDict, total=False):
 class ReportPlan(TypedDict, total=False):
     title: str
     executive_summary_instruction: str
-    sections: list[ReportSection]
+    sections: list[SectionPlan]
     conclusion_instruction: str
     domain_context: str  # profiler-derived domain summary passed to writer
+    coverage_summary: ReportCoverageSummary
+    unresolved_items: list[ReportUnresolvedItem]

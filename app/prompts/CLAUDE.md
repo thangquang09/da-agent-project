@@ -20,6 +20,7 @@ All LLM prompts are centralized in this folder. Each prompt is defined as a `Pro
 | `visualization.py` | `VISUALIZATION_CODE_GENERATION_PROMPT` | Generates Python visualization code | **Active** |
 | `continuity.py` | `CONTINUITY_DETECTION_PROMPT_DEFINITION` | Detects implicit follow-up queries | **Active** |
 | `evaluation.py` | `GROUNDEDNESS_EVALUATION_PROMPT` | Evaluates answer groundedness | **Active** |
+| `report_request_grounder.py` | `REPORT_REQUEST_GROUNDER_PROMPT_DEFINITION` | Grounds raw report requests into objective/questions/hypotheses/constraints | **Active** |
 | `report_data_profiler.py` | `REPORT_DATA_PROFILER_PROMPT_DEFINITION` | Analyzes sample rows + column stats for domain summary | **Active** |
 | `report_planner.py` | `REPORT_PLANNER_PROMPT_DEFINITION` | Plans multi-section report structure | **Active** |
 | `report_insight.py` | `REPORT_INSIGHT_PROMPT_DEFINITION` | Writes grounded section insights from stats + chart | **Active** |
@@ -55,16 +56,17 @@ Prompts use `{{variable}}` syntax for variable substitution. Conditional blocks 
 
 ## Report Prompt Roles
 
-Report generation is an 8-node pipeline using LangGraph `Send()` for per-section fan-out:
+Report generation is a grounded pipeline using LangGraph `Send()` for per-section fan-out:
 
-1. `profiler_sampler` — runs `SELECT * FROM table ORDER BY RANDOM() LIMIT 100` + column stats. Pure SQL, no LLM.
-2. `profiler_analyzer` — LLM reads schema + sample data + business_context to produce domain summary + suggested sections.
-3. `report_planner` — builds `ReportPlan` with `domain_context`.
-4. `section_pipeline` (via `Send()` fan-out) — each section independently: SQL → sandbox → insight generation.
-5. `sections_sort` — reassembles sections in planner order.
-6. `report_writer` — synthesizes Executive Summary + Recommendations from grounded insights.
-7. `report_critic` — validates grounding. Max 2 revisions.
-8. `report_finalize` — packages final markdown + section payloads.
+1. `report_request_grounder` — preserves raw report objective, explicit questions, hypotheses, and follow-up context.
+2. `profiler_sampler` — runs `SELECT * FROM table LIMIT 100` + whole-table column stats. Pure SQL, no LLM.
+3. `profiler_analyzer` — LLM reads schema + sample data + business_context to produce domain summary + suggested analytical directions.
+4. `report_planner` — mandatory planner that maps must-answer questions to sections or unresolved items.
+5. `section_pipeline` (via `Send()` fan-out) — each section independently: SQL → sandbox → insight generation.
+6. `sections_sort` — reassembles sections in planner order.
+7. `report_writer` — assembles the report with coverage summary and unresolved-item context.
+8. `report_critic` — validates grounding and coverage. Max 2 revisions.
+9. `report_finalize` — packages final markdown + section payloads.
 
 ## Design Principles
 
