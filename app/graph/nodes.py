@@ -1133,7 +1133,7 @@ def _evaluate_artifacts(state: AgentState) -> AgentState:
         )
     elif not missing_types and artifacts:
         decision = "finalize"
-        reason = f"all capabilities covered: {collected_types}"
+        reason = "all capabilities covered: " + ", ".join(sorted(collected_types))
     elif task_mode == "ambiguous" or task_confidence == "low":
         # Ambiguous / low-confidence task — stop and ask the user
         clarification_question = _generate_clarification_question(
@@ -2683,14 +2683,17 @@ def _save_turn_artifacts(
     if response_mode == "report":
         report_md = final_payload.get("report_markdown")
         if report_md:
-            # Save report markdown to file
-            from app.artifacts.helpers import save_report_markdown_to_file
+            result_metadata = final_payload.get("result_metadata") or {}
+            report_md_path = result_metadata.get("report_markdown_path")
+            if not report_md_path:
+                # Save report markdown to file
+                from app.artifacts.helpers import save_report_markdown_to_file
 
-            report_md_path = save_report_markdown_to_file(
-                markdown=report_md,
-                thread_id=thread_id,
-                turn_number=assistant_turn_number,
-            )
+                report_md_path = save_report_markdown_to_file(
+                    markdown=report_md,
+                    thread_id=thread_id,
+                    turn_number=assistant_turn_number,
+                )
             raw_sections = final_payload.get("report_sections", [])
             sections_data = []
             for s in raw_sections:

@@ -21,8 +21,11 @@ All LLM prompts are centralized in this folder. Each prompt is defined as a `Pro
 | `continuity.py` | `CONTINUITY_DETECTION_PROMPT_DEFINITION` | Detects implicit follow-up queries | **Active** |
 | `evaluation.py` | `GROUNDEDNESS_EVALUATION_PROMPT` | Evaluates answer groundedness | **Active** |
 | `report_request_grounder.py` | `REPORT_REQUEST_GROUNDER_PROMPT_DEFINITION` | Grounds raw report requests into objective/questions/hypotheses/constraints | **Active** |
-| `report_data_profiler.py` | `REPORT_DATA_PROFILER_PROMPT_DEFINITION` | Analyzes sample rows + column stats for domain summary | **Active** |
+| `report_data_profiler.py` | `REPORT_DATA_PROFILER_PROMPT_DEFINITION` | Profiles sampled tables into dataset affordances and risks | **Active** |
+| `report_brief_builder.py` | `REPORT_BRIEF_BUILDER_PROMPT_DEFINITION` | Reconciles user asks with dataset affordances before planning | **Active** |
 | `report_planner.py` | `REPORT_PLANNER_PROMPT_DEFINITION` | Plans multi-section report structure | **Active** |
+| `report_claim_builder.py` | `REPORT_CLAIM_BUILDER_PROMPT_DEFINITION` | Converts evidence packets into grounded claim packets | **Active** |
+| `report_section_narrator.py` | `REPORT_SECTION_NARRATOR_PROMPT_DEFINITION` | Renders thin section narratives from claim packets | **Active** |
 | `report_insight.py` | `REPORT_INSIGHT_PROMPT_DEFINITION` | Writes grounded section insights from stats + chart | **Active** |
 | `report_writer.py` | `REPORT_WRITER_PROMPT_DEFINITION` | Assembles full Markdown report from insights | **Active** |
 | `report_critic.py` | `REPORT_CRITIC_PROMPT_DEFINITION` | Reviews report for unsupported claims | **Active** |
@@ -60,13 +63,14 @@ Report generation is a grounded pipeline using LangGraph `Send()` for per-sectio
 
 1. `report_request_grounder` — preserves raw report objective, explicit questions, hypotheses, and follow-up context.
 2. `profiler_sampler` — runs `SELECT * FROM table LIMIT 100` + whole-table column stats. Pure SQL, no LLM.
-3. `profiler_analyzer` — LLM reads schema + sample data + business_context to produce domain summary + suggested analytical directions.
-4. `report_planner` — mandatory planner that maps must-answer questions to sections or unresolved items.
-5. `section_pipeline` (via `Send()` fan-out) — each section independently: SQL → sandbox → insight generation.
-6. `sections_sort` — reassembles sections in planner order.
-7. `report_writer` — assembles the report with coverage summary and unresolved-item context.
-8. `report_critic` — validates grounding and coverage. Max 2 revisions.
-9. `report_finalize` — packages final markdown + section payloads.
+3. `report_dataset_profiler` — LLM reads schema + sample data + business_context to produce dataset affordances and risks.
+4. `report_brief_builder` — marks which user asks are answerable, risky, or unanswerable before planning.
+5. `report_planner` — mandatory planner that maps must-answer questions to sections or unresolved items.
+6. `section_pipeline` (via `Send()` fan-out) — each section independently runs retrieval planning → evidence execution → evidence packet building → chart artifact save → claim building → thin narration.
+7. `sections_sort` — reassembles sections in planner order.
+8. `report_assembler` — assembles the report with coverage summary, unresolved items, claims, and evidence.
+9. `report_validator` — validates coverage, claim grounding, structure, and warning semantics. Max 2 revisions.
+10. `report_finalize` — packages final markdown + section payloads and saves report markdown under the same artifact turn as report charts.
 
 ## Design Principles
 

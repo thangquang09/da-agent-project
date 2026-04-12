@@ -141,19 +141,54 @@ class AnswerPayload(TypedDict, total=False):
 | `report_user_hypotheses` | `list[ReportHypothesis]` | Explicit hypotheses extracted from the request |
 | `report_constraints` | `ReportConstraint` | Output language, viz preference, section/style constraints |
 | `report_followup_context` | `ReportFollowupContext` | Follow-up mode + summarized session context for report planning |
+| `dataset_profile` | `DatasetProfile` | Dataset affordances, selected tables, and profiling risks derived before planning |
 | `report_planning_brief` | `ReportPlanningBrief` | Structured brief passed into the planner |
 | `report_question_coverage` | `ReportCoverageSummary` | Coverage proof for must-answer questions |
 | `report_unresolved_items` | `list[ReportUnresolvedItem]` | Required asks the planner could not cover directly |
 | `report_plan` | `ReportPlan` | Planned sections (includes `domain_context`, coverage summary, unresolved items) |
-| `report_sections` | `list[ReportSection]` | Executed sections |
-| `report_draft` | `str` | Writer output |
+| `report_sections` | `list[ReportSection]` | Executed sections with `plan`, `evidence_packets`, `claims`, visualization, and narrative |
+| `report_draft` | `str` | Assembler output |
 | `report_final` | `str` | Finalized report |
-| `critic_feedback` | `str` | Critic evaluation |
-| `critic_iteration` | `int` | Number of revisions |
+| `critic_feedback` | `str` | Validator/critic feedback kept for compatibility |
+| `critic_iteration` | `int` | Number of assembler revision attempts |
 | `report_confidence_rationale` | `str` | Human-readable explanation for the final report confidence |
 | `report_status` | `ReportStatus` | `"planning"` → `"executing"` → `"insighting"` → `"writing"` → `"critiquing"` → `"done"` |
 | `report_sample_data` | `dict[str, Any]` | Output of `profiler_sampler_node`: 100 random rows + column stats per table |
-| `report_data_profile` | `dict[str, Any]` | Output of `profiler_analyzer_node`: domain summary, key metrics, suggested sections |
+| `report_data_profile` | `dict[str, Any]` | Legacy compatibility alias to `dataset_profile` during the rebuild |
+
+### `DatasetProfile` structure
+
+```python
+class DatasetProfile(TypedDict, total=False):
+    candidate_tables: list[str]
+    selected_tables: list[str]
+    table_profiles: list[dict[str, Any]]
+    join_hints: list[dict[str, Any]]
+    profiling_risks: list[str]
+    dataset_summary: str
+    key_metrics: list[str]
+    key_dimensions: list[str]
+    analytical_angles: list[str]
+```
+
+### `ReportPlanningBrief` additions
+
+```python
+class ReportPlanningBrief(TypedDict, total=False):
+    original_request: str
+    objective: str
+    user_questions: list[ReportQuestion]
+    user_hypotheses: list[ReportHypothesis]
+    constraints: ReportConstraint
+    followup_context: ReportFollowupContext
+    answerable_question_ids: list[str]
+    risky_question_ids: list[str]
+    unanswerable_question_ids: list[str]
+    hypothesis_assessment: list[dict[str, Any]]
+    domain_context: str
+    planning_risks: list[str]
+    suggested_analytical_directions: list[str]
+```
 
 ### `ReportSection` structure
 
@@ -161,6 +196,7 @@ class AnswerPayload(TypedDict, total=False):
 class ReportSection(TypedDict, total=False):
     section_id: str
     title: str
+    plan: SectionPlan
     business_question: str
     analysis_query: str
     analysis_type: Literal["descriptive", "comparative", "trend", "distribution", "composition", "correlation", "cohort", "funnel"]
@@ -174,12 +210,17 @@ class ReportSection(TypedDict, total=False):
     tests_hypothesis_ids: list[str]
     must_include: bool
     sql_result: dict[str, Any]
+    evidence_requests: list[EvidenceRequest]
+    evidence_packets: list[EvidencePacket]
+    claims: list[ClaimPacket]
     computed_stats: dict[str, Any] | None
-    chart_image: dict[str, Any] | None
+    visualization: dict[str, Any] | None
     chart_manifest: dict[str, Any] | None
+    narrative: str
     insight_markdown: str
     insight_citations: list[dict[str, Any]]
     limitations: list[str]
+    validation: dict[str, Any]
     semantic_warnings: list[str]
     semantic_status: Literal["ok", "warning", "failed"]
     section_confidence: Literal["low", "medium", "high"]
@@ -189,7 +230,51 @@ class ReportSection(TypedDict, total=False):
     generated_sql: str
     validated_sql: str
     section_order: int  # Original planner position for sorting after fan-in
-    critic_decision: str  # Feedback from report_critic node
+```
+
+### `EvidenceRequest`, `EvidencePacket`, and `ClaimPacket`
+
+```python
+class EvidenceRequest(TypedDict, total=False):
+    request_id: str
+    section_id: str
+    purpose: str
+    request_type: Literal["metric", "breakdown", "trend", "comparison", "anomaly"]
+    metric_specs: list[dict[str, Any]]
+    dimension_specs: list[dict[str, Any]]
+    filter_specs: list[dict[str, Any]]
+    expected_grain: str
+    analysis_query: str
+
+
+class EvidencePacket(TypedDict, total=False):
+    packet_id: str
+    section_id: str
+    request_id: str
+    sql: str
+    validated_sql: str
+    row_count: int
+    result_ref: dict[str, Any] | None
+    grouped_rows: list[dict[str, Any]]
+    series_rows: list[dict[str, Any]]
+    comparisons: list[dict[str, Any]]
+    metrics: dict[str, Any]
+    denominators: dict[str, Any]
+    grain: str
+    quality_warnings: list[str]
+    evidence_paths: list[str]
+    underlying_observation_count: int | None
+
+
+class ClaimPacket(TypedDict, total=False):
+    claim_id: str
+    section_id: str
+    claim_type: Literal["observation", "comparison", "trend", "hypothesis"]
+    text: str
+    evidence_refs: list[str]
+    caveats: list[str]
+    confidence: Literal["low", "medium", "high"]
+    recommendation_ready: bool
 ```
 
 ### `ReportPlan` structure

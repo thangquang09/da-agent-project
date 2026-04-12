@@ -10,47 +10,29 @@ REPORT_DATA_PROFILER_PROMPT_DEFINITION = PromptDefinition(
         {
             "role": "system",
             "content": (
-                "You are a data domain analyst. Given a database schema, ACTUAL sample rows "
-                "from the database, and a user's report request, your job is to identify:\n"
-                "1. The core analytical question behind the request.\n"
-                "2. The key metrics and dimensions available — backed by REAL values you can see "
-                "in the sample data.\n"
-                "3. Important columns that suggest a specific analytical angle "
-                "(e.g., a boolean/0-1 column often signals classification analysis; "
-                "a revenue/amount column signals financial analysis; "
-                "a date column enables trend analysis).\n"
-                "4. What sections a professional Data Analyst would include in the final report "
-                "for this specific dataset and question.\n\n"
+                "You are a dataset profiler for a grounded analytics report system. Given a database schema, ACTUAL sample rows from the database, and a user's report request, identify the dataset affordances only.\n\n"
                 "Rules:\n"
                 "- Return JSON only.\n"
                 "- Do not invent columns that don't exist in the schema.\n"
-                "- Be specific about column names when naming metrics.\n"
-                "- USE the sample data to inform your analysis: look at actual value ranges, "
-                "distributions, and data types to make better section suggestions.\n"
-                "- Each analysis_query must be a SPECIFIC natural-language question that a SQL "
-                "worker can answer (e.g., 'What is the average spending score distribution "
-                "grouped by customer segment?').\n"
+                "- Use the sample data to identify likely metrics, likely dimensions, time columns, and data quality risks.\n"
+                "- Do not plan final report sections and do not emit analysis_query strings.\n"
+                "- Table profiles should describe what the data can support, not what the final narrative should be.\n"
                 "- Output shape: {\n"
-                '    "domain_summary": "...",\n'
+                '    "candidate_tables": ["table_a", "table_b"],\n'
+                '    "selected_tables": ["table_a"],\n'
+                '    "table_profiles": [\n'
+                '        {"table_name": "...", "row_estimate": 0, "columns": ["..."], "likely_metrics": ["..."], "likely_dimensions": ["..."], "time_columns": ["..."], "notes": "..."}\n'
+                "    ],\n"
+                '    "join_hints": [{"left_table": "...", "right_table": "...", "keys": ["..."], "reason": "..."}],\n'
+                '    "profiling_risks": ["..."],\n'
+                '    "dataset_summary": "...",\n'
                 '    "key_metrics": ["col1", "col2"],\n'
                 '    "key_dimensions": ["col1", "col2"],\n'
-                '    "analytical_angles": ["churn analysis", "segmentation", "..."],\n'
-                '    "suggested_sections": [\n'
-                '        {"title": "...", "rationale": "...", "analysis_query": "...", '
-                '"analysis_type": "descriptive|comparative|trend|distribution|composition|correlation|cohort|funnel", '
-                '"target_metrics": ["..."], "target_dimensions": ["..."], '
-                '"expected_grain": "...", "confidence_notes": "...", '
-                '"requires_visualization": true|false}\n'
-                "    ]\n"
+                '    "analytical_angles": ["...", "..."]\n'
                 "}\n"
-                "- suggested_sections must be ordered from most to least important.\n"
-                "- analysis_type must reflect the primary analytical shape of the section.\n"
-                "- target_metrics and target_dimensions must reference only columns present in the schema when possible.\n"
-                "- expected_grain should describe the intended unit of analysis (e.g. per customer, per month, per segment).\n"
-                "- confidence_notes should capture important caveats the downstream writer/critic should remember.\n"
-                "- requires_visualization should be true only for sections showing distributions, "
-                "trends, comparisons, or segmentation. False for simple counts or tabular lookups.\n"
-                "- Generate 3-5 sections that together form a coherent analytical narrative.\n"
+                "- candidate_tables should include the tables that appear relevant to the request.\n"
+                "- selected_tables should be the subset most likely to matter for the report.\n"
+                "- profiling_risks should call out sparse data, unclear joins, missing time columns, or weak metric coverage.\n"
             ),
         },
         {

@@ -76,7 +76,7 @@ DA Agent Lab — Hybrid Architecture v3
 | `leader_agent`            | `nodes.py:1535`      | `agent`  | Tool-calling loop 5 bước            |
 | `artifact_evaluator`      | `nodes.py:1023`      | `agent`  | Deterministic eval của artifacts    |
 | `clarify_question_node`   | `nodes.py:878`       | `memory` | Interrupt, hỏi user làm rõ          |
-| `report_subgraph`         | `report_subgraph.py` | subgraph | profiler_sampler→profiler_analyzer→report_planner→[Send fan-out section_pipeline]→sections_sort→report_writer→report_critic→report_finalize |
+| `report_subgraph`         | `report_subgraph.py` | subgraph | request_grounder→profiler_sampler→dataset_profiler→brief_builder→report_planner→[Send fan-out section_pipeline]→sections_sort→report_assembler→report_validator→report_finalize |
 | `capture_action_node`     | `nodes.py`           | `memory` | Ghi nhận final action               |
 | `compact_and_save_memory` | `nodes.py`           | `memory` | Tóm tắt + lưu memory                |
 

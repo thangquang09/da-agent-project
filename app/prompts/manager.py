@@ -16,12 +16,17 @@ from app.prompts.decomposition import TASK_DECOMPOSITION_PROMPT
 from app.prompts.evaluation import GROUNDEDNESS_EVALUATION_PROMPT
 from app.prompts.fallback import FALLBACK_ASSISTANT_PROMPT
 from app.prompts.leader import LEADER_AGENT_PROMPT_DEFINITION
+from app.prompts.report_brief_builder import REPORT_BRIEF_BUILDER_PROMPT_DEFINITION
+from app.prompts.report_claim_builder import REPORT_CLAIM_BUILDER_PROMPT_DEFINITION
 from app.prompts.report_critic import REPORT_CRITIC_PROMPT_DEFINITION
 from app.prompts.report_data_profiler import REPORT_DATA_PROFILER_PROMPT_DEFINITION
 from app.prompts.report_insight import REPORT_INSIGHT_PROMPT_DEFINITION
 from app.prompts.report_planner import REPORT_PLANNER_PROMPT_DEFINITION
 from app.prompts.report_request_grounder import (
     REPORT_REQUEST_GROUNDER_PROMPT_DEFINITION,
+)
+from app.prompts.report_section_narrator import (
+    REPORT_SECTION_NARRATOR_PROMPT_DEFINITION,
 )
 from app.prompts.report_writer import REPORT_WRITER_PROMPT_DEFINITION
 from app.prompts.sql_worker import SQL_WORKER_GENERATION_PROMPT
@@ -296,12 +301,39 @@ class PromptManager:
             },
         )
 
+    def report_brief_builder_messages(
+        self,
+        report_original_request: str,
+        report_user_objective: str = "",
+        report_user_questions: str = "",
+        report_user_hypotheses: str = "",
+        report_constraints: str = "",
+        report_followup_context: str = "",
+        dataset_profile: str = "",
+        table_contexts: str = "",
+        sample_data_summary: str = "",
+    ) -> list[dict[str, str]]:
+        return self._compile_prompt(
+            REPORT_BRIEF_BUILDER_PROMPT_DEFINITION,
+            {
+                "report_original_request": report_original_request,
+                "report_user_objective": report_user_objective or "",
+                "report_user_questions": report_user_questions or "",
+                "report_user_hypotheses": report_user_hypotheses or "",
+                "report_constraints": report_constraints or "",
+                "report_followup_context": report_followup_context or "",
+                "dataset_profile": dataset_profile or "",
+                "table_contexts": table_contexts or "",
+                "sample_data_summary": sample_data_summary or "",
+            },
+        )
+
     def report_planner_messages(
         self,
         query: str,
         planning_brief: str = "",
         xml_database_context: str = "",
-        profiler_guidance: str = "",
+        dataset_profile: str = "",
         sample_data_summary: str = "",
     ) -> list[dict[str, str]]:
         return self._compile_prompt(
@@ -310,7 +342,7 @@ class PromptManager:
                 "query": query,
                 "planning_brief": planning_brief or "",
                 "xml_database_context": xml_database_context or "",
-                "profiler_guidance": profiler_guidance or "",
+                "dataset_profile": dataset_profile or "",
                 "sample_data_summary": sample_data_summary or "",
             },
         )
@@ -335,6 +367,36 @@ class PromptManager:
                 "domain_context": domain_context or "",
                 "coverage_summary": coverage_summary or "",
                 "unresolved_items": unresolved_items or "",
+            },
+        )
+
+    def report_claim_builder_messages(
+        self,
+        query: str,
+        section_plan: str,
+        evidence_packets: str,
+    ) -> list[dict[str, str]]:
+        return self._compile_prompt(
+            REPORT_CLAIM_BUILDER_PROMPT_DEFINITION,
+            {
+                "query": query,
+                "section_plan": section_plan,
+                "evidence_packets": evidence_packets,
+            },
+        )
+
+    def report_section_narrator_messages(
+        self,
+        query: str,
+        section_plan: str,
+        claims: str,
+    ) -> list[dict[str, str]]:
+        return self._compile_prompt(
+            REPORT_SECTION_NARRATOR_PROMPT_DEFINITION,
+            {
+                "query": query,
+                "section_plan": section_plan,
+                "claims": claims,
             },
         )
 

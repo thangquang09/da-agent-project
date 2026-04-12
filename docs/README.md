@@ -21,7 +21,7 @@ DA Agent Lab — Hybrid Architecture v3
 | `clarify_question_node`   | Interrupt  | Halt → show `[CLARIFY]` question → **END** (no memory save)         |
 | `capture_action_node`     | Memory     | Save `last_action`, `conversation_turn`                             |
 | `compact_and_save_memory` | Memory     | Persist to PostgreSQL (agent schema)                                |
-| `report_subgraph`         | Subgraph   | 8-node Send() pipeline: profiler_sampler → profiler_analyzer → report_planner → [Send fan-out section_pipeline] → sections_sort → report_writer → report_critic → report_finalize |
+| `report_subgraph`         | Subgraph   | Rebuilt evidence-first pipeline: report_request_grounder → profiler_sampler → report_dataset_profiler → report_brief_builder → report_planner → [Send fan-out section_pipeline] → sections_sort → report_assembler → report_validator → report_finalize |
 
 
 **Clarify interrupt**: khi `task_profile.confidence == "low"` hoặc `task_mode == "ambiguous"`, graph dừng tại `clarify_question_node` và chờ user input. Câu hỏi được generate tự động bằng heuristic tiếng Việt.

@@ -249,31 +249,33 @@ def inline_data_worker(task_state: TaskState) -> dict[str, Any]
 ### Graph Structure
 
 ```
-START → profiler_sampler → profiler_analyzer → report_planner
-                                              │
-                                              └─Send()→ section_pipeline (N parallel)
-                                                          ↓
-                                                     sections_sort
-                                                          ↓
-                                                     report_writer → report_critic
-                                                                           │
-                                              ┌────────────────────────────┘
-                                              ▼
-                                        report_finalize → END
+START → report_request_grounder → profiler_sampler → report_dataset_profiler → report_brief_builder → report_planner
+                                                                                                      │
+                                                                                                      └─Send()→ section_pipeline (N parallel)
+                                                                                                                  ↓
+                                                                                                             sections_sort
+                                                                                                                  ↓
+                                                                                                    report_assembler → report_validator
+                                                                                                                                   │
+                                                                                                      ┌────────────────────────────┘
+                                                                                                      ▼
+                                                                                                report_finalize → END
 ```
 
 ### Nodes
 
 | Node | Model | Purpose |
 |------|-------|---------|
+| `report_request_grounder` | `model_report_planner` | Preserve raw request, explicit questions, hypotheses, constraints, and follow-up context |
 | `profiler_sampler` | — | Sample 100 random rows + column stats from candidate tables |
-| `profiler_analyzer` | `model_report_data_profiler` | Infer domain context and suggest report sections from schema + samples |
-| `report_planner` | `model_report_planner` | Build section plan (usually from profiler suggestions) |
-| `section_pipeline` | `model_sql_worker` + sandbox + `model_report_writer` | Per-section SQL → grounded stats/chart → semantic validation → insight |
+| `report_dataset_profiler` | `model_report_data_profiler` | Infer dataset affordances and profiling risks from schema + samples |
+| `report_brief_builder` | `model_report_planner` | Mark answerable/risky/unanswerable asks before planning |
+| `report_planner` | `model_report_planner` | Build mandatory section coverage plan with unresolved-item tracking |
+| `section_pipeline` | `model_sql_worker` + sandbox + `model_report_writer` | Per-section retrieval planning → evidence packet building → chart artifact → claim packets → thin narrative |
 | `sections_sort` | — | Reassemble Send() fan-in results in planner order |
-| `report_writer` | `model_report_writer` | Assemble final markdown from section evidence |
-| `report_critic` | `model_report_critic` | Evaluate groundedness and revision needs |
-| `report_finalize` | — | Construct `AnswerPayload`, derive confidence, and use conservative fallback if critic still rejects |
+| `report_assembler` | `model_report_writer` | Assemble final markdown from claims, evidence, coverage, and unresolved items |
+| `report_validator` | `model_report_critic` + deterministic validators | Evaluate coverage, grounding, structure, warning semantics, and revision needs |
+| `report_finalize` | — | Construct `AnswerPayload`, derive confidence, and save report markdown under the same artifact turn as section charts |
 
 ### Returns (from `report_finalize_node`)
 

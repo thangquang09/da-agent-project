@@ -135,6 +135,18 @@ class ReportFollowupContext(TypedDict, total=False):
     conversation_turn: int
 
 
+class DatasetProfile(TypedDict, total=False):
+    candidate_tables: list[str]
+    selected_tables: list[str]
+    table_profiles: list[dict[str, Any]]
+    join_hints: list[dict[str, Any]]
+    profiling_risks: list[str]
+    dataset_summary: str
+    key_metrics: list[str]
+    key_dimensions: list[str]
+    analytical_angles: list[str]
+
+
 class ReportPlanningBrief(TypedDict, total=False):
     original_request: str
     objective: str
@@ -148,6 +160,7 @@ class ReportPlanningBrief(TypedDict, total=False):
     hypothesis_assessment: list[dict[str, Any]]
     domain_context: str
     planning_risks: list[str]
+    suggested_analytical_directions: list[str]
 
 
 class ReportCoverageSummary(TypedDict, total=False):
@@ -191,6 +204,48 @@ class SectionPlan(TypedDict, total=False):
     tests_hypothesis_ids: list[str]
     must_include: bool
     status: Literal["pending", "done", "failed"]
+
+
+class EvidenceRequest(TypedDict, total=False):
+    request_id: str
+    section_id: str
+    purpose: str
+    request_type: Literal["metric", "breakdown", "trend", "comparison", "anomaly"]
+    metric_specs: list[dict[str, Any]]
+    dimension_specs: list[dict[str, Any]]
+    filter_specs: list[dict[str, Any]]
+    expected_grain: str
+    analysis_query: str
+
+
+class EvidencePacket(TypedDict, total=False):
+    packet_id: str
+    section_id: str
+    request_id: str
+    sql: str
+    validated_sql: str
+    row_count: int
+    result_ref: dict[str, Any] | None
+    grouped_rows: list[dict[str, Any]]
+    series_rows: list[dict[str, Any]]
+    comparisons: list[dict[str, Any]]
+    metrics: dict[str, Any]
+    denominators: dict[str, Any]
+    grain: str
+    quality_warnings: list[str]
+    evidence_paths: list[str]
+    underlying_observation_count: int | None
+
+
+class ClaimPacket(TypedDict, total=False):
+    claim_id: str
+    section_id: str
+    claim_type: Literal["observation", "comparison", "trend", "hypothesis"]
+    text: str
+    evidence_refs: list[str]
+    caveats: list[str]
+    confidence: Literal["low", "medium", "high"]
+    recommendation_ready: bool
 
 
 class AnswerPayload(TypedDict, total=False):
@@ -279,6 +334,7 @@ class AgentState(TypedDict, total=False):
     report_user_hypotheses: list[ReportHypothesis]
     report_constraints: ReportConstraint
     report_followup_context: ReportFollowupContext
+    dataset_profile: DatasetProfile
     report_planning_brief: ReportPlanningBrief
     report_question_coverage: ReportCoverageSummary
     report_unresolved_items: list[ReportUnresolvedItem]
@@ -292,7 +348,9 @@ class AgentState(TypedDict, total=False):
     report_feedback_hash: str
     report_draft_hash: str
     report_confidence_rationale: str
-    report_data_profile: dict[str, Any]  # output of report_data_profiler_node
+    report_data_profile: dict[
+        str, Any
+    ]  # legacy compatibility alias during report rebuild
     # Report V2: Send() fan-out fields
     report_sample_data: dict[
         str, Any
@@ -304,6 +362,11 @@ class AgentState(TypedDict, total=False):
         SectionPlan
     ]  # planner output → fan_out_sections reads this
     _current_section: SectionPlan  # per-section Send() payload
+    _current_evidence_requests: list[EvidenceRequest]
+    _current_evidence_results: list[dict[str, Any]]
+    _current_evidence_packets: list[EvidencePacket]
+    _current_claims: list[ClaimPacket]
+    _current_section_result: "ReportSection"
     critic_decision: Literal["revise", "finalize"]  # explicit routing field
 
 
@@ -336,6 +399,7 @@ class GraphOutputState(TypedDict, total=False):
 class ReportSection(TypedDict, total=False):
     section_id: str
     title: str
+    plan: SectionPlan
     business_question: str
     analysis_query: str
     analysis_type: Literal[
@@ -361,6 +425,9 @@ class ReportSection(TypedDict, total=False):
     sql_result: dict[str, Any]
     result_ref: dict[str, Any] | None
     raw_result_ref: dict[str, Any] | None
+    evidence_requests: list[EvidenceRequest]
+    evidence_packets: list[EvidencePacket]
+    claims: list[ClaimPacket]
     visualization: dict[str, Any] | None
     sandbox_analysis: dict[str, Any] | None
     computed_stats: dict[str, Any] | None
@@ -372,6 +439,7 @@ class ReportSection(TypedDict, total=False):
     insight_markdown: str
     insight_citations: list[dict[str, Any]]
     limitations: list[str]
+    validation: dict[str, Any]
     semantic_warnings: list[str]
     semantic_status: Literal["ok", "warning", "failed"]
     section_confidence: Literal["low", "medium", "high"]

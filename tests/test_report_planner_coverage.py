@@ -69,14 +69,42 @@ def test_report_planner_does_not_silently_drop_must_questions(monkeypatch):
             "report_user_hypotheses": [],
             "report_constraints": {"answer_style": "analyst"},
             "report_followup_context": {"followup_mode": "fresh_query"},
-            "report_data_profile": {
-                "domain_summary": "Titanic passenger survival dataset.",
-                "suggested_sections": [
+            "dataset_profile": {
+                "selected_tables": ["titanic"],
+                "table_profiles": [
                     {
-                        "title": "Passenger overview",
-                        "analysis_query": "Summarize the passenger population.",
+                        "table_name": "titanic",
+                        "columns": ["sex", "age", "survived"],
                     }
                 ],
+                "dataset_summary": "Titanic passenger survival dataset.",
+                "profiling_risks": [],
+            },
+            "report_planning_brief": {
+                "original_request": "Viết report Titanic và trả lời hai câu hỏi bắt buộc.",
+                "objective": "Viết report Titanic",
+                "user_questions": [
+                    {
+                        "question_id": "q1",
+                        "text": "Tỷ lệ sống sót theo giới tính là bao nhiêu?",
+                        "priority": "must",
+                    },
+                    {
+                        "question_id": "q2",
+                        "text": "Nhóm tuổi nào có tỷ lệ sống sót thấp nhất?",
+                        "priority": "must",
+                    },
+                ],
+                "user_hypotheses": [],
+                "constraints": {"answer_style": "analyst"},
+                "followup_context": {"followup_mode": "fresh_query"},
+                "answerable_question_ids": ["q1", "q2"],
+                "risky_question_ids": [],
+                "unanswerable_question_ids": [],
+                "hypothesis_assessment": [],
+                "domain_context": "Titanic passenger survival dataset.",
+                "planning_risks": [],
+                "suggested_analytical_directions": ["survival breakdown"],
             },
             "session_context": "",
             "xml_database_context": "<database></database>",

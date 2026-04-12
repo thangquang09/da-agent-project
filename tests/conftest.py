@@ -39,10 +39,22 @@ class FakeV3LLMClient:
             return self._task_grounder_response(user)
         if "You are the Report Request Grounder" in system:
             return self._report_request_grounder_response(user)
-        if "You are a data domain analyst." in system:
+        if (
+            "You are a dataset profiler for a grounded analytics report system."
+            in system
+        ):
             return self._report_data_profiler_response(user)
+        if "You are a report brief builder for a grounded analytics system." in system:
+            return self._report_brief_builder_response(user)
         if "You are a data analysis report planner." in system:
             return self._report_planner_response(user)
+        if "You are a claim builder for a grounded analytics report system." in system:
+            return self._report_claim_builder_response(user)
+        if (
+            "You are a thin section narrator for a grounded analytics report system."
+            in system
+        ):
+            return self._report_section_narrator_response(user)
         if (
             "You are the Report Insight Generator for a grounded analytics system."
             in system
@@ -221,37 +233,104 @@ class FakeV3LLMClient:
             ]
         }
 
+    def _report_brief_builder_response(self, user: str) -> dict:
+        payload = {
+            "answerable_question_ids": [],
+            "risky_question_ids": [],
+            "unanswerable_question_ids": [],
+            "hypothesis_assessment": [],
+            "domain_context": "Dataset ghi nhận kết quả học tập của học sinh theo giới tính và điểm số.",
+            "planning_risks": [],
+            "suggested_analytical_directions": [
+                "student performance overview",
+                "gender comparison",
+            ],
+        }
+        return {
+            "choices": [
+                {"message": {"content": json.dumps(payload, ensure_ascii=False)}}
+            ]
+        }
+
     def _report_data_profiler_response(self, user: str) -> dict:
         payload = {
-            "domain_summary": "Dataset ghi nhận kết quả học tập của học sinh theo giới tính và điểm số.",
+            "candidate_tables": ["students"],
+            "selected_tables": ["students"],
+            "table_profiles": [
+                {
+                    "table_name": "students",
+                    "row_estimate": 1000,
+                    "columns": ["gender", "math score", "test preparation course"],
+                    "likely_metrics": ["math score"],
+                    "likely_dimensions": ["gender", "test preparation course"],
+                    "time_columns": [],
+                    "notes": "Single-table student performance dataset.",
+                }
+            ],
+            "join_hints": [],
+            "profiling_risks": [],
+            "dataset_summary": "Dataset ghi nhận kết quả học tập của học sinh theo giới tính và điểm số.",
             "key_metrics": ["math score"],
             "key_dimensions": ["gender"],
             "analytical_angles": ["student performance", "gender comparison"],
-            "suggested_sections": [
-                {
-                    "title": "Cơ cấu giới tính",
-                    "rationale": "Cho biết phân bổ học sinh theo giới tính.",
-                    "analysis_query": "Có bao nhiêu học sinh nam và bao nhiêu học sinh nữ trong tập dữ liệu này?",
-                    "analysis_type": "comparative",
-                    "target_metrics": ["student_count"],
-                    "target_dimensions": ["gender"],
-                    "expected_grain": "gender",
-                    "confidence_notes": "Counts are straightforward if grouping is preserved.",
-                    "requires_visualization": True,
-                },
-                {
-                    "title": "Điểm toán trung bình",
-                    "rationale": "Tóm tắt hiệu suất học tập tổng thể.",
-                    "analysis_query": "Điểm toán (math score) trung bình của toàn bộ học sinh là bao nhiêu?",
-                    "analysis_type": "descriptive",
-                    "target_metrics": ["average_math_score"],
-                    "target_dimensions": [],
-                    "expected_grain": "dataset",
-                    "confidence_notes": "Average score should remain descriptive.",
-                    "requires_visualization": False,
-                },
-            ],
         }
+        return {
+            "choices": [
+                {"message": {"content": json.dumps(payload, ensure_ascii=False)}}
+            ]
+        }
+
+    def _report_claim_builder_response(self, user: str) -> dict:
+        if "Cơ cấu giới tính" in user:
+            payload = {
+                "claims": [
+                    {
+                        "claim_id": "sec-1-claim-1",
+                        "claim_type": "comparison",
+                        "text": "Phân bổ giới tính khá cân bằng, với 518 học sinh nữ và 482 học sinh nam.",
+                        "evidence_refs": [
+                            "sec-1.metrics",
+                            "sec-1.grouped_rows",
+                        ],
+                        "caveats": [],
+                        "confidence": "high",
+                        "recommendation_ready": True,
+                    }
+                ],
+                "limitations": [],
+            }
+        else:
+            payload = {
+                "claims": [
+                    {
+                        "claim_id": "sec-2-claim-1",
+                        "claim_type": "observation",
+                        "text": "Điểm toán trung bình của toàn bộ học sinh là 66.08.",
+                        "evidence_refs": ["sec-2.metrics"],
+                        "caveats": [],
+                        "confidence": "high",
+                        "recommendation_ready": True,
+                    }
+                ],
+                "limitations": [],
+            }
+        return {
+            "choices": [
+                {"message": {"content": json.dumps(payload, ensure_ascii=False)}}
+            ]
+        }
+
+    def _report_section_narrator_response(self, user: str) -> dict:
+        if "Cơ cấu giới tính" in user:
+            payload = {
+                "narrative": "Biểu đồ cho thấy phân bổ giới tính khá cân bằng, với 518 học sinh nữ và 482 học sinh nam.",
+                "limitations": [],
+            }
+        else:
+            payload = {
+                "narrative": "Giá trị trung bình của điểm toán trong tập dữ liệu là 66.08.",
+                "limitations": [],
+            }
         return {
             "choices": [
                 {"message": {"content": json.dumps(payload, ensure_ascii=False)}}
@@ -534,6 +613,7 @@ def fake_report_analysis(monkeypatch):
         if "giới tính" in user_query.lower():
             computed_stats = {
                 "row_count": 2,
+                "underlying_observation_count": 1000,
                 "metrics": {},
                 "series": [
                     {"x": "female", "y": 518, "display_y": "518"},
@@ -556,6 +636,7 @@ def fake_report_analysis(monkeypatch):
         else:
             computed_stats = {
                 "row_count": 1,
+                "underlying_observation_count": 1000,
                 "metrics": {
                     "average_math_score": {"value": 66.08, "display_value": "66.08"}
                 },
