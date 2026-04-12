@@ -10,10 +10,10 @@
 
 DA Agent Lab nhận câu hỏi tiếng Việt/tiếng Anh về business data — từ đơn giản ("DAU hôm qua?") đến phức tạp ("So sánh retention cohort tháng này với tháng trước rồi vẽ chart") — và tự động hoàn thiện:
 
-- **Phân loại & Ground** — Task Grounder (LLM mini) phân loại query thành `TaskProfile` (mode, source, required capabilities, confidence). Nếu query ambiguous → halt và hỏi user.
-- **Tool orchestration** — Leader Agent điều phối các worker tool qua tool-calling loop (≤5 steps): SQL query, Visualization, Report generation.
-- **Artifact evaluation** — Mỗi worker output được chuẩn hóa thành `WorkerArtifact`. Artifact Evaluator (deterministic code) quyết định: cần thêm tool? đủ rồi? hay cần hỏi user?
-- **Synthesize & trace** — Final Composer tổng hợp câu trả lời. Toàn bộ run được trace JSONL + Langfuse để replay và debug.
+- **Phân loại & Ground** — Task Grounder (LLM mini) phân loại query thành `TaskProfile` (mode, source, required capabilities, confidence). Nếu query ambiguous → halt và hỏi user. Chitchat bypass pipeline.
+- **Plan-Execute Loop** — Leader Agent sử dụng plan-execute pattern (≤5 steps): lập kế hoạch → gọi tool (SQL, Parallel SQL, Visualization, Report) → viết kết quả vào scratchpad → lặp lại hoặc finalize.
+- **Artifact Evaluation** — Mỗi worker output được chuẩn hóa thành `WorkerArtifact`. Artifact Evaluator (deterministic code) quyết định: `continue/retry` → loop back Leader, `wait_for_user` → clarification, `finalize` → output.
+- **Capture & Memory** — Capture Action lưu action metadata. Compact & Save Memory quản lý conversation history (PostgreSQL) với auto-compaction. Toàn bộ run được trace JSONL + Langfuse.
 
 ---
 
@@ -53,7 +53,7 @@ Agent exposed **4 high-level tools** qua Leader Agent tool-calling surface:
 | `ask_sql_analyst` | Data questions, counting, ranking, trend, comparison | Schema lookup → SQL generation → validate → execute → analyze |
 | `ask_sql_analyst_parallel` | Multi-part questions (2+ independent sub-queries) | Fan-out parallel SQL workers, merge results |
 | `create_visualization` | Inline data values in query (e.g. "vẽ biểu đồ 10, 20, 30") | E2B sandbox → Python/Altair chart |
-| `generate_report` | Explicit multi-section report request | 4-phase pipeline: plan → execute → write → critique |
+| `generate_report` | Explicit multi-section report request | 6-phase pipeline: profile → plan → fan-out sections → write → critique → finalize |
 
 **Low-level internals (not exposed to user):**
 
@@ -61,7 +61,9 @@ Agent exposed **4 high-level tools** qua Leader Agent tool-calling surface:
 |------|------|---------|
 | `validate_sql_query` | `app/tools/validate_sql.py` | AST-based SELECT-only validation + regex block |
 | `get_schema_overview` | `app/tools/get_schema.py` | Database schema introspection |
-| `ConversationMemoryStore` | `app/memory/store.py` | SQLite session persistence |
+| `auto_register_csv` | `app/tools/auto_register.py` | CSV upload → PostgreSQL auto-registration |
+| `ConversationMemoryStore` | `app/memory/conversation_store.py` | PostgreSQL conversation persistence |
+| `ArtifactStore` | `app/memory/artifact_store.py` | Heavyweight artifact persistence (reports, charts) |
 
 ---
 
@@ -111,15 +113,22 @@ curl -N "http://localhost:8001/query/stream?q=DAU&thread_id=test"
 da-agent-project/
 ├── app/
 │   ├── graph/               # LangGraph nodes, state, graph builders
-│   │   ├── graph.py         # build_sql_v3_graph() — 10-node graph
-│   │   ├── nodes.py         # leader_agent, artifact_evaluator, clarify_question_node
+│   │   ├── graph.py         # build_sql_v3_graph() — plan-execute graph
+│   │   ├── nodes.py         # leader_agent, artifact_evaluator, capture_action, memory nodes
 │   │   ├── task_grounder.py # TaskProfile classifier (LLM mini)
-│   │   ├── state.py         # AgentState TypedDict, TaskProfile, WorkerArtifact
-│   │   └── standalone_visualization.py  # E2B sandbox viz worker
-│   ├── memory/              # ConversationMemoryStore (SQLite)
+│   │   ├── state.py         # AgentState, TaskProfile, WorkerArtifact, ReportSection
+│   │   ├── sql_worker_graph.py  # SQL worker subgraph (gen → validate → execute → analyze)
+│   │   ├── report_subgraph.py   # 6-phase report pipeline
+│   │   ├── standalone_visualization.py  # E2B sandbox viz worker
+│   │   ├── visualization_node.py  # Visualization within SQL worker context
+│   │   └── continuity.py   # Follow-up query detection & parameter extraction
+│   ├── artifacts/           # Artifact file store helpers
+│   ├── memory/              # ConversationMemoryStore (PostgreSQL), ArtifactStore
 │   ├── observability/       # RunTracer (JSONL + Langfuse)
 │   ├── prompts/             # All LLM prompt definitions
-│   ├── tools/               # SQL safety, schema, upload, metadata tools
+│   ├── tools/               # SQL safety, schema, upload, metadata, table context tools
+│   ├── llm/                 # LLM client abstraction
+│   ├── utils/               # File hash, misc utilities
 │   └── main.py             # run_query() — UI-agnostic entry
 ├── backend/                 # FastAPI HTTP layer
 ├── mcp_server/             # FastMCP tool surface
