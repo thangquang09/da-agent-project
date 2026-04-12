@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import base64
+from decimal import Decimal
 from typing import Any
 
 
 def make_serializable(obj: Any) -> Any:
-    """Recursively convert bytes → base64-encoded str for JSON / Pydantic compatibility.
+    """Recursively convert bytes → base64-encoded str, Decimal → float for JSON / Pydantic compatibility.
 
     Heavy data (chart PNGs, report markdown) is now stored on disk and referenced
     by URL. This helper only handles stray bytes values that might still appear
@@ -13,6 +14,8 @@ def make_serializable(obj: Any) -> Any:
     """
     if isinstance(obj, bytes):
         return base64.b64encode(obj).decode()
+    if isinstance(obj, Decimal):
+        return float(obj)
     if isinstance(obj, dict):
         return {k: make_serializable(v) for k, v in obj.items()}
     if isinstance(obj, list):
