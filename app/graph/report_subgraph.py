@@ -224,6 +224,52 @@ def _detect_output_language(text: str) -> str:
     return "vi" if _is_probably_vietnamese(text) else "en"
 
 
+def _report_output_language(state: AgentState) -> str:
+    language = (
+        str((state.get("report_constraints") or {}).get("output_language", ""))
+        .strip()
+        .lower()
+    )
+    if language in {"vi", "en"}:
+        return language
+    source_text = (
+        state.get("report_original_request")
+        or state.get("report_request")
+        or state.get("user_query", "")
+    )
+    return _detect_output_language(source_text)
+
+
+def _is_vietnamese_output(state: AgentState) -> bool:
+    return _report_output_language(state) == "vi"
+
+
+def _report_heading(kind: str, *, is_vietnamese: bool) -> str:
+    headings = {
+        "executive_summary": (
+            "## Tóm tắt điều hành" if is_vietnamese else "## Executive Summary"
+        ),
+        "follow_up": (
+            "## Câu hỏi cần làm rõ thêm"
+            if is_vietnamese
+            else "## Questions Requiring Follow-up"
+        ),
+        "conclusion": "## Kết luận" if is_vietnamese else "## Conclusion",
+        "recommendations": "## Khuyến nghị" if is_vietnamese else "## Recommendations",
+    }
+    return headings[kind]
+
+
+def _has_recommendations_heading(text: str) -> bool:
+    return bool(
+        re.search(
+            r"^##\s+(Recommendations|Khuyến nghị)\b",
+            text,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+    )
+
+
 def _detect_requested_visualizations(text: str) -> bool:
     lowered = (text or "").lower()
     return any(
@@ -1079,24 +1125,24 @@ def _first_nonempty_paragraph(text: str) -> str:
 
 def _is_probably_vietnamese(text: str) -> bool:
     lowered = (text or "").lower()
-    if re.search(
-        r"[ăâđêôơưáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]",
-        lowered,
-    ):
-        return True
-    return any(
-        token in lowered
-        for token in ["hãy", "báo cáo", "dữ liệu", "phân tích", "tỷ lệ", "cảnh báo"]
+    return bool(
+        re.search(
+            r"[ăâđêôơưáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]",
+            lowered,
+        )
     )
 
 
 def _build_cautious_recommendations(state: AgentState) -> list[str]:
+    is_vietnamese = _is_vietnamese_output(state)
     recommendations: list[str] = []
     if any(
         section.get("semantic_warnings") for section in state.get("report_sections", [])
     ):
         recommendations.append(
             "Xác minh lại metric definition, grain phân tích, và cách tính các tỷ lệ trước khi dùng report này cho quyết định quan trọng."
+            if is_vietnamese
+            else "Verify metric definitions, analysis grain, and any rate calculations before using this report for important decisions."
         )
     if any(
         section.get("section_confidence") == "low"
@@ -1104,20 +1150,29 @@ def _build_cautious_recommendations(state: AgentState) -> list[str]:
     ):
         recommendations.append(
             "Ưu tiên kiểm tra thêm các section có confidence thấp bằng truy vấn sâu hơn hoặc phân tích thủ công trước khi diễn giải mạnh."
+            if is_vietnamese
+            else "Investigate low-confidence sections further with deeper queries or manual analysis before making strong interpretations."
         )
     recommendations.append(
         "Dùng report này như bước mô tả và định hướng điều tra tiếp theo, không coi là bằng chứng nhân quả hay khuyến nghị can thiệp cuối cùng."
+        if is_vietnamese
+        else "Use this report as descriptive guidance for further investigation, not as causal proof or a final intervention recommendation."
     )
     return recommendations[:3]
 
 
 def _ensure_report_recommendations(text: str, state: AgentState) -> str:
-    if re.search(r"^##\s+Recommendations\b", text, flags=re.IGNORECASE | re.MULTILINE):
+    if _has_recommendations_heading(text):
         return text
     recommendations = _build_cautious_recommendations(state)
     if not recommendations:
         return text
-    lines = [text.rstrip(), "", "## Recommendations", ""]
+    lines = [
+        text.rstrip(),
+        "",
+        _report_heading("recommendations", is_vietnamese=_is_vietnamese_output(state)),
+        "",
+    ]
     for index, recommendation in enumerate(recommendations, start=1):
         lines.append(f"{index}. {recommendation}")
     return "\n".join(lines).strip()
@@ -1147,52 +1202,22 @@ def _humanize_semantic_warning(warning: str, *, is_vietnamese: bool) -> str:
     return cleaned if not is_vietnamese else cleaned.lower()
 
 
-def _soften_overclaim_language(text: str, *, is_vietnamese: bool) -> str:
-    softened = text
-    if is_vietnamese:
-        replacements = {
-            "ảnh hưởng quyết định đến khả năng sống sót": "có thể liên quan mạnh về mặt mô tả đến khả năng sống sót",
-            "có ảnh hưởng mạnh đến tỷ lệ sống sót": "có liên hệ mô tả rõ với tỷ lệ sống sót",
-            "có ảnh hưởng mạnh đến": "có liên hệ mô tả rõ với",
-            "cho thấy rõ ràng": "gợi ý khá rõ",
-            "xác nhận giả thuyết": "phù hợp với giả thuyết mô tả",
-            "là yếu tố quan trọng ảnh hưởng": "có thể là một yếu tố liên quan đến",
-            "phản ánh rõ ràng": "gợi ý",
-        }
-    else:
-        replacements = {
-            "decisively affected survival": "may be descriptively associated with survival",
-            "strongly affects": "is descriptively associated with",
-            "clearly shows": "suggests",
-            "confirms the hypothesis": "is consistent with the descriptive hypothesis",
-        }
-    for source, target in replacements.items():
-        softened = softened.replace(source, target)
-    return softened
-
-
 def _build_safe_report_markdown(state: AgentState) -> str:
     original_request = (
         state.get("report_original_request")
         or state.get("report_request")
         or state.get("user_query", "")
     )
-    is_vietnamese = _is_probably_vietnamese(original_request)
+    is_vietnamese = _is_vietnamese_output(state)
     plan_title = state.get("report_plan", {}).get("title", "Report")
     sections = [
         section
         for section in state.get("report_sections", [])
         if section.get("status") == "done"
     ]
-    summary_heading = (
-        "## Tóm tắt tổng quan" if is_vietnamese else "## Executive Summary"
-    )
-    unresolved_heading = (
-        "## Questions Requiring Follow-up"
-        if not is_vietnamese
-        else "## Questions Requiring Follow-up"
-    )
-    conclusion_heading = "## Kết luận" if is_vietnamese else "## Conclusion"
+    summary_heading = _report_heading("executive_summary", is_vietnamese=is_vietnamese)
+    unresolved_heading = _report_heading("follow_up", is_vietnamese=is_vietnamese)
+    conclusion_heading = _report_heading("conclusion", is_vietnamese=is_vietnamese)
     lines = [f"# {plan_title}", "", summary_heading, ""]
 
     summary = (
@@ -1273,7 +1298,13 @@ def _build_safe_report_markdown(state: AgentState) -> str:
         else "For high-impact decisions, run deeper analysis or additional validation instead of relying only on this conservative summary."
     )
 
-    lines.extend(["", "## Recommendations", ""])
+    lines.extend(
+        [
+            "",
+            _report_heading("recommendations", is_vietnamese=is_vietnamese),
+            "",
+        ]
+    )
     for index, recommendation in enumerate(recommendations[:4], start=1):
         lines.append(f"**{index}. {recommendation}**")
         lines.append("")
@@ -2432,15 +2463,7 @@ def _apply_semantic_caveat(section: ReportSection, state: AgentState) -> ReportS
             limitations.append(warning)
 
     insight_markdown = str(section.get("insight_markdown", "")).strip()
-    is_vietnamese = _is_probably_vietnamese(
-        state.get("report_original_request")
-        or state.get("report_request")
-        or state.get("user_query", "")
-    )
-    if warnings:
-        insight_markdown = _soften_overclaim_language(
-            insight_markdown, is_vietnamese=is_vietnamese
-        )
+    is_vietnamese = _is_vietnamese_output(state)
     lower_insight = insight_markdown.lower()
     has_caveat_language = any(
         token in lower_insight
@@ -2694,7 +2717,11 @@ def _build_evidence_packet(
 
 
 def _normalize_claim_packet(
-    raw: Any, section_id: str, index: int
+    raw: Any,
+    section_id: str,
+    index: int,
+    *,
+    valid_evidence_refs: set[str] | None = None,
 ) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
@@ -2707,13 +2734,21 @@ def _normalize_claim_packet(
     confidence = str(raw.get("confidence", "medium")).strip().lower()
     if confidence not in {"low", "medium", "high"}:
         confidence = "medium"
+    evidence_refs = []
+    for ref in _as_string_list(raw.get("evidence_refs")):
+        if valid_evidence_refs is not None and ref not in valid_evidence_refs:
+            continue
+        if ref not in evidence_refs:
+            evidence_refs.append(ref)
+    if not evidence_refs:
+        return None
     return {
         "claim_id": str(raw.get("claim_id", "")).strip()
         or f"{section_id}-claim-{index}",
         "section_id": section_id,
         "claim_type": claim_type,
         "text": text,
-        "evidence_refs": _as_string_list(raw.get("evidence_refs")),
+        "evidence_refs": evidence_refs,
         "caveats": _as_string_list(raw.get("caveats")),
         "confidence": confidence,
         "recommendation_ready": bool(raw.get("recommendation_ready", False)),
@@ -2800,11 +2835,7 @@ def _fallback_section_narrative(
     limitations: list[str],
     state: AgentState,
 ) -> str:
-    is_vietnamese = _is_probably_vietnamese(
-        state.get("report_original_request")
-        or state.get("report_request")
-        or state.get("user_query", "")
-    )
+    is_vietnamese = _is_vietnamese_output(state)
     lines = [claim.get("text", "").strip() for claim in claims if claim.get("text")]
     if limitations:
         prefix = "Lưu ý:" if is_vietnamese else "Caveat:"
@@ -3018,12 +3049,20 @@ def section_claim_builder_node(state: AgentState) -> AgentState:
             error=str(exc),
         )
 
+    valid_evidence_refs = {
+        ref
+        for packet in evidence_packets
+        for ref in _as_string_list(packet.get("evidence_paths"))
+    }
     claims = [
         claim
         for index, raw in enumerate(raw_output.get("claims", []), start=1)
         if (
             claim := _normalize_claim_packet(
-                raw, report_section.get("section_id", "sec"), index
+                raw,
+                report_section.get("section_id", "sec"),
+                index,
+                valid_evidence_refs=valid_evidence_refs,
             )
         )
     ]
@@ -3409,7 +3448,11 @@ def report_finalize_node(state: AgentState) -> AgentState:
         report_markdown = _cleanup_report_markdown(state.get("report_draft", ""))
     plan_title = state.get("report_plan", {}).get("title", "Report")
     errors = state.get("errors", [])
-    answer = "Đây là report của bạn. Bấm vào nút Report để xem bản trình bày đầy đủ."
+    answer = (
+        "Đây là report của bạn. Bấm vào nút Report để xem bản trình bày đầy đủ."
+        if _is_vietnamese_output(state)
+        else "Here is your report. Open the Report panel to view the full write-up."
+    )
     confidence, confidence_rationale = _derive_report_confidence(
         state, used_safe_fallback=used_safe_fallback
     )

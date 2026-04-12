@@ -397,7 +397,7 @@ def test_deterministic_critic_flags_missing_recommendations_and_missing_caveats(
         "# Report\n\n## Price and Survival\n\nGiá vé là yếu tố quyết định khả năng sống sót.",
     )
 
-    assert any("Recommendations" in issue for issue in issues)
+    assert any("recommendations section" in issue for issue in issues)
     assert any("strong analytical claims" in issue for issue in issues)
 
 

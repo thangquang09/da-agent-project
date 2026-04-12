@@ -51,9 +51,37 @@ def test_run_report_validators_flags_missing_structure_and_claim_support():
     )
 
     assert any("must-answer" in issue for issue in issues)
-    assert any("Questions Requiring Follow-up" in issue for issue in issues)
+    assert any("follow-up questions section" in issue for issue in issues)
     assert any("evidence references" in issue for issue in issues)
-    assert any("Recommendations" in issue for issue in issues)
+    assert any("recommendations section" in issue for issue in issues)
+
+
+def test_run_report_validators_flags_nonexistent_evidence_refs():
+    issues = run_report_validators(
+        {"dropped_must_question_ids": []},
+        [],
+        [
+            {
+                "title": "Section A",
+                "status": "done",
+                "claims": [
+                    {
+                        "claim_id": "c1",
+                        "text": "Grounded-looking claim",
+                        "evidence_refs": ["sec-1.fake_path"],
+                        "recommendation_ready": False,
+                    }
+                ],
+                "evidence_packets": [
+                    {"evidence_paths": ["sec-1.metrics"], "quality_warnings": []}
+                ],
+                "semantic_warnings": [],
+            }
+        ],
+        "# Report\n\n## Executive Summary\n\nSummary.\n\n## Section A\n\nBody.\n\n## Conclusion\n\nDone.\n\n## Recommendations\n\n1. Review.",
+    )
+
+    assert any("do not exist" in issue for issue in issues)
 
 
 def test_report_validator_routes_revision_when_structure_is_incomplete(monkeypatch):
@@ -108,7 +136,9 @@ def test_report_validator_routes_revision_when_structure_is_incomplete(monkeypat
 
     assert update["validator_verdict"] == "REVISE"
     assert update["validator_decision"] == "revise"
-    assert any("Recommendations" in issue for issue in update["validator_issues"])
+    assert any(
+        "recommendations section" in issue for issue in update["validator_issues"]
+    )
 
 
 def test_report_finalize_keeps_report_markdown_and_charts_on_same_turn(
@@ -147,3 +177,22 @@ def test_report_finalize_keeps_report_markdown_and_charts_on_same_turn(
     metadata = update["final_payload"]["result_metadata"]
     assert metadata["artifact_turn"] == 7
     assert metadata["report_markdown_path"] == "thread-1/7/report.md"
+
+
+def test_report_finalize_localizes_answer_from_report_constraints(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+
+    update = report_finalize_node(
+        {
+            "validator_verdict": "APPROVED",
+            "report_plan": {"title": "Sales Report"},
+            "report_draft": "# Sales Report\n\n## Executive Summary\n\nGrounded.\n\n## Conclusion\n\nDone.\n\n## Recommendations\n\n1. Review caveats.",
+            "report_sections": [],
+            "report_constraints": {"output_language": "en"},
+            "step_count": 1,
+        }
+    )
+
+    assert update["final_answer"].startswith("Here is your report")

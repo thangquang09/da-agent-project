@@ -181,3 +181,38 @@ def test_report_writer_fallback_includes_unresolved_questions_block(monkeypatch)
         in update["report_draft"]
     )
     assert "## Recommendations" in update["report_draft"]
+
+
+def test_safe_report_markdown_localizes_vietnamese_headings():
+    from app.graph.report_subgraph import _build_safe_report_markdown
+
+    report = _build_safe_report_markdown(
+        {
+            "report_original_request": "Viết báo cáo về doanh thu theo khu vực.",
+            "report_constraints": {"output_language": "vi"},
+            "report_plan": {"title": "Báo cáo doanh thu"},
+            "report_sections": [
+                {
+                    "title": "Tổng quan khu vực",
+                    "status": "done",
+                    "insight_markdown": "Doanh thu tập trung ở miền Nam.",
+                    "limitations": [],
+                }
+            ],
+            "report_unresolved_items": [
+                {
+                    "item_type": "question",
+                    "question_id": "q1",
+                    "reason": "Thiếu dữ liệu chi phí.",
+                }
+            ],
+            "report_user_questions": [
+                {"question_id": "q1", "text": "Vì sao lợi nhuận giảm?"}
+            ],
+        }
+    )
+
+    assert "## Tóm tắt điều hành" in report
+    assert "## Câu hỏi cần làm rõ thêm" in report
+    assert "## Kết luận" in report
+    assert "## Khuyến nghị" in report

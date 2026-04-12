@@ -4,6 +4,11 @@ import re
 from typing import Any
 
 
+def _has_heading(report_markdown: str, *titles: str) -> bool:
+    pattern = r"^##\s+(" + "|".join(re.escape(title) for title in titles) + r")\b"
+    return bool(re.search(pattern, report_markdown, flags=re.IGNORECASE | re.MULTILINE))
+
+
 def validate_report_coverage(
     coverage_summary: dict[str, Any] | None,
     unresolved_items: list[dict[str, Any]] | None,
@@ -19,13 +24,13 @@ def validate_report_coverage(
             "Planner coverage is incomplete: at least one must-answer user question was not mapped or explained."
         )
 
-    if unresolved_items and not re.search(
-        r"^##\s+Questions Requiring Follow-up\b",
+    if unresolved_items and not _has_heading(
         report_markdown,
-        flags=re.IGNORECASE | re.MULTILINE,
+        "Questions Requiring Follow-up",
+        "Câu hỏi cần làm rõ thêm",
     ):
         issues.append(
-            "Draft is missing the required '## Questions Requiring Follow-up' section for unresolved user asks."
+            "Draft is missing the required follow-up questions section for unresolved user asks."
         )
     return issues
 
@@ -50,9 +55,26 @@ def validate_claim_grounding(
             issues.append("At least one claim packet is missing evidence references.")
             break
 
-    if re.search(
-        r"^##\s+Recommendations\b", report_markdown, flags=re.IGNORECASE | re.MULTILINE
-    ):
+    allowed_refs = {
+        str(ref).strip()
+        for section in report_sections
+        for packet in section.get("evidence_packets", []) or []
+        for ref in packet.get("evidence_paths", []) or []
+        if str(ref).strip()
+    }
+    for claim in all_claims:
+        refs = [
+            str(ref).strip()
+            for ref in claim.get("evidence_refs", [])
+            if str(ref).strip()
+        ]
+        if refs and any(ref not in allowed_refs for ref in refs):
+            issues.append(
+                "At least one claim packet cites evidence references that do not exist in the section evidence packets."
+            )
+            break
+
+    if _has_heading(report_markdown, "Recommendations", "Khuyến nghị"):
         ready_claims = [
             claim for claim in all_claims if claim.get("recommendation_ready")
         ]
@@ -106,24 +128,17 @@ def validate_report_structure(
     issues: list[str] = []
     if not re.search(r"^#\s+.+", report_markdown, flags=re.MULTILINE):
         issues.append("Draft is missing a top-level H1 title.")
-    if not re.search(
-        r"^##\s+(Executive Summary|Tóm tắt điều hành)\b",
+    if not _has_heading(
         report_markdown,
-        flags=re.IGNORECASE | re.MULTILINE,
+        "Executive Summary",
+        "Tóm tắt điều hành",
+        "Tóm tắt tổng quan",
     ):
         issues.append("Draft is missing the required executive summary section.")
-    if not re.search(
-        r"^##\s+Conclusion\b|^##\s+Kết luận\b",
-        report_markdown,
-        flags=re.IGNORECASE | re.MULTILINE,
-    ):
+    if not _has_heading(report_markdown, "Conclusion", "Kết luận"):
         issues.append("Draft is missing the required conclusion section.")
-    if not re.search(
-        r"^##\s+Recommendations\b",
-        report_markdown,
-        flags=re.IGNORECASE | re.MULTILINE,
-    ):
-        issues.append("Draft is missing the required '## Recommendations' section.")
+    if not _has_heading(report_markdown, "Recommendations", "Khuyến nghị"):
+        issues.append("Draft is missing the required recommendations section.")
     missing_section_titles = [
         section.get("title", "")
         for section in report_sections

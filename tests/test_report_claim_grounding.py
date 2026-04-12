@@ -121,3 +121,64 @@ def test_section_pipeline_emits_evidence_packets_and_claims(
     assert section["claims"]
     assert section["claims"][0]["evidence_refs"]
     assert section["insight_markdown"]
+
+
+def test_section_claim_builder_falls_back_when_model_returns_invalid_refs(monkeypatch):
+    class _FakeClaimBuilderClient:
+        def chat_completion(self, **kwargs):  # noqa: ANN003
+            payload = {
+                "claims": [
+                    {
+                        "claim_id": "sec-1-claim-1",
+                        "claim_type": "comparison",
+                        "text": "Unsupported claim refs.",
+                        "evidence_refs": ["sec-1.not_real"],
+                        "caveats": [],
+                        "confidence": "high",
+                        "recommendation_ready": True,
+                    }
+                ],
+                "limitations": [],
+            }
+            return {
+                "choices": [
+                    {"message": {"content": json.dumps(payload, ensure_ascii=False)}}
+                ]
+            }
+
+    monkeypatch.setattr(
+        "app.graph.report_subgraph.LLMClient.from_env",
+        lambda: _FakeClaimBuilderClient(),
+    )
+
+    update = section_claim_builder_node(
+        {
+            "report_original_request": "Viết report Titanic.",
+            "_current_section_result": {
+                "section_id": "sec-1",
+                "title": "Tỷ lệ sống sót theo giới tính",
+                "status": "done",
+                "section_confidence": "medium",
+                "plan": {
+                    "section_id": "sec-1",
+                    "title": "Tỷ lệ sống sót theo giới tính",
+                },
+                "evidence_packets": [
+                    {
+                        "packet_id": "packet-1",
+                        "section_id": "sec-1",
+                        "request_id": "req-1",
+                        "quality_warnings": [],
+                        "grouped_rows": [{"gender": "female", "count": 10}],
+                        "evidence_paths": ["sec-1.grouped_rows", "sec-1.metrics"],
+                    }
+                ],
+                "limitations": [],
+            },
+        }
+    )
+
+    claims = update["_current_claims"]
+    assert len(claims) == 1
+    assert claims[0]["evidence_refs"]
+    assert claims[0]["evidence_refs"] != ["sec-1.not_real"]
