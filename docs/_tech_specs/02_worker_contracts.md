@@ -342,13 +342,32 @@ All workers MUST return these fields for `artifact_evaluator` consumption:
 | `artifact_terminal` | `bool` | Yes |
 | `artifact_recommended_action` | `Literal` | Yes |
 
-### `artifact_evaluator` Logic (`app/graph/nodes.py` lines 918+)
+### `artifact_evaluator` Logic (`app/graph/nodes.py`)
 
-1. **Coverage check** — ensures `required_capabilities` from `TaskProfile` are met
-2. **Retry check** — detects failed artifacts with `retry_sql`
-3. **Terminal check** — if any artifact is terminal, can finalize
-4. **Confidence check** — low confidence → `wait_for_user`
-5. **Max steps** — exceeds limit → force finalize
+Priority-ordered checks (first match wins):
+
+1. **Cancel check** — if `thread_id` in `_cancelled_threads` → force finalize with cancellation message
+2. **final_answer present** — if leader already set `final_answer` → finalize immediately (prevents infinite loop for queries that don't need SQL, e.g. "Mô tả về data này")
+3. **Max iteration guard** — `step_count >= MAX_LEADER_ITERATIONS (6)` → force finalize (prevents unbounded loops)
+4. **Terminal check** — if any artifact is terminal → finalize
+5. **Retry check** — detects failed artifacts with `retry_sql` → retry
+6. **Coverage check** — all `required_capabilities` from `TaskProfile` are met → finalize
+7. **Confidence check** — low confidence or ambiguous → `wait_for_user`
+8. **No artifacts needed** — empty required_caps and no artifacts → finalize
+9. **Default** — missing artifacts → `continue` (loop back to leader)
+
+### Cancellation API
+
+```python
+# Module-level in app/graph/nodes.py
+_cancelled_threads: set[str] = set()
+
+def request_cancel(thread_id: str) -> None   # POST /query/cancel calls this
+def clear_cancel(thread_id: str) -> None
+def is_cancelled(thread_id: str) -> bool
+```
+
+Leader agent also checks `is_cancelled()` at each step in its 5-step loop.
 
 ### Routing Decision
 
@@ -356,6 +375,5 @@ All workers MUST return these fields for `artifact_evaluator` consumption:
 {
     "decision": "finalize" | "continue" | "retry" | "wait_for_user",
     "reason": str,
-    "retry_tool": str | None,  # "ask_sql_analyst"
 }
 ```

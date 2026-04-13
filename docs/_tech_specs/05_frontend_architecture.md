@@ -105,7 +105,7 @@ Single global store managing all application state:
 | Threads | `threads`, `activeThreadId` | Thread list from backend, active selection |
 | Messages | `messages` | Current thread messages with `Message[]` |
 | Artifact | `artifactOpen`, `artifactContent` | Right panel state |
-| UI | `isStreaming`, `uploadedFiles`, `sidebarOpen` | Interaction state |
+| UI | `isStreaming`, `uploadedFiles`, `sidebarOpen`, `_sseCloseFn` | Interaction state, SSE cleanup ref |
 | Data | `dataPanelOpen`, `availableTables`, `uploadStatus`, `uploadError` | Data management panel |
 
 #### Actions
@@ -118,6 +118,7 @@ Single global store managing all application state:
 | `deleteThread(id)` | `DELETE /threads/{id}` → remove from list |
 | `sendMessage(query)` | Create user + assistant messages → `streamQuery()` SSE → update assistant on result |
 | `sendMessageWithFiles()` | `POST /query/upload` (multipart) → update assistant on response |
+| `stopStreaming()` | Close SSE connection → `POST /query/cancel` → mark assistant message as done |
 | `openArtifact(content)` | Set `artifactOpen=true` + `artifactContent` |
 | `closeArtifact()` | Reset artifact state |
 | `toggleDataPanel()` | Toggle `dataPanelOpen` |
@@ -131,10 +132,16 @@ sendMessage("query")
   1. Create user Message {role: "user", content: "query"}
   2. Create assistant Message {role: "assistant", content: "", status: "thinking"}
   3. Append both to messages[], set isStreaming=true
-  4. Open SSE connection via streamQuery()
+  4. Open SSE connection via streamQuery(), store close fn in _sseCloseFn
   5. On SSE "status" events → update agentStatus in store → AgentStatusIndicator shows label
   6. On SSE "result" event → update assistant message with content + result + status: "done", clear agentStatus
   7. On SSE "error" event → update assistant message with error + status: "failed", clear agentStatus
+
+stopStreaming()
+  1. Call _sseCloseFn() to close SSE connection
+  2. POST /query/cancel with thread_id → sets in-process cancel flag
+  3. Mark last assistant message as done with current content
+  4. Set isStreaming=false, clear agentStatus
 ```
 
 ### themeStore (Zustand) — `stores/themeStore.ts`
@@ -162,6 +169,7 @@ Base URL: `NEXT_PUBLIC_API_URL` env var (default: `http://localhost:8001`)
 | `deleteThread(id)` | `/threads/{id}` | DELETE | Delete thread |
 | `postQuery(query, threadId)` | `/query` | POST | Non-streaming query |
 | `postQueryWithFiles(query, threadId, files)` | `/query/upload` | POST | Multipart query with file attachments |
+| `cancelQuery(threadId)` | `/query/cancel` | POST | Cancel running agent query |
 | `getTrace(runId)` | `/traces/{runId}` | GET | Get execution trace data |
 | `uploadFiles(files)` | `/data/upload` | POST | Standalone file upload (CSV auto-register) |
 | `getTables()` | `/data/tables` | GET | List all database tables |
@@ -278,6 +286,7 @@ Each type maps to a dedicated view component in `components/artifact/`.
 - Auto-growing textarea (max 200px)
 - Enter to send, Shift+Enter for newline
 - Disabled during streaming
+- **Stop button**: When `isStreaming`, the Send button becomes a red Stop button (Square icon) that calls `stopStreaming()` — closes SSE connection, calls `POST /query/cancel`, and marks the assistant message as done
 
 ### Assistant Message — `AssistantMessage.tsx`
 

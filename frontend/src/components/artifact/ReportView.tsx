@@ -1,5 +1,8 @@
 "use client";
 
+import { useState } from "react";
+
+import { ImageViewer } from "@/components/artifact/ImageViewer";
 import { MarkdownRenderer } from "@/components/shared/MarkdownRenderer";
 import { toBackendAssetUrl } from "@/lib/url";
 import type { ReportArtifactData, ReportSectionResponse } from "@/lib/types";
@@ -83,25 +86,38 @@ function matchSection(
 function ReportSectionChart({ section }: { section: ReportSectionResponse }) {
   const image = section.chart_image;
   const resolvedImageUrl = toBackendAssetUrl(image?.image_url);
+  const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   if (!resolvedImageUrl) return null;
 
   return (
-    <figure className="mt-5 overflow-hidden rounded-2xl border border-[#ddd9cf] dark:border-[#343434] bg-[#fcfcf9] dark:bg-[#1a1a1a] shadow-sm">
-      <div className="flex items-center gap-2 border-b border-[#ddd9cf] dark:border-[#343434] bg-[#f3f0ea] dark:bg-[#232323] px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-[#6f6f6f] dark:text-[#acacac]">
-        <ImageIcon size={14} />
-        Visualization
-      </div>
-      <img
-        src={resolvedImageUrl}
-        alt={section.title || "Report visualization"}
-        className="w-full h-auto bg-[#fcfcf9] dark:bg-[#1a1a1a]"
-      />
-      {section.title && (
-        <figcaption className="border-t border-[#e5e1d8] dark:border-[#2f2f2f] px-4 py-3 text-sm text-[#757575] dark:text-[#a9a9a9]">
-          {section.title}
-        </figcaption>
+    <>
+      <figure
+        className="mt-5 overflow-hidden rounded-2xl border border-[#ddd9cf] dark:border-[#343434] bg-[#fcfcf9] dark:bg-[#1a1a1a] shadow-sm cursor-zoom-in"
+        onClick={() => setViewerSrc(resolvedImageUrl)}
+      >
+        <div className="flex items-center gap-2 border-b border-[#ddd9cf] dark:border-[#343434] bg-[#f3f0ea] dark:bg-[#232323] px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-[#6f6f6f] dark:text-[#acacac]">
+          <ImageIcon size={14} />
+          Visualization
+        </div>
+        <img
+          src={resolvedImageUrl}
+          alt={section.title || "Report visualization"}
+          className="w-full h-auto bg-[#fcfcf9] dark:bg-[#1a1a1a]"
+        />
+        {section.title && (
+          <figcaption className="border-t border-[#e5e1d8] dark:border-[#2f2f2f] px-4 py-3 text-sm text-[#757575] dark:text-[#a9a9a9]">
+            {section.title}
+          </figcaption>
+        )}
+      </figure>
+      {viewerSrc && (
+        <ImageViewer
+          src={viewerSrc}
+          alt={section.title || "Report visualization"}
+          onClose={() => setViewerSrc(null)}
+        />
       )}
-    </figure>
+    </>
   );
 }
 

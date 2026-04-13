@@ -97,7 +97,7 @@ User (Next.js / Streamlit / CLI / API)
         +-- inject_session_context  →  Load conversation history
         +-- task_grounder           →  LLM mini: TaskProfile (mode, source, capabilities, confidence)
         +-- leader_agent            →  Tool routing with deterministic report dispatch
-        +-- artifact_evaluator     →  Deterministic: finalize / continue / retry / wait_for_user
+        +-- artifact_evaluator     →  Deterministic: finalize / continue / retry / wait_for_user / cancel
         +-- clarify_question_node  →  Interrupt: halt if confidence=low or mode=ambiguous
         +-- capture_action_node    →  Save last_action, conversation_turn
         +-- compact_and_save_memory →  Persist to PostgreSQL (agent schema)
@@ -116,6 +116,7 @@ User (Next.js / Streamlit / CLI / API)
 | `generate_report` | `app/graph/report_subgraph.py` | Grounded report pipeline: sample → profile → plan → [Send fan-out section_pipeline] → sort → write → critique → finalize |
 | `validate_sql_query` | `app/tools/validate_sql.py` | AST-based SELECT-only validation |
 | `get_schema_overview` | `app/tools/get_schema.py` | DB schema introspection |
+| `cancel` | `POST /query/cancel` | Cancel running agent by thread_id |
 | `table_metadata` | `app/tools/table_metadata.py` | Persist business context per table (`user_data.table_contexts`) |
 
 ---

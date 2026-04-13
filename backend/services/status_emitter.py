@@ -99,3 +99,23 @@ class StatusEmitter:
 
     def make_tracer_callback(self) -> Callable[[str, str, dict[str, Any] | None], None]:
         return self.on_node_status
+
+    def make_token_callback(self) -> Callable[[str], None]:
+        """Return a thread-safe callback that pushes token events into the queue."""
+        from app.observability.schemas import utc_now_iso
+
+        def _on_token(token: str) -> None:
+            event = StatusEvent(
+                event="token",
+                token=token,
+                timestamp=utc_now_iso(),
+            )
+            if self._loop is not None and not self._loop.is_closed():
+                self._loop.call_soon_threadsafe(self._queue.put_nowait, event)
+            else:
+                try:
+                    self._queue.put_nowait(event)
+                except Exception:
+                    pass
+
+        return _on_token

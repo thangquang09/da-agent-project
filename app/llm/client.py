@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, TypedDict
+from typing import Any, Callable, TypedDict
 from urllib import error, request
 
 from app.config import Settings, load_settings
@@ -101,6 +101,96 @@ class LLMClient:
         except json.JSONDecodeError as exc:
             logger.exception("LLM API returned non-JSON body")
             raise RuntimeError(f"LLM API returned non-JSON body: {body[:500]}") from exc
+
+    def stream_chat_completion(
+        self,
+        messages: list[ChatMessage],
+        model: str,
+        on_token: Callable[[str], None],
+        temperature: float = 0.2,
+        max_tokens: int | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Stream chat completion tokens. Calls *on_token* for each content delta.
+
+        Returns the accumulated full response in the same shape as
+        ``chat_completion`` once all tokens have been consumed.
+        """
+        if not self.settings.llm_api_key:
+            logger.error("LLM_API_KEY is missing")
+            raise ValueError("LLM_API_KEY is missing")
+
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": True,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if extra:
+            payload.update(extra)
+
+        logger.info(
+            "Calling LLM API STREAMING (model={model}, messages={message_count})",
+            model=model,
+            message_count=len(messages),
+        )
+
+        data = json.dumps(payload).encode("utf-8")
+        req = request.Request(
+            url=self.settings.llm_api_url,
+            method="POST",
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.settings.llm_api_key}",
+            },
+        )
+
+        accumulated = ""
+        try:
+            with request.urlopen(req, timeout=120) as resp:
+                for raw_line in resp:
+                    line = raw_line.decode("utf-8").strip()
+                    if not line:
+                        continue
+                    # Handle SSE lines: "data: {...}" or "data: [DONE]"
+                    if line.startswith("data: "):
+                        payload_str = line[6:]
+                        if payload_str.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(payload_str)
+                            delta = (
+                                chunk.get("choices", [{}])[0]
+                                .get("delta", {})
+                                .get("content", "")
+                            )
+                            if delta:
+                                accumulated += delta
+                                on_token(delta)
+                        except json.JSONDecodeError:
+                            continue
+        except error.HTTPError as exc:
+            err_body = exc.read().decode("utf-8", errors="replace")
+            logger.exception("LLM API HTTP error {status}: {body}", status=exc.code, body=err_body[:500])
+            raise RuntimeError(f"LLM API HTTP error {exc.code}: {err_body}") from exc
+        except error.URLError as exc:
+            logger.exception("LLM API connection error: {reason}", reason=exc.reason)
+            raise RuntimeError(f"LLM API connection error: {exc.reason}") from exc
+
+        logger.info("LLM API streaming complete ({length} chars)", length=len(accumulated))
+
+        # Return in same shape as chat_completion
+        result: dict[str, Any] = {
+            "choices": [{"message": {"content": accumulated}}],
+        }
+        usage = self._normalize_usage(result)
+        if usage is not None:
+            result["_usage_normalized"] = usage
+            result["_cost_usd_estimate"] = self._estimate_cost_usd(model=model, usage=usage)
+        return result
 
     @staticmethod
     def _as_int(value: Any) -> int | None:

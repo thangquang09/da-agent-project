@@ -5,6 +5,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
 interface StreamCallbacks {
   onStarted?: () => void;
   onStatus?: (status: AgentStatus) => void;
+  onToken?: (token: string) => void;
   onResult?: (data: QueryResponse) => void;
   onError?: (error: string) => void;
   onClose?: () => void;
@@ -41,6 +42,18 @@ export function streamQuery(
       callbacks.onStatus?.(payload.data);
     } catch {
       // malformed status event — ignore
+    }
+  });
+
+  source.addEventListener("token", (ev: MessageEvent) => {
+    try {
+      const payload = JSON.parse(ev.data) as {
+        event: string;
+        token: string;
+      };
+      callbacks.onToken?.(payload.token);
+    } catch {
+      // malformed token event — ignore
     }
   });
 

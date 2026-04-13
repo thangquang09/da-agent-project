@@ -96,7 +96,7 @@ export interface Message {
   timestamp: string;
   // Only on assistant messages:
   result?: QueryResponse;
-  status?: "thinking" | "done" | "failed";
+  status?: "thinking" | "streaming" | "done" | "failed";
 }
 
 export type ArtifactType = "report" | "sql" | "chart" | "trace";

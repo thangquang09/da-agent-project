@@ -5,8 +5,10 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from app.graph.nodes import request_cancel
 from app.logger import logger
 from backend.models.requests import QueryRequest
 from backend.models.responses import QueryResponse
@@ -14,6 +16,31 @@ from backend.services.agent_service import run_query_async
 from backend.services.sse_service import stream_query_events
 
 router = APIRouter(prefix="/query", tags=["query"])
+
+
+class CancelRequest(BaseModel):
+    thread_id: str
+
+
+class CancelResponse(BaseModel):
+    cancelled: bool
+    thread_id: str
+
+
+@router.post("/cancel", response_model=CancelResponse)
+async def cancel_query(request: CancelRequest) -> CancelResponse:
+    """Cancel a running agent query by thread_id.
+
+    Sets an in-process cancellation flag that the leader_agent loop and
+    artifact_evaluator check on each iteration. The agent will abort
+    its current work and return a cancellation message.
+    """
+    logger.info(
+        "backend.query POST /cancel thread={thread}",
+        thread=request.thread_id[:8],
+    )
+    request_cancel(request.thread_id)
+    return CancelResponse(cancelled=True, thread_id=request.thread_id)
 
 
 @router.post("", response_model=QueryResponse)

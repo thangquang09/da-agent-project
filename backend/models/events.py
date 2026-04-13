@@ -12,6 +12,7 @@ class StatusEvent:
     label: str = ""
     detail: dict[str, Any] = field(default_factory=dict)
     timestamp: str = ""
+    token: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {

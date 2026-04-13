@@ -11,7 +11,7 @@ import type {
   UploadStatus,
   AgentStatus,
 } from "@/lib/types";
-import { listThreads, getThreadHistory, getThreadArtifacts, deleteThread as deleteThreadAPI, uploadFiles as uploadFilesAPI, getTables as getTablesAPI, updateTableContext as updateTableContextAPI } from "@/lib/api";
+import { listThreads, getThreadHistory, getThreadArtifacts, deleteThread as deleteThreadAPI, uploadFiles as uploadFilesAPI, getTables as getTablesAPI, updateTableContext as updateTableContextAPI, cancelQuery as cancelQueryAPI } from "@/lib/api";
 import { streamQuery } from "@/lib/sse";
 import { postQueryWithFiles } from "@/lib/api";
 
@@ -51,6 +51,7 @@ interface ChatStore {
   agentStatus: AgentStatus | null;
   uploadedFiles: UploadedFile[];
   sidebarOpen: boolean;
+  _sseCloseFn: (() => void) | null;
 
   // ── Data panel ───────────────────────────────────────────────────────
   dataPanelOpen: boolean;
@@ -66,6 +67,7 @@ interface ChatStore {
 
   sendMessage: (query: string) => void;
   sendMessageWithFiles: (query: string, files: UploadedFile[]) => Promise<void>;
+  stopStreaming: () => void;
 
   openArtifact: (content: ArtifactContent) => void;
   closeArtifact: () => void;
@@ -93,6 +95,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   isStreaming: false,
   agentStatus: null,
   uploadedFiles: [],
+  _sseCloseFn: null,
   sidebarOpen: true,
   dataPanelOpen: false,
   availableTables: [],
@@ -275,12 +278,21 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       isStreaming: true,
     }));
 
-    streamQuery(query, threadId, {
+    const closeSSE = streamQuery(query, threadId, {
       onStarted: () => {
         // already showing "thinking"
       },
       onStatus: (status: AgentStatus) => {
         set({ agentStatus: status });
+      },
+      onToken: (token: string) => {
+        set((s) => ({
+          messages: s.messages.map((m) =>
+            m.id === assistantMsg.id
+              ? { ...m, content: m.content + token, status: "streaming" as const }
+              : m
+          ),
+        }));
       },
       onResult: (result: QueryResponse) => {
         set((s) => ({
@@ -296,6 +308,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           ),
           isStreaming: false,
           agentStatus: null,
+          _sseCloseFn: null,
         }));
         get().fetchThreads();
       },
@@ -312,9 +325,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           ),
           isStreaming: false,
           agentStatus: null,
+          _sseCloseFn: null,
         }));
       },
     });
+    set({ _sseCloseFn: closeSSE });
   },
 
   // ── Send with files (multipart POST, no SSE) ─────────────────────────
@@ -381,6 +396,45 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   // ── Artifact panel ───────────────────────────────────────────────────
   openArtifact: (content: ArtifactContent) => {
     set({ artifactOpen: true, artifactContent: content });
+  },
+
+  // ── Stop streaming ──────────────────────────────────────────────────
+  stopStreaming: async () => {
+    const { activeThreadId, _sseCloseFn } = get();
+
+    // Close SSE connection
+    if (_sseCloseFn) {
+      _sseCloseFn();
+    }
+
+    // Tell backend to cancel
+    if (activeThreadId) {
+      try {
+        await cancelQueryAPI(activeThreadId);
+      } catch {
+        // Backend cancel is best-effort
+      }
+    }
+
+    // Mark last assistant message as cancelled
+    set((s) => {
+      const msgs = s.messages.map((m) => {
+        if (m.role === "assistant" && m.status !== "done" && m.status !== "failed") {
+          return {
+            ...m,
+            content: m.content || "Đã dừng.",
+            status: "done" as const,
+          };
+        }
+        return m;
+      });
+      return {
+        messages: msgs,
+        isStreaming: false,
+        agentStatus: null,
+        _sseCloseFn: null,
+      };
+    });
   },
 
   closeArtifact: () => {

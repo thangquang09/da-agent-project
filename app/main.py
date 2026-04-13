@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextvars
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from app.config import load_settings
 from app.graph import (
@@ -14,6 +15,16 @@ from app.graph import (
 )
 from app.logger import ensure_debug_file_sink, logger
 from app.observability import RunTracer, reset_current_tracer, set_current_tracer
+
+# Context variable for streaming token callback, accessible from graph nodes.
+_token_callback: contextvars.ContextVar[Callable[[str], None] | None] = contextvars.ContextVar(
+    "_token_callback", default=None
+)
+
+
+def get_token_callback() -> Callable[[str], None] | None:
+    """Return the current streaming token callback (set by run_query)."""
+    return _token_callback.get()
 
 
 def _make_serializable(obj: Any) -> Any:
@@ -49,6 +60,7 @@ def run_query(
     version: str = "v3",
     thread_id: str | None = None,
     on_status: Any | None = None,
+    on_token: Callable[[str], None] | None = None,
 ) -> dict:
     if version != "v3":
         raise ValueError(f"Unsupported graph version: {version}")
@@ -79,6 +91,10 @@ def run_query(
     # Pass thread_id to graph input for session memory
     if thread_id:
         graph_input["thread_id"] = thread_id
+
+    # Set token callback for nodes to access during graph execution
+    _token_callback.set(on_token)
+
     try:
         output = graph.invoke(
             graph_input,
@@ -127,6 +143,7 @@ def run_query(
         return payload
     finally:
         reset_current_tracer(tracer_token)
+        _token_callback.set(None)
 
 
 def parse_args() -> argparse.Namespace:
@@ -166,6 +183,7 @@ def main() -> None:
     )
     # Convert stray bytes to base64 for JSON serialization (heavy data now uses file URLs)
     serializable_result = _make_serializable(result)
+    # NOTE: Print statement is intentional for CLI output (stdout) - logger writes to stderr
     print(json.dumps(serializable_result, ensure_ascii=False, indent=2))
 
 

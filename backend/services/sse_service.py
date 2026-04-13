@@ -25,6 +25,7 @@ async def stream_query_events(
 
     emitter = StatusEmitter(loop=loop)
     on_status = emitter.make_tracer_callback()
+    on_token = emitter.make_token_callback()
 
     yield ServerSentEvent(
         data=json.dumps({"event": "started", "node": None, "data": {"query": query}}),
@@ -42,16 +43,25 @@ async def stream_query_events(
 
     graph_done = asyncio.Event()
 
-    async def _drain_status() -> AsyncGenerator[ServerSentEvent, None]:
+    async def _drain_events() -> AsyncGenerator[ServerSentEvent, None]:
         while True:
             try:
                 event = await asyncio.wait_for(emitter.queue.get(), timeout=0.5)
-                yield ServerSentEvent(
-                    data=json.dumps(
-                        {"event": "status", "node": event.node, "data": event.to_dict()}
-                    ),
-                    event="status",
-                )
+                if event.token:
+                    # Token streaming event
+                    yield ServerSentEvent(
+                        data=json.dumps({"event": "token", "token": event.token}),
+                        event="token",
+                    )
+                    await asyncio.sleep(0.012)
+                else:
+                    # Status event
+                    yield ServerSentEvent(
+                        data=json.dumps(
+                            {"event": "status", "node": event.node, "data": event.to_dict()}
+                        ),
+                        event="status",
+                    )
             except asyncio.TimeoutError:
                 if graph_done.is_set() and emitter.queue.empty():
                     return
@@ -65,6 +75,7 @@ async def stream_query_events(
             recursion_limit=recursion_limit,
             version=version,
             on_status=on_status,
+            on_token=on_token,
         )
 
     graph_task = loop.run_in_executor(None, _run_graph)
@@ -76,7 +87,7 @@ async def stream_query_events(
 
     runner = asyncio.ensure_future(_run_and_signal())
 
-    async for sse_event in _drain_status():
+    async for sse_event in _drain_events():
         yield sse_event
         if graph_done.is_set() and emitter.queue.empty():
             break

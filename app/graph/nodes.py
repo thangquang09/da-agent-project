@@ -35,6 +35,21 @@ def _extract_first_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _stream_text(text: str, on_token: Callable[[str], None]) -> None:
+    """Stream *text* word-by-word through *on_token* for progressive SSE delivery."""
+    words = text.split(" ")
+    for i, word in enumerate(words):
+        chunk = (" " + word) if i > 0 else word
+        on_token(chunk)
+
+
+def _get_token_callback() -> Callable[[str], None] | None:
+    """Lazy accessor for the streaming token callback (avoids circular import)."""
+    from app.main import get_token_callback
+
+    return get_token_callback()
+
+
 def _get_merged_table_contexts(
     in_flight: dict[str, str] | None = None,
 ) -> dict[str, str]:
@@ -43,7 +58,8 @@ def _get_merged_table_contexts(
         from app.tools.table_metadata import get_all_table_contexts
 
         merged = get_all_table_contexts()
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to load table contexts, using empty dict: {error}", error=str(exc))
         merged = {}
     # In-flight (from query-with-files) overrides persisted
     if in_flight:
@@ -979,24 +995,43 @@ def chitchat_response_node(state: AgentState) -> AgentState:
     llm_usage = None
     llm_cost_usd = None
     answer = ""
+    on_token = _get_token_callback()
 
     try:
         client = LLMClient.from_env()
         settings = load_settings()
-        response = client.chat_completion(
-            messages=messages,
-            model=settings.model_preclassifier,  # lightweight model
-            temperature=0.7,
-            stream=False,
-        )
-        answer = (
-            response.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-            .strip()
-        )
-        llm_usage = response.get("_usage_normalized")
-        llm_cost_usd = response.get("_cost_usd_estimate")
+        if on_token:
+            # Real LLM streaming — tokens flow to SSE immediately
+            response = client.stream_chat_completion(
+                messages=messages,
+                model=settings.model_preclassifier,
+                on_token=on_token,
+                temperature=0.7,
+            )
+            answer = (
+                response.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+            )
+            llm_usage = response.get("_usage_normalized")
+            llm_cost_usd = response.get("_cost_usd_estimate")
+        else:
+            # Non-streaming fallback (CLI / eval runner)
+            response = client.chat_completion(
+                messages=messages,
+                model=settings.model_preclassifier,
+                temperature=0.7,
+                stream=False,
+            )
+            answer = (
+                response.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+            )
+            llm_usage = response.get("_usage_normalized")
+            llm_cost_usd = response.get("_cost_usd_estimate")
     except Exception as exc:  # noqa: BLE001
         logger.warning("Chitchat LLM failed: {error}", error=str(exc))
         answer = "Hello! I'm your data analyst assistant. How can I help you with your data today?"
@@ -1051,6 +1086,11 @@ def clarify_question_node(state: AgentState) -> AgentState:
         question=clarification_question[:100],
     )
 
+    # Stream clarification text to frontend
+    on_token = _get_token_callback()
+    if on_token:
+        _stream_text(prefixed_question, on_token)
+
     return {
         "final_answer": prefixed_question,
         "final_payload": {
@@ -1073,15 +1113,40 @@ def clarify_question_node(state: AgentState) -> AgentState:
     }
 
 
+MAX_LEADER_ITERATIONS = 6
+
+# Module-level set for cancellation signalling (set by /chat/cancel endpoint)
+_cancelled_threads: set[str] = set()
+
+
+def request_cancel(thread_id: str) -> None:
+    """Mark a thread as cancelled (called from cancel API endpoint)."""
+    _cancelled_threads.add(thread_id)
+    logger.info("Cancel requested for thread={thread}", thread=thread_id[:8])
+
+
+def clear_cancel(thread_id: str) -> None:
+    """Clear cancellation flag after handling."""
+    _cancelled_threads.discard(thread_id)
+
+
+def is_cancelled(thread_id: str) -> bool:
+    return thread_id in _cancelled_threads
+
+
 def _evaluate_artifacts(state: AgentState) -> AgentState:
     """Deterministic evaluation of collected artifacts.
 
-    Checks:
-    1. All required capabilities from TaskProfile are covered by artifacts
-    2. Any failed artifact with retry recommendation
-    3. Terminal artifact present → can finalize
-    4. Max steps exceeded → force finalize
-    5. Ambiguous task (low confidence) → ask user to clarify
+    Checks (in priority order):
+    1. Cancellation requested → force finalize
+    2. Leader already produced final_answer → finalize (prevents infinite loop)
+    3. Max iterations exceeded → force finalize
+    4. Terminal artifact present → can finalize
+    5. Failed artifact with retry recommendation
+    6. All required capabilities covered → finalize
+    7. Ambiguous task (low confidence) → ask user to clarify
+    8. No artifacts needed → finalize
+    9. Otherwise → continue
     """
     task_profile = state.get("task_profile") or {}
     artifacts = state.get("artifacts", [])
@@ -1089,6 +1154,8 @@ def _evaluate_artifacts(state: AgentState) -> AgentState:
     task_mode = task_profile.get("task_mode", "simple")
     task_confidence = task_profile.get("confidence", "high")
     user_query = state.get("user_query", "")
+    step_count = state.get("step_count", 0)
+    thread_id = state.get("thread_id", "")
 
     # Map capabilities to artifact types
     CAPABILITY_TO_TYPE = {
@@ -1096,6 +1163,78 @@ def _evaluate_artifacts(state: AgentState) -> AgentState:
         "visualization": "chart",
         "report": "report_draft",
     }
+
+    # Check cancellation
+    if thread_id and is_cancelled(thread_id):
+        clear_cancel(thread_id)
+        return {
+            "artifact_evaluation": {
+                "decision": "finalize",
+                "reason": "user_cancelled",
+            },
+            "final_answer": "Đã dừng theo yêu cầu của bạn.",
+            "final_payload": {
+                "answer": "Đã dừng theo yêu cầu của bạn.",
+                "confidence": "low",
+                "used_tools": [],
+                "evidence": [],
+                "step_count": step_count + 1,
+            },
+            "confidence": "low",
+            "tool_history": [
+                {
+                    "tool": "artifact_evaluator",
+                    "decision": "finalize",
+                    "reason": "user_cancelled",
+                }
+            ],
+            "step_count": step_count + 1,
+        }
+
+    # Leader already finalized — respect it even if artifacts are missing.
+    # This is the key fix for queries like "Mô tả về data này" where the LLM
+    # correctly answers without running SQL, but the evaluator expected sql_result.
+    final_answer = state.get("final_answer", "")
+    if final_answer and not state.get("response_mode") == "report":
+        logger.info(
+            "Artifact evaluator: final_answer already set ({len} chars), finalizing",
+            len=len(final_answer),
+        )
+        return {
+            "artifact_evaluation": {
+                "decision": "finalize",
+                "reason": "final_answer_present",
+            },
+            "tool_history": [
+                {
+                    "tool": "artifact_evaluator",
+                    "decision": "finalize",
+                    "reason": "final_answer_present",
+                }
+            ],
+            "step_count": step_count + 1,
+        }
+
+    # Max iteration guard — prevent infinite loops
+    if step_count >= MAX_LEADER_ITERATIONS:
+        logger.warning(
+            "Artifact evaluator: max iterations ({max}) reached, forcing finalize",
+            max=MAX_LEADER_ITERATIONS,
+        )
+        return {
+            "artifact_evaluation": {
+                "decision": "finalize",
+                "reason": f"max_iterations_reached ({step_count})",
+            },
+            "tool_history": [
+                {
+                    "tool": "artifact_evaluator",
+                    "decision": "finalize",
+                    "reason": f"max_iterations_reached ({step_count})",
+                }
+            ],
+            "step_count": step_count + 1,
+        }
 
     # Check coverage
     collected_types = {a.get("artifact_type") for a in artifacts}
@@ -1760,6 +1899,7 @@ def leader_agent(state: AgentState) -> AgentState:
     session_context = state.get("session_context", "")
     xml_database_context = state.get("xml_database_context", "")
     settings = load_settings()
+    thread_id_local = state.get("thread_id", "")
 
     scratchpad_entries: list[str] = []
     leader_tool_history: list[dict[str, Any]] = []
@@ -1900,6 +2040,36 @@ def leader_agent(state: AgentState) -> AgentState:
         }
 
     for step in range(1, 6):
+        # Check cancellation at each step
+        if thread_id_local and is_cancelled(thread_id_local):
+            clear_cancel(thread_id_local)
+            logger.info("Leader agent cancelled at step {step}", step=step)
+            return {
+                "final_answer": "Đã dừng theo yêu cầu của bạn.",
+                "final_payload": {
+                    "answer": "Đã dừng theo yêu cầu của bạn.",
+                    "confidence": "low",
+                    "used_tools": used_high_level_tools,
+                    "evidence": [],
+                    "step_count": state.get("step_count", 0) + step,
+                    "total_token_usage": total_token_usage,
+                    "total_cost_usd": round(total_cost_usd, 8),
+                    "context_type": state.get("context_type", "default"),
+                    "sql_rows": [],
+                    "sql_row_count": 0,
+                    "visualization": None,
+                    "visualizations": visualization_results,
+                    "result_metadata": None,
+                },
+                "response_mode": "answer",
+                "intent": inferred_intent or "unknown",
+                "intent_reason": "user_cancelled",
+                "confidence": "low",
+                "step_count": state.get("step_count", 0) + step,
+                "tool_history": leader_tool_history,
+                "artifacts": artifacts,
+            }
+
         messages = prompt_manager.leader_agent_messages(
             query=query,
             session_context=session_context,
@@ -1957,6 +2127,10 @@ def leader_agent(state: AgentState) -> AgentState:
             intent = (
                 str(parsed.get("intent", inferred_intent or "unknown")).strip().lower()
             )
+            # Stream answer text to frontend word-by-word
+            on_token = _get_token_callback()
+            if on_token and answer:
+                _stream_text(answer, on_token)
             if confidence not in {"high", "medium", "low"}:
                 confidence = "medium"
             if intent not in {"sql", "mixed", "unknown"}:
@@ -2214,6 +2388,10 @@ def leader_agent(state: AgentState) -> AgentState:
         )
         fallback_artifacts = artifacts + [fallback_artifact]
         answer = fallback_result.get("answer_summary", "Không thể hoàn tất phân tích.")
+        # Stream fallback answer to frontend
+        on_token = _get_token_callback()
+        if on_token and answer:
+            _stream_text(answer, on_token)
         payload = {
             "answer": answer,
             "evidence": [

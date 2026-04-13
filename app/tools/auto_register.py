@@ -8,6 +8,7 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+from psycopg import sql
 
 from app.config import load_settings
 from app.logger import logger
@@ -143,8 +144,12 @@ def _execute_create_table(
 
         with conn.cursor() as cur:
             # Drop table if exists (for re-upload scenarios)
-            safe_table = _quote_identifier(profile.table_name)
-            cur.execute(f'DROP TABLE IF EXISTS {safe_table}')
+            # Use psycopg.sql.SQL() to prevent SQL injection
+            cur.execute(
+                sql.SQL("DROP TABLE IF EXISTS {}").format(
+                    sql.Identifier(profile.table_name)
+                )
+            )
 
             # Create table with PostgreSQL-compatible types
             pg_schema_sql = _convert_sqlite_to_postgres_schema(profile)

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { ImageViewer } from "@/components/artifact/ImageViewer";
 import type { VisualizationResponse } from "@/lib/types";
 import { toBackendAssetUrl } from "@/lib/url";
 
@@ -12,6 +13,7 @@ interface ChartViewProps {
 export function ChartView({ visualizations }: ChartViewProps) {
   const validVisualizations = visualizations.filter((viz) => !!viz?.image_url);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   const activeVisualization = validVisualizations[activeIndex] ?? null;
   const resolvedImageUrl = toBackendAssetUrl(activeVisualization?.image_url ?? null);
 
@@ -43,13 +45,24 @@ export function ChartView({ visualizations }: ChartViewProps) {
         </div>
       )}
 
-      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm p-4">
+      <div
+        className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm p-4 cursor-zoom-in"
+        onClick={() => setViewerSrc(resolvedImageUrl)}
+      >
         <img
           src={resolvedImageUrl}
           alt={`Visualization ${activeIndex + 1}`}
           className="w-full h-auto rounded-lg"
         />
       </div>
+
+      {viewerSrc && (
+        <ImageViewer
+          src={viewerSrc}
+          alt={`Visualization ${activeIndex + 1}`}
+          onClose={() => setViewerSrc(null)}
+        />
+      )}
     </div>
   );
 }

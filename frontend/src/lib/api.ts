@@ -116,3 +116,13 @@ export async function updateTableContext(
     body: JSON.stringify({ context }),
   });
 }
+
+// ─── Cancel running query ──────────────────────────────────────────────────
+
+export async function cancelQuery(threadId: string): Promise<{ cancelled: boolean; thread_id: string }> {
+  return fetchJSON("/query/cancel", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ thread_id: threadId }),
+  });
+}

@@ -17,7 +17,7 @@ DA Agent Lab — Hybrid Architecture v3
 | `inject_session_context`  | Memory     | Load conversation history via `thread_id`                           |
 | `task_grounder`           | Classifier | LLM (mini) → `TaskProfile` (mode, source, capabilities, confidence) |
 | `leader_agent`            | Supervisor | 5-step tool-calling loop — SQL, viz, report                         |
-| `artifact_evaluator`      | Evaluator  | Deterministic: finalize / continue / retry / **wait_for_user**      |
+| `artifact_evaluator`      | Evaluator  | Deterministic: finalize / continue / retry / **wait_for_user** / cancel |
 | `clarify_question_node`   | Interrupt  | Halt → show `[CLARIFY]` question → **END** (no memory save)         |
 | `capture_action_node`     | Memory     | Save `last_action`, `conversation_turn`                             |
 | `compact_and_save_memory` | Memory     | Persist to PostgreSQL (agent schema)                                |

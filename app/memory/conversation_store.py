@@ -358,8 +358,8 @@ class ConversationMemoryStore:
                     "DELETE FROM agent.turn_artifacts WHERE thread_id = %s",
                     (thread_id,),
                 )
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to clear artifacts for thread {thread}: {error}", thread=thread, error=str(exc))
             conn.commit()
         logger.info("Cleared conversation memory: thread={thread}", thread=thread_id)
 

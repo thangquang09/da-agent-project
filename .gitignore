@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.example.*
 
 # Virtual environments
 .venv/
@@ -19,6 +20,7 @@ __pycache__/
 .pytest_cache/
 .coverage
 .coverage.*
+coverage.json
 htmlcov/
 
 # Type checker / linter caches
@@ -103,3 +105,6 @@ report_subgraph_plan/
 
 postgres_data
 test/
+.omx/
+.omc/
+.next/

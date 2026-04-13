@@ -2,7 +2,7 @@
 
 import { useState, useRef, type KeyboardEvent } from "react";
 import { useChatStore } from "@/stores/chatStore";
-import { Send } from "lucide-react";
+import { Send, Square } from "lucide-react";
 
 export function ChatInput() {
   const [input, setInput] = useState("");
@@ -10,6 +10,7 @@ export function ChatInput() {
 
   const isStreaming = useChatStore((s) => s.isStreaming);
   const sendMessage = useChatStore((s) => s.sendMessage);
+  const stopStreaming = useChatStore((s) => s.stopStreaming);
 
   const handleSend = () => {
     const trimmed = input.trim();
@@ -55,14 +56,24 @@ export function ChatInput() {
           className="flex-1 resize-none rounded-xl border border-[#dcd8ce] dark:border-[#343434] bg-[#f7f5f0] dark:bg-[#1d1d1d] text-[#2f2f2f] dark:text-[#efefef] px-4 py-2.5 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[#686868]/20 focus:border-[#8a8a8a] placeholder:text-[#8f8f8f] dark:placeholder:text-[#8b8b8b] disabled:opacity-50"
         />
 
-        {/* Send button */}
-        <button
-          onClick={handleSend}
-          disabled={!input.trim() || isStreaming}
-          className="p-2.5 rounded-xl bg-[#2f2f2f] hover:bg-[#3a3a3a] dark:bg-[#e9e9e9] dark:hover:bg-[#dcdcdc] text-[#fafafa] dark:text-[#171717] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-        >
-          <Send size={16} />
-        </button>
+        {/* Send / Stop button */}
+        {isStreaming ? (
+          <button
+            onClick={stopStreaming}
+            className="p-2.5 rounded-xl bg-red-500 hover:bg-red-600 text-white transition-colors"
+            title="Dừng"
+          >
+            <Square size={16} />
+          </button>
+        ) : (
+          <button
+            onClick={handleSend}
+            disabled={!input.trim()}
+            className="p-2.5 rounded-xl bg-[#2f2f2f] hover:bg-[#3a3a3a] dark:bg-[#e9e9e9] dark:hover:bg-[#dcdcdc] text-[#fafafa] dark:text-[#171717] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <Send size={16} />
+          </button>
+        )}
       </div>
     </div>
   );
