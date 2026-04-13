@@ -6,6 +6,12 @@
 
 ---
 
+## Live Demo
+
+- Frontend demo: https://da-agent-project.vercel.app/
+- Backend health: https://thangquangly0909--da-agent-api.modal.run/health
+- Backend readiness: https://thangquangly0909--da-agent-api.modal.run/ready
+
 ## What it does
 
 DA Agent Lab nhận câu hỏi tiếng Việt/tiếng Anh về business data — từ đơn giản ("DAU hôm qua?") đến phức tạp ("So sánh retention cohort tháng này với tháng trước rồi vẽ chart") — và tự động hoàn thiện:
@@ -72,6 +78,15 @@ Agent exposed **4 high-level tools** qua Leader Agent tool-calling surface:
 - Portfolio demo blueprint: [`docs/deployment/portfolio-demo.md`](docs/deployment/portfolio-demo.md)
 - Demo env template: [`.env.example.demo`](.env.example.demo)
 - Modal entrypoint: [`deploy/modal_app.py`](deploy/modal_app.py)
+- Frontend production demo: https://da-agent-project.vercel.app/
+- Backend production health: https://thangquangly0909--da-agent-api.modal.run/health
+- Backend production readiness: https://thangquangly0909--da-agent-api.modal.run/ready
+
+### CI/CD
+
+- **CI:** GitHub Actions chạy backend tests + health/readiness smoke test + frontend lint/typecheck/build
+- **Frontend CD:** Vercel tự deploy từ GitHub
+- **Backend CD:** GitHub Actions tự chạy `modal deploy deploy/modal_app.py` sau khi CI pass trên `main`/`master`
 
 ## Development Commands
 

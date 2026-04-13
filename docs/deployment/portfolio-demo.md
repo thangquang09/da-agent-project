@@ -7,6 +7,12 @@ Mục tiêu: deploy bản demo **ổn định, rẻ, dễ giải thích** với 
 - **Database:** Neon Postgres
 - **CI/CD:** GitHub Actions
 
+## Current production URLs
+
+- Frontend: https://da-agent-project.vercel.app/
+- Backend health: https://thangquangly0909--da-agent-api.modal.run/health
+- Backend readiness: https://thangquangly0909--da-agent-api.modal.run/ready
+
 ## 1) Scope khuyên dùng
 
 Ưu tiên bản demo theo hướng:
