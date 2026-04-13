@@ -42,9 +42,9 @@ Checklist:
 1. Tạo project + database trên Neon
 2. Lấy pooled connection string
 3. Gán vào:
-   - local `.env`
-   - GitHub Actions secrets nếu cần
-   - Modal secret `da-agent-demo-env`
+   - **local `.env`**: giữ `postgresql://postgres:postgres@localhost:5432/postgres` để dev/test an toàn
+   - **production / Modal**: dùng Neon trong secret `da-agent-demo-env`
+   - GitHub Actions secrets nếu cần cho các workflow khác
 
 ## 4) Modal
 
@@ -142,7 +142,8 @@ Bạn lấy 2 giá trị này từ Modal token/service-user của workspace dùn
 
 - Workflow này **không tự sync lại** secret `da-agent-demo-env` trong Modal.
 - Nghĩa là nếu bạn đổi `DATABASE_URL`, `LLM_API_URL`, `LLM_API_KEY`, ... thì cần update secret đó trên Modal.
-- Với portfolio demo, cách này vẫn đủ gọn và an toàn.
+- Local development vẫn nên giữ Docker Postgres riêng, không trỏ vào Neon production.
+- Với portfolio demo, artifact production được phép ephemeral trên Modal và mất sau restart/redeploy.
 
 ## 8) Demo runbook
 

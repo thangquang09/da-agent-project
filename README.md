@@ -88,6 +88,12 @@ Agent exposed **4 high-level tools** qua Leader Agent tool-calling surface:
 - **Frontend CD:** Vercel tự deploy từ GitHub
 - **Backend CD:** GitHub Actions tự chạy `modal deploy deploy/modal_app.py` sau khi CI pass trên `main`/`master`
 
+### Local vs Production data
+
+- **Local development:** Docker Postgres (`postgresql://postgres:postgres@localhost:5432/postgres`)
+- **Production:** Neon Postgres qua Modal secret `da-agent-demo-env`
+- **Artifact policy:** production artifacts trên Modal là ephemeral by design cho portfolio demo
+
 ## Development Commands
 
 ```bash
@@ -118,7 +124,7 @@ curl -N "http://localhost:8001/query/stream?q=DAU&thread_id=test"
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `DATABASE_URL` | ✅ | `postgresql://postgres:postgres@localhost:5432/postgres` | PostgreSQL |
+| `DATABASE_URL` | ✅ | `postgresql://postgres:postgres@localhost:5432/postgres` | Local development uses Docker Postgres; production uses Neon via Modal secret |
 | `APP_MODE` | ❌ | `full` | `demo` để tắt bớt feature nặng cho bản portfolio |
 | `LLM_API_URL` | ✅ | — | LLM API endpoint |
 | `LLM_API_KEY` | ✅ | — | API key |
