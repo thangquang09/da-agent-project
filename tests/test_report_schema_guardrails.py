@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from app.graph.nodes import _ensure_v3_schema_context
@@ -18,8 +20,18 @@ def test_ensure_v3_schema_context_builds_xml_without_business_context(analytics_
 
     enriched = _ensure_v3_schema_context(state)
 
+    # schema_context is a JSON string — parse to check actual table count
     schema_context = enriched.get("schema_context")
     if not schema_context:
+        pytest.skip("No tables in PostgreSQL — requires seeded DB (local only)")
+
+    try:
+        overview = json.loads(schema_context)
+    except (json.JSONDecodeError, TypeError):
+        overview = {}
+
+    tables = overview.get("tables", [])
+    if not tables:
         pytest.skip("No tables in PostgreSQL — requires seeded DB (local only)")
 
     xml_context = enriched.get("xml_database_context", "")

@@ -1335,7 +1335,7 @@ def artifact_evaluator(state: AgentState) -> AgentState:
 
 
 def _ensure_v3_schema_context(state: AgentState) -> AgentState:
-    if state.get("schema_context") and state.get("xml_database_context") is not None:
+    if state.get("schema_context") and state.get("xml_database_context"):
         return state
 
     db_path = Path(state["target_db_path"]) if state.get("target_db_path") else None
