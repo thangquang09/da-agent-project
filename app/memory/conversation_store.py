@@ -352,15 +352,17 @@ class ConversationMemoryStore:
                 "DELETE FROM agent.conversation_summary WHERE thread_id = %s",
                 (thread_id,),
             )
-            # Also clear artifacts (table may not exist on first run)
-            try:
-                conn.execute(
+            conn.commit()
+        # Also clear artifacts in a separate connection (table may not exist on first run)
+        try:
+            with self._get_connection() as conn2:
+                conn2.execute(
                     "DELETE FROM agent.turn_artifacts WHERE thread_id = %s",
                     (thread_id,),
                 )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Failed to clear artifacts for thread {thread}: {error}", thread=thread_id, error=str(exc))
-            conn.commit()
+                conn2.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to clear artifacts for thread {thread}: {error}", thread=thread_id, error=str(exc))
         logger.info("Cleared conversation memory: thread={thread}", thread=thread_id)
 
 
