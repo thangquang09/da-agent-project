@@ -106,6 +106,38 @@ Hiện workflow chạy:
 - frontend typecheck
 - frontend build
 
+
+## 7.5) GitHub Actions backend CD -> Modal
+
+Repo hiện đã có job `deploy-backend-modal` trong `.github/workflows/ci.yml`.
+
+Nó chỉ chạy khi:
+
+- push lên `main` hoặc `master`
+- và 2 job `backend` + `frontend` pass
+
+### GitHub secrets cần tạo
+
+Vào **GitHub repo -> Settings -> Secrets and variables -> Actions** rồi tạo:
+
+- `MODAL_TOKEN_ID`
+- `MODAL_TOKEN_SECRET`
+
+Bạn lấy 2 giá trị này từ Modal token/service-user của workspace dùng để deploy.
+
+### Flow deploy backend
+
+1. GitHub Actions authenticate với Modal bằng `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET`
+2. Chạy `modal deploy deploy/modal_app.py`
+3. Modal update app `da-agent-demo`
+4. Traffic được chuyển dần sang version mới nếu build/deploy thành công
+
+### Lưu ý
+
+- Workflow này **không tự sync lại** secret `da-agent-demo-env` trong Modal.
+- Nghĩa là nếu bạn đổi `DATABASE_URL`, `LLM_API_URL`, `LLM_API_KEY`, ... thì cần update secret đó trên Modal.
+- Với portfolio demo, cách này vẫn đủ gọn và an toàn.
+
 ## 8) Demo runbook
 
 Trước lúc demo:
