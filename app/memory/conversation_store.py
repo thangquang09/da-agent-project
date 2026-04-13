@@ -359,7 +359,7 @@ class ConversationMemoryStore:
                     (thread_id,),
                 )
             except Exception as exc:  # noqa: BLE001
-                logger.warning("Failed to clear artifacts for thread {thread}: {error}", thread=thread, error=str(exc))
+                logger.warning("Failed to clear artifacts for thread {thread}: {error}", thread=thread_id, error=str(exc))
             conn.commit()
         logger.info("Cleared conversation memory: thread={thread}", thread=thread_id)
 

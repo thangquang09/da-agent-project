@@ -172,6 +172,8 @@ def test_visualization_factory_defaults_to_docker(monkeypatch):
 
     config_module.load_settings.cache_clear()
     monkeypatch.setenv("TYPE_OF_SANDBOX", "docker")
+    monkeypatch.setenv("APP_MODE", "full")
+    monkeypatch.setenv("ENABLE_VISUALIZATION", "true")
     monkeypatch.setattr(
         "app.tools.visualization.shutil.which", lambda name: "/usr/bin/docker"
     )
