@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -2771,6 +2772,28 @@ def _compact_conversation(
 
 
 # =============================================================================
+# Background memory persistence helper
+# =============================================================================
+
+
+def _compact_and_save_background(state_snapshot: dict[str, Any]) -> None:
+    """Run compact_and_save_memory in a background daemon thread.
+
+    Called fire-and-forget from capture_action_node so the graph can return
+    the answer to the user immediately without waiting for DB writes.
+
+    Uses a plain dict snapshot of state (not the live AgentState) so there
+    is no shared-state concurrency hazard.
+    """
+    try:
+        compact_and_save_memory(state_snapshot)  # type: ignore[arg-type]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Background compact_and_save_memory failed: {err}", err=str(exc)
+        )
+
+
+# =============================================================================
 # Continuity Detection - Memory of Action
 # =============================================================================
 
@@ -2842,6 +2865,19 @@ def capture_action_node(state: AgentState) -> AgentState:
         has_viz=last_action.get("has_visualization", False),
         rid=run_id[:8] if run_id else "-",
     )
+
+    # Fire-and-forget: compact_and_save_memory chạy nền để không block user response
+    # State được copy thủ công (dict) vì state object không thread-safe để share
+    _state_snapshot = dict(state)
+    _state_snapshot["last_action"] = last_action  # include last_action vừa capture
+    _bg_thread = threading.Thread(
+        target=_compact_and_save_background,
+        args=(_state_snapshot,),
+        daemon=True,
+        name=f"compact-{run_id[:8] if run_id else 'unknown'}",
+    )
+    _bg_thread.start()
+    logger.debug("compact_and_save_memory dispatched to background thread")
 
     return {"last_action": last_action}
 
