@@ -98,12 +98,12 @@ def trace_node(node_name: str | None = None):
             if isinstance(state, dict):
                 user_query = str(state.get("user_query", "-") or "-")
             node_logger = logger.bind(run_id=run_id, node_name=name, task_id=task_id, user_query=user_query)
-            node_logger.debug("INPUT | {}", _filtered_state(state if isinstance(state, dict) else {}))
+            node_logger.debug("INPUT | " + str(_filtered_state(state if isinstance(state, dict) else {})).replace("{", "{{").replace("}", "}}"))
 
             try:
                 result = fn(state)
                 if isinstance(result, dict):
-                    node_logger.debug("OUTPUT | {}", _filtered_state(result))
+                    node_logger.debug("OUTPUT | " + str(_filtered_state(result)).replace("{", "{{").replace("}", "}}"))
                 else:
                     node_logger.debug("OUTPUT | <non-dict>")
                 return result

@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conftest import REAL_LLM_ENABLED
+import os
+
+REAL_LLM_ENABLED = os.getenv("USE_REAL_LLM", "0") == "1"
 
 
 class TestRealLLMIntegration:

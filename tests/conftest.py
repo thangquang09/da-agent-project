@@ -656,7 +656,7 @@ def real_v3_llm(request, monkeypatch):
     # Use real LLMClient instead of FakeLLM
     real_client = LLMClient.from_env()
     monkeypatch.setattr("app.graph.nodes.LLMClient.from_env", lambda: real_client)
-    monkeypatchsetattr("app.graph.sql_worker_graph.LLMClient.from_env", lambda: real_client)
+    monkeypatch.setattr("app.graph.sql_worker_graph.LLMClient.from_env", lambda: real_client)
     monkeypatch.setattr("app.graph.report_subgraph.LLMClient.from_env", lambda: real_client)
 
     yield real_client
