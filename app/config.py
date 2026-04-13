@@ -41,7 +41,13 @@ class Settings:
     default_synthesis_model: str
     available_models: tuple[str, ...]
     database_url: str
+    app_mode: str
+    demo_mode: bool
+    artifact_mode: str
     enable_llm_sql_generation: bool
+    enable_visualization: bool
+    enable_qdrant: bool
+    enable_startup_embedding_prewarm: bool
     trace_jsonl_path: str
     enable_langfuse: bool
     langfuse_project_name: str
@@ -108,6 +114,22 @@ def load_settings() -> Settings:
     default_router_model = os.getenv("DEFAULT_ROUTER_MODEL", default_model)
     default_synthesis_model = os.getenv("DEFAULT_SYNTHESIS_MODEL", default_model)
 
+    app_mode = (os.getenv("APP_MODE", "full").strip().lower() or "full")
+    demo_mode = app_mode == "demo"
+    artifact_mode = (os.getenv("ARTIFACT_MODE", "local").strip().lower() or "local")
+    enable_visualization = _env_bool(
+        os.getenv("ENABLE_VISUALIZATION"),
+        not demo_mode,
+    )
+    enable_qdrant = _env_bool(
+        os.getenv("ENABLE_QDRANT"),
+        not demo_mode,
+    )
+    enable_startup_embedding_prewarm = _env_bool(
+        os.getenv("ENABLE_STARTUP_EMBEDDING_PREWARM"),
+        enable_qdrant and not demo_mode,
+    )
+
     # Node-specific models (can be overridden via env vars for flexibility)
     model_leader = os.getenv("MODEL_LEADER", default_model)
     model_router = os.getenv("MODEL_ROUTER", default_router_model)
@@ -141,14 +163,20 @@ def load_settings() -> Settings:
             "DATABASE_URL",
             "postgresql://postgres:postgres@localhost:5432/postgres",
         ),
+        app_mode=app_mode,
+        demo_mode=demo_mode,
+        artifact_mode=artifact_mode,
         enable_llm_sql_generation=_env_bool(
             os.getenv("ENABLE_LLM_SQL_GENERATION"), True
         ),
+        enable_visualization=enable_visualization,
+        enable_qdrant=enable_qdrant,
+        enable_startup_embedding_prewarm=enable_startup_embedding_prewarm,
         trace_jsonl_path=os.getenv(
             "TRACE_JSONL_PATH",
             str(PROJECT_ROOT / "evals" / "reports" / "traces.jsonl"),
         ),
-        enable_langfuse=_env_bool(os.getenv("ENABLE_LANGFUSE"), True),
+        enable_langfuse=_env_bool(os.getenv("ENABLE_LANGFUSE"), False),
         prompt_cache_ttl_seconds=_env_int(os.getenv("PROMPT_CACHE_TTL_SECONDS"), 300),
         enable_mcp_tool_client=_env_bool(os.getenv("ENABLE_MCP_TOOL_CLIENT"), False),
         mcp_transport=os.getenv("MCP_TRANSPORT", "streamable-http"),
@@ -212,7 +240,8 @@ def load_settings() -> Settings:
         )
 
     logger.info(
-        "Settings ready (router_model={router}, synthesis_model={synthesis}, api_url={url})",
+        "Settings ready (mode={mode}, router_model={router}, synthesis_model={synthesis}, api_url={url})",
+        mode=settings.app_mode,
         router=settings.default_router_model,
         synthesis=settings.default_synthesis_model,
         url=settings.llm_api_url,

@@ -4,6 +4,17 @@ from fastapi.testclient import TestClient
 
 from backend.main import create_app
 
+
+class _DummyConn:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, _sql: str):
+        return None
+
 MULTI_QUERY = (
     '"Có bao nhiêu học sinh nam và bao nhiêu học sinh nữ trong tập dữ liệu này?"\n\n'
     '"Điểm toán (math score) trung bình của toàn bộ học sinh là bao nhiêu?"\n\n'
@@ -48,3 +59,26 @@ def test_query_endpoint_rejects_legacy_versions(fake_v3_llm):
     )
 
     assert response.status_code == 422
+
+
+def test_health_includes_app_mode(fake_v3_llm):
+    client = TestClient(create_app())
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json()["app_mode"] in {"full", "demo"}
+
+
+def test_ready_reports_checks(fake_v3_llm, monkeypatch):
+    from backend.routers import health as health_router
+
+    monkeypatch.setattr(health_router.psycopg, "connect", lambda *_args, **_kwargs: _DummyConn())
+
+    client = TestClient(create_app())
+    response = client.get("/ready")
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["status"] == "ready"
+    assert "database" in body["checks"]
+    assert "artifact_root" in body["checks"]

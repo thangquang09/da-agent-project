@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,26 @@ import pytest
 from app.config import load_settings
 from app.tools.visualization import ReportAnalysisResult
 from data.seeds.create_seed_db import main as seed_main
+from app.llm.client import LLMClient
+
+
+def pytest_configure(config):
+    """Custom pytest configuration markers."""
+    config.addinivalue_line(
+        "markers",
+        "real_llm: marks tests to run with real LLM (requires USE_REAL_LLM=1 or --real-llm flag)",
+    )
+
+
+def pytest_addoption(parser):
+    """Add custom command line options to pytest."""
+    group = parser.getgroup("da-agent", "DA Agent testing options")
+    group.addoption(
+        "--real-llm",
+        action="store_true",
+        default=False,
+        help="Enable real LLM for integration tests (requires LLM_API_KEY env var). Sets USE_REAL_LLM=1.",
+    )
 
 
 MULTI_QUERY = (
@@ -603,6 +624,44 @@ def fake_v3_llm(monkeypatch):
     monkeypatch.setattr("app.graph.sql_worker_graph.LLMClient.from_env", lambda: client)
     monkeypatch.setattr("app.graph.report_subgraph.LLMClient.from_env", lambda: client)
     yield client
+
+
+@pytest.fixture
+def real_v3_llm(request, monkeypatch):
+    """
+    Real LLM client fixture for integration testing.
+
+    Uses actual LLM API to catch real errors that FakeLLM might miss.
+    Enable via:
+    - Environment variable: USE_REAL_LLM=1
+    - CLI flag: pytest --real-llm
+    - Pytest marker: pytest -m real_llm
+
+    This fixture is skipped unless explicitly enabled to avoid API costs during normal testing.
+    """
+    # Check both environment variable and CLI flag
+    use_real_llm = (
+        os.getenv("USE_REAL_LLM", "0") == "1"
+        or request.config.getoption("--real-llm")
+    )
+
+    if not use_real_llm:
+        pytest.skip("Real LLM testing not enabled. Set USE_REAL_LLM=1 or use --real-llm flag.")
+
+    # Verify API key is available
+    settings = load_settings()
+    if not settings.llm_api_key:
+        pytest.skip("LLM_API_KEY not configured for real LLM testing.")
+
+    # Use real LLMClient instead of FakeLLM
+    real_client = LLMClient.from_env()
+    monkeypatch.setattr("app.graph.nodes.LLMClient.from_env", lambda: real_client)
+    monkeypatchsetattr("app.graph.sql_worker_graph.LLMClient.from_env", lambda: real_client)
+    monkeypatch.setattr("app.graph.report_subgraph.LLMClient.from_env", lambda: real_client)
+
+    yield real_client
+
+    # Cleanup - restore original (though monkeypatch should handle this automatically)
 
 
 @pytest.fixture

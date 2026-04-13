@@ -188,12 +188,27 @@ export function TraceTimeline({ runId }: TraceTimelineProps) {
   const [tab, setTab] = useState<Tab>("graph");
 
   useEffect(() => {
-    setLoading(true);
-    setError(null);
+    let cancelled = false;
+
     getTrace(runId)
-      .then(setTrace)
-      .catch(() => setError("Failed to load trace data"))
-      .finally(() => setLoading(false));
+      .then((nextTrace) => {
+        if (cancelled) return;
+        setTrace(nextTrace);
+        setError(null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setTrace(null);
+        setError("Failed to load trace data");
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [runId]);
 
   if (loading) {

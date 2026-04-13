@@ -6,10 +6,15 @@ This document lists the environment variables used in the project, extracted fro
 | Variable | Required | Description | Example | Default |
 |----------|----------|-------------|---------|--------|
 | `DATABASE_URL` | Yes | PostgreSQL connection string | `postgresql://postgres:postgres@localhost:5432/postgres` | — |
+| `APP_MODE` | No | Runtime mode (`full` or `demo`) | `demo` | `full` |
 | `LLM_API_URL` | Yes | Base URL for the LLM API | `https://.../v1/chat/completions` | — |
 | `LLM_API_KEY` | Yes | API Key for the LLM | `sk-...` | — |
 | `E2B_API_KEY` | No | E2B sandbox API key for code execution/visualization | `e2b-...` | — |
 | `ENABLE_LANGFUSE` | No | Enable Langfuse observability | `true`/`false` | `false` |
+| `ENABLE_QDRANT` | No | Enable Qdrant-backed session memory | `true`/`false` | `true` in `full`, `false` in `demo` |
+| `ENABLE_VISUALIZATION` | No | Enable visualization sandbox execution | `true`/`false` | `true` in `full`, `false` in `demo` |
+| `ENABLE_STARTUP_EMBEDDING_PREWARM` | No | Preload embedding model during backend startup | `true`/`false` | `true` in `full`, `false` in `demo` |
+| `ARTIFACT_MODE` | No | Artifact persistence mode label for deployment strategy | `local` / `object-storage` / `precomputed` | `local` |
 | `LANGFUSE_PUBLIC_KEY` | No | Public key for Langfuse observability | `pk-lf-...` | — |
 | `LANGFUSE_SECRET_KEY` | No | Secret key for Langfuse observability | `sk-lf-...` | — |
 | `LANGFUSE_HOST` | No | Base URL for Langfuse | `https://cloud.langfuse.com` | — |

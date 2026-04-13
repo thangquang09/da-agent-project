@@ -1535,7 +1535,8 @@ class DockerVisualizationService(E2BVisualizationService):
             return None
         try:
             return base64.b64decode(text)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to decode base64 visualization output: {error}", error=str(exc))
             return None
 
     def _extract_marked_text(self, stdout: str, marker: str) -> str | None:
@@ -1632,7 +1633,7 @@ def get_visualization_service() -> (
     """Get or create the visualization service singleton."""
     global _visualization_service, _visualization_service_key
     settings = load_settings()
-    sandbox_type = settings.type_of_sandbox
+    sandbox_type = settings.type_of_sandbox if settings.enable_visualization else "disabled"
     if _visualization_service is None or _visualization_service_key != sandbox_type:
         if _visualization_service is not None:
             try:
@@ -1654,6 +1655,8 @@ def get_visualization_service() -> (
 def is_visualization_available() -> bool:
     """Check if visualization features are available for the configured sandbox."""
     settings = load_settings()
+    if not settings.enable_visualization:
+        return False
     sandbox_type = settings.type_of_sandbox
     if sandbox_type == "docker":
         return shutil.which("docker") is not None

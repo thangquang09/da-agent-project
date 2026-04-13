@@ -24,7 +24,10 @@ COPY app/ ./app/
 COPY backend/ ./backend/
 COPY mcp_server/ ./mcp_server/
 COPY evals/ ./evals/
+COPY data/__init__.py ./data/__init__.py
+COPY data/migrations/ ./data/migrations/
 COPY data/seeds/ ./data/seeds/
+COPY models.txt ./models.txt
 
 # Pre-create runtime directories (will be mounted as volumes)
 RUN mkdir -p data/warehouse evals/reports

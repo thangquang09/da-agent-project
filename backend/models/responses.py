@@ -94,6 +94,17 @@ class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = "1.0.0"
     graph_version: str = "v3"
+    app_mode: str = "full"
+
+
+class ReadyResponse(BaseModel):
+    status: str = "ready"
+    version: str = "1.0.0"
+    graph_version: str = "v3"
+    app_mode: str = "full"
+    demo_mode: bool = False
+    artifact_mode: str = "local"
+    checks: dict[str, str] = {}
 
 
 class TurnArtifactResponse(BaseModel):

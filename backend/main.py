@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.config import load_settings
 from app.logger import logger
 from backend.routers import artifacts, data, evals, health, query, threads, traces
 
@@ -46,14 +47,17 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def _startup() -> None:
+        settings = load_settings()
         logger.info(
-            "DA Agent backend starting up (port={port})",
+            "DA Agent backend starting up (port={port}, mode={mode})",
             port=os.getenv("BACKEND_PORT", "8001"),
+            mode=settings.app_mode,
         )
 
         # Ensure artifact root directory exists
         try:
             from app.artifacts.file_store import get_artifact_file_store
+
             get_artifact_file_store()
             logger.info("Artifact file store ready")
         except Exception as exc:
@@ -64,20 +68,24 @@ def create_app() -> FastAPI:
 
         get_conversation_memory_store()
 
-        # Pre-warm embedding model to avoid first-request cold start
-        try:
-            from app.memory.qdrant_client import (
-                get_embedding_model,
-                is_qdrant_library_installed,
-            )
+        # Optional embedding prewarm: keep disabled in demo mode unless explicitly enabled.
+        if settings.enable_qdrant and settings.enable_startup_embedding_prewarm:
+            try:
+                from app.memory.qdrant_client import get_embedding_model, is_qdrant_library_installed
 
-            if is_qdrant_library_installed():
-                logger.info("Pre-warming embedding model...")
-                get_embedding_model()
-                logger.info("Embedding model ready")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Embedding model pre-warm failed (non-fatal): {err}", err=str(exc)
+                if is_qdrant_library_installed():
+                    logger.info("Pre-warming embedding model...")
+                    get_embedding_model()
+                    logger.info("Embedding model ready")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Embedding model pre-warm failed (non-fatal): {err}", err=str(exc)
+                )
+        else:
+            logger.info(
+                "Skipping embedding pre-warm (enable_qdrant={qdrant}, prewarm={prewarm})",
+                qdrant=settings.enable_qdrant,
+                prewarm=settings.enable_startup_embedding_prewarm,
             )
 
         logger.info("DA Agent backend ready")

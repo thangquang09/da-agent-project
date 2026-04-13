@@ -8,6 +8,7 @@ from app.graph.standalone_visualization import _normalize_raw_data, inline_data_
 from app.tools.visualization import (
     DockerVisualizationService,
     E2BVisualizationService,
+    NullVisualizationService,
     get_visualization_service,
     is_visualization_available,
 )
@@ -204,6 +205,25 @@ def test_visualization_factory_none_disables_sandbox(monkeypatch):
         ).success
         is False
     )
+    assert is_visualization_available() is False
+    config_module.load_settings.cache_clear()
+    visualization_module._visualization_service = None
+    visualization_module._visualization_service_key = None
+
+
+def test_visualization_flag_disables_service_even_with_docker(monkeypatch):
+    from app import config as config_module
+    from app.tools import visualization as visualization_module
+
+    config_module.load_settings.cache_clear()
+    monkeypatch.setenv("TYPE_OF_SANDBOX", "docker")
+    monkeypatch.setenv("ENABLE_VISUALIZATION", "false")
+    visualization_module._visualization_service = None
+    visualization_module._visualization_service_key = None
+
+    service = get_visualization_service()
+
+    assert isinstance(service, NullVisualizationService)
     assert is_visualization_available() is False
     config_module.load_settings.cache_clear()
     visualization_module._visualization_service = None

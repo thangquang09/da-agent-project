@@ -23,30 +23,22 @@ export function ArtifactPanel() {
   const content = useChatStore((s) => s.artifactContent);
   const closeArtifact = useChatStore((s) => s.closeArtifact);
 
-  const [panelWidth, setPanelWidth] = useState<number>(
-    DEFAULT_WIDTHS[content?.type ?? "sql"]
-  );
+  const [widthByType, setWidthByType] = useState<Record<string, number>>(DEFAULT_WIDTHS);
   const isDragging = useRef(false);
   const startX = useRef(0);
   const startWidth = useRef(0);
 
-  // Reset width when artifact type changes
-  useEffect(() => {
-    if (content?.type) {
-      setPanelWidth(DEFAULT_WIDTHS[content.type] ?? 480);
-    }
-  }, [content?.type]);
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
       isDragging.current = true;
       startX.current = e.clientX;
-      startWidth.current = panelWidth;
+      startWidth.current = widthByType[content?.type ?? "sql"] ?? 480;
       document.body.style.cursor = "col-resize";
       document.body.style.userSelect = "none";
     },
-    [panelWidth]
+    [content?.type, widthByType]
   );
 
   useEffect(() => {
@@ -58,7 +50,8 @@ export function ArtifactPanel() {
         MAX_WIDTH,
         Math.max(MIN_WIDTH, startWidth.current + delta)
       );
-      setPanelWidth(newWidth);
+      const typeKey = content?.type ?? "sql";
+      setWidthByType((prev) => ({ ...prev, [typeKey]: newWidth }));
     };
 
     const handleMouseUp = () => {
@@ -74,9 +67,11 @@ export function ArtifactPanel() {
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, []);
+  }, [content?.type]);
 
   if (!content) return null;
+
+  const panelWidth = widthByType[content.type] ?? DEFAULT_WIDTHS[content.type] ?? 480;
 
   const tabLabel: Record<string, string> = {
     report: "Report",
@@ -130,7 +125,7 @@ export function ArtifactPanel() {
           <ChartView visualizations={content.data as VisualizationResponse[]} />
         )}
         {content.type === "trace" && (
-          <TraceTimeline runId={content.data as string} />
+          <TraceTimeline key={content.data as string} runId={content.data as string} />
         )}
       </div>
     </aside>

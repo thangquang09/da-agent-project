@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 
+from app.config import load_settings
 from app.logger import logger
 
 try:
@@ -53,6 +54,10 @@ def get_qdrant_client() -> "QdrantClient":
 
     Falls back to in-memory mode if credentials not configured.
     """
+    settings = load_settings()
+    if not settings.enable_qdrant:
+        raise RuntimeError("Qdrant is disabled by ENABLE_QDRANT=false or APP_MODE=demo")
+
     if not QDRANT_AVAILABLE:
         raise ImportError(
             "qdrant-client not installed. Install with: pip install qdrant-client"
@@ -119,7 +124,10 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
 
 
 def is_qdrant_available() -> bool:
-    """Check if Qdrant is properly configured with credentials."""
+    """Check if Qdrant is enabled and properly configured with credentials."""
+    settings = load_settings()
+    if not settings.enable_qdrant:
+        return False
     if not QDRANT_AVAILABLE:
         return False
     if not EMBEDDINGS_AVAILABLE:

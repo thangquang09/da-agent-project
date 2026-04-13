@@ -67,6 +67,12 @@ Agent exposed **4 high-level tools** qua Leader Agent tool-calling surface:
 
 ---
 
+## Deployment
+
+- Portfolio demo blueprint: [`docs/deployment/portfolio-demo.md`](docs/deployment/portfolio-demo.md)
+- Demo env template: [`.env.example.demo`](.env.example.demo)
+- Modal entrypoint: [`deploy/modal_app.py`](deploy/modal_app.py)
+
 ## Development Commands
 
 ```bash
@@ -98,12 +104,17 @@ curl -N "http://localhost:8001/query/stream?q=DAU&thread_id=test"
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | ✅ | `postgresql://postgres:postgres@localhost:5432/postgres` | PostgreSQL |
+| `APP_MODE` | ❌ | `full` | `demo` để tắt bớt feature nặng cho bản portfolio |
 | `LLM_API_URL` | ✅ | — | LLM API endpoint |
 | `LLM_API_KEY` | ✅ | — | API key |
 | `E2B_API_KEY` | ❌ | — | E2B sandbox (visualization) |
 | `BACKEND_URL` | ❌ | `http://localhost:8001` | Streamlit → Backend |
 | `TRACE_JSONL_PATH` | ❌ | `evals/reports/traces.jsonl` | JSONL trace output |
 | `ENABLE_LANGFUSE` | ❌ | `false` | Langfuse tracing |
+| `ENABLE_QDRANT` | ❌ | `true` (`full`) / `false` (`demo`) | Enable Qdrant + embeddings paths |
+| `ENABLE_VISUALIZATION` | ❌ | `true` (`full`) / `false` (`demo`) | Enable visualization sandbox paths |
+| `ENABLE_STARTUP_EMBEDDING_PREWARM` | ❌ | `true` (`full`) / `false` (`demo`) | Preload embedding model on startup |
+| `ARTIFACT_MODE` | ❌ | `local` | Artifact persistence strategy marker for deploy/runbooks |
 
 ---
 
