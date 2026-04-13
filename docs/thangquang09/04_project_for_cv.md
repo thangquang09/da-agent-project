@@ -9,14 +9,15 @@ Dự án tồn tại vì tôi muốn học thực tế về agent orchestration 
 ## Technical Stack
 
 - **Orchestration**: LangGraph (`StateGraph`, `add_conditional_edges`, checkpointer)
-- **Language**: Python 3.11+, `uv` cho dependency management
-- **LLM**: OpenAI API (`gpt-4o`, `gpt-4o-mini`) qua unified `LLMClient`
-- **Data**: PostgreSQL (warehouse), SQLite (memory), `sqlglot` cho SQL validation
-- **Workers**: `ThreadPoolExecutor` cho parallel SQL fan-out, E2B sandbox cho visualization
+- **Language**: Python 3.12, `uv` cho dependency management
+- **LLM**: OpenAI-compatible API (`gpt-4.1`, `gpt-4o`) qua unified `LLMClient`
+- **Data**: PostgreSQL (warehouse + agent memory, schemas: `public` / `agent` / `user_data`), `sqlglot` cho SQL validation
+- **Workers**: `ThreadPoolExecutor` cho parallel SQL fan-out, configurable sandbox (Docker / E2B / none) cho visualization/report compute
 - **Observability**: Loguru (structured logging), JSONL traces, Langfuse
 - **API**: FastAPI + SSE streaming
-- **UI**: Streamlit (thin frontend)
+- **UI**: Next.js 16 (primary, Tailwind + Zustand) + Streamlit (legacy CLI)
 - **Testing**: pytest, `monkeypatch`, `conftest.py`
+- **Deployment**: Modal (serverless GPU/CPU, `modal deploy`), Docker (`docker/backend.Dockerfile`), CI/CD via GitHub Actions
 
 ## Key Contributions
 
@@ -87,3 +88,57 @@ Latency cũng quan trọng: E2B sandbox cho visualization startup 5-15s, dominat
 ### Về Observability
 
 `_instrument_node` wrapper + JSONL traces + Langfuse giúp debug thật sự. Khi có bug, tôi có thể replay một run bằng cách đọc trace. Đây là phần đáng đầu tư nhất — không phải feature mới, mà là debugging capability.
+
+## Deployment
+
+### Infrastructure
+
+- **Backend**: Deploy lên [Modal](https://modal.com) — serverless platform, auto-scale từ 0, không cần manage server. App chạy như một ASGI function (`@modal.asgi_app`) bên trong Docker image được build sẵn trên Modal infrastructure.
+- **Frontend**: Next.js 16, deploy riêng (Vercel / static host), point `NEXT_PUBLIC_API_URL` vào Modal endpoint.
+- **Database**: PostgreSQL managed (local: Docker Compose, production: managed PG instance). 3 schemas: `public` (user data/warehouse), `agent` (conversation memory, turn artifacts, result store), `user_data` (uploaded CSVs, table business context).
+
+### CI/CD Pipeline (GitHub Actions)
+
+Pipeline 3 jobs, chạy trên mỗi push vào `master`/`main`:
+
+```
+push → [backend CI] → [frontend CI] → [deploy-backend (Modal)]
+                ↑                ↑
+           pytest + health    lint + typecheck + build
+           smoke test (uvicorn)
+```
+
+1. **backend job**: Spin up PostgreSQL service container, chạy `uv run pytest`, sau đó smoke test `/health` + `/ready` endpoint với uvicorn thật.
+2. **frontend job**: `npm ci` → `npm run lint` → `npm run typecheck` → `npm run build`. Build phải pass trước khi deploy.
+3. **deploy-backend** (only on push, không chạy trên PR): Chạy sau khi cả 2 job trên pass. Install Modal CLI, authenticate bằng `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET` (GitHub secrets), rồi `modal deploy deploy/modal_app.py`.
+
+### Docker Image
+
+`docker/backend.Dockerfile` build image cho Modal:
+
+- Base: `python:3.12-slim`
+- Package manager: `uv` (copy từ `ghcr.io/astral-sh/uv:latest`), `uv sync --no-dev --frozen`
+- Copy: `app/`, `backend/`, `mcp_server/`, `evals/`, `data/migrations/`, `data/seeds/`, `models.txt`
+- Non-root user (`agentuser`) cho security
+- Healthcheck: `curl -f http://localhost:8001/health`
+
+### Modal App (`deploy/modal_app.py`)
+
+```python
+image = modal.Image.from_dockerfile("docker/backend.Dockerfile", context_dir=PROJECT_ROOT)
+app = modal.App("da-agent-demo")
+
+@app.function(image=image, secrets=[modal.Secret.from_name("da-agent-demo-env")])
+@modal.asgi_app(label="da-agent-api")
+def fastapi_app():
+    from backend.main import app as fastapi_app_instance
+    return fastapi_app_instance
+```
+
+Secrets (API keys, DB URL, LLM keys) được inject qua `modal.Secret` — không hardcode vào image hay repo.
+
+### Lessons learned về deployment
+
+- **Modal `copy_tree` limitation**: Modal's image builder dùng `copy_tree` internaly, fail nếu `COPY` single file (không phải directory). Fix: thay `COPY data/__init__.py` bằng `RUN touch ./data/__init__.py` sau khi copy directory.
+- **Demo mode**: `APP_MODE=demo` disable visualization sandbox trong CI vì CI không có Docker-in-Docker. Production dùng `APP_MODE=full` với `TYPE_OF_SANDBOX=docker`.
+- **Schema migration on startup**: `ConversationMemoryStore` tự gọi `_ensure_tables()` khi khởi tạo lần đầu, trigger migration tạo `agent` schema. Không cần migration runner riêng.
