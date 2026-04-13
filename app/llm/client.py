@@ -149,6 +149,7 @@ class LLMClient:
         )
 
         accumulated = ""
+        stream_usage: dict[str, Any] | None = None
         try:
             with request.urlopen(req, timeout=120) as resp:
                 for raw_line in resp:
@@ -162,12 +163,19 @@ class LLMClient:
                             break
                         try:
                             chunk = json.loads(payload_str)
-                            delta = (
-                                chunk.get("choices", [{}])[0]
-                                .get("delta", {})
-                                .get("content", "")
-                            )
-                            if delta:
+                            if isinstance(chunk.get("usage"), dict):
+                                stream_usage = chunk["usage"]
+
+                            choices = chunk.get("choices")
+                            if not isinstance(choices, list) or not choices:
+                                continue
+
+                            delta_payload = choices[0].get("delta", {})
+                            if not isinstance(delta_payload, dict):
+                                continue
+
+                            delta = delta_payload.get("content", "")
+                            if isinstance(delta, str) and delta:
                                 accumulated += delta
                                 on_token(delta)
                         except json.JSONDecodeError:
@@ -186,6 +194,8 @@ class LLMClient:
         result: dict[str, Any] = {
             "choices": [{"message": {"content": accumulated}}],
         }
+        if stream_usage is not None:
+            result["usage"] = stream_usage
         usage = self._normalize_usage(result)
         if usage is not None:
             result["_usage_normalized"] = usage
