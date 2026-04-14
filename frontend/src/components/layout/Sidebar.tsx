@@ -3,6 +3,8 @@
 import { useEffect } from "react";
 import { useChatStore } from "@/stores/chatStore";
 import { useThemeStore } from "@/stores/themeStore";
+import { useUserStore } from "@/stores/userStore";
+import { beaconCleanup } from "@/lib/api";
 import {
   Plus,
   MessageSquare,
@@ -10,6 +12,8 @@ import {
   PanelLeftClose,
   Sun,
   Moon,
+  LogOut,
+  User,
 } from "lucide-react";
 
 export function Sidebar() {
@@ -20,14 +24,27 @@ export function Sidebar() {
   const selectThread = useChatStore((s) => s.selectThread);
   const deleteThread = useChatStore((s) => s.deleteThread);
   const toggleSidebar = useChatStore((s) => s.toggleSidebar);
+  const setUser = useChatStore((s) => s.setUser);
 
   const theme = useThemeStore((s) => s.theme);
   const effectiveTheme = useThemeStore((s) => s.effectiveTheme);
   const setTheme = useThemeStore((s) => s.setTheme);
 
+  const email = useUserStore((s) => s.email);
+  const userId = useUserStore((s) => s.userId);
+  const logout = useUserStore((s) => s.logout);
+
   useEffect(() => {
     fetchThreads();
   }, [fetchThreads]);
+
+  const handleLogout = () => {
+    // Send cleanup beacon so backend drops user tables
+    if (userId) beaconCleanup(userId);
+    // Clear user from both stores
+    logout();
+    setUser(null);
+  };
 
   const toggleTheme = () => {
     const current = theme === "system" ? effectiveTheme : theme;
@@ -110,6 +127,27 @@ export function Sidebar() {
           );
         })}
       </nav>
+
+      {/* User footer */}
+      {email && (
+        <div className="px-3 py-2.5 border-t border-[#dfddd7] dark:border-[#2c2c2c]">
+          <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-[#edeae3] dark:bg-[#242424]">
+            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900/40">
+              <User size={12} className="text-blue-600 dark:text-blue-400" />
+            </div>
+            <span className="flex-1 min-w-0 text-[11px] text-[#4d4d4d] dark:text-[#c0c0c0] truncate" title={email}>
+              {email}
+            </span>
+            <button
+              onClick={handleLogout}
+              title="Đăng xuất"
+              className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-[#9a9a9a] hover:text-red-500 transition-colors"
+            >
+              <LogOut size={13} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Footer */}
       <div className="px-3 py-3 border-t border-[#dfddd7] dark:border-[#2c2c2c] flex items-center justify-between">

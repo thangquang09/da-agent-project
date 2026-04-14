@@ -10,10 +10,26 @@ router = APIRouter(prefix="/threads", tags=["threads"])
 
 
 @router.get("", response_model=list[ThreadInfo])
-async def list_threads(limit: int = 50) -> list[ThreadInfo]:
-    """List all conversation threads, ordered by most recently updated."""
+async def list_threads(limit: int = 50, user_id: str = "") -> list[ThreadInfo]:
+    """List conversation threads, ordered by most recently updated.
+
+    When ``user_id`` is provided, only threads whose ``thread_id`` starts with
+    ``{user_id}__`` are returned (prefix-scoped threads).
+
+    Also triggers lazy TTL cleanup of threads older than 5 days.
+    """
     store = get_conversation_memory_store()
+
+    # Lazy TTL cleanup — prune threads older than 5 days
+    try:
+        store.cleanup_expired_threads(ttl_days=5)
+    except Exception:  # noqa: BLE001
+        pass  # Don't block listing on cleanup failure
+
     rows = store.list_threads(limit=limit)
+    if user_id:
+        prefix = f"{user_id}__"
+        rows = [r for r in rows if r["thread_id"].startswith(prefix)]
     return [ThreadInfo(**row) for row in rows]
 
 

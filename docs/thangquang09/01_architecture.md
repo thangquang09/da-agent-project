@@ -27,7 +27,8 @@ START → process_uploaded_files → inject_session_context → task_grounder
       continue/retry  → leader_agent (loop back)
       wait_for_user   → clarify_question_node → END
       finalize+report  → report_subgraph
-      finalize         → capture_action_node → compact_and_save_memory → END
+      finalize         → capture_action_node → END
+                         └─ [background thread] compact_and_save_memory
 ```
 
 ---
@@ -47,8 +48,8 @@ flowchart TD
     EVAL -->|<i>finalize</i>| CAPTURE[capture_action_node]
     CLARIFY --> END([END])
     REPORT --> CAPTURE
-    CAPTURE --> MEMORY[compact_and_save_memory]
-    MEMORY --> END
+    CAPTURE --> END
+    CAPTURE -.->|background thread| MEMORY[(compact_and_save_memory)]
 
     subgraph report_subgraph
         PROF2[report_data_profiler] --> PLAN[report_planner]
@@ -65,7 +66,7 @@ flowchart TD
 
 DA Agent Lab — Hybrid Architecture v3
 
-### 9 nodes chính (outer graph) + 7 nodes trong report_subgraph
+### 8 nodes chính (outer graph) + 7 nodes trong report_subgraph
 
 
 | Node                      | File                 | Obs type | Vai trò                             |
@@ -77,8 +78,9 @@ DA Agent Lab — Hybrid Architecture v3
 | `artifact_evaluator`      | `nodes.py:1023`      | `agent`  | Deterministic eval của artifacts    |
 | `clarify_question_node`   | `nodes.py:878`       | `memory` | Interrupt, hỏi user làm rõ          |
 | `report_subgraph`         | `report_subgraph.py` | subgraph | request_grounder→profiler_sampler→dataset_profiler→brief_builder→report_planner→[Send fan-out section_pipeline]→sections_sort→report_assembler→report_validator→report_finalize |
-| `capture_action_node`     | `nodes.py`           | `memory` | Ghi nhận final action               |
-| `compact_and_save_memory` | `nodes.py`           | `memory` | Tóm tắt + lưu memory                |
+| `capture_action_node`     | `nodes.py`           | `memory` | Ghi nhận final action; spawn background thread cho `compact_and_save_memory` |
+
+> **`compact_and_save_memory`** không còn là graph node. Được gọi fire-and-forget từ `capture_action_node` qua `threading.Thread(daemon=True)` — user nhận answer ngay, memory persist xảy ra song song.
 
 
 ---

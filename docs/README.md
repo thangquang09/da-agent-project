@@ -8,7 +8,7 @@
 
 DA Agent Lab — Hybrid Architecture v3
 
-**10-node graph**, 3 routing decisions, 1 human-in-the-loop interrupt:
+**9-node graph**, 3 routing decisions, 1 human-in-the-loop interrupt:
 
 
 | Node                      | Type       | Responsibility                                                      |
@@ -19,9 +19,10 @@ DA Agent Lab — Hybrid Architecture v3
 | `leader_agent`            | Supervisor | 5-step tool-calling loop — SQL, viz, report                         |
 | `artifact_evaluator`      | Evaluator  | Deterministic: finalize / continue / retry / **wait_for_user** / cancel |
 | `clarify_question_node`   | Interrupt  | Halt → show `[CLARIFY]` question → **END** (no memory save)         |
-| `capture_action_node`     | Memory     | Save `last_action`, `conversation_turn`                             |
-| `compact_and_save_memory` | Memory     | Persist to PostgreSQL (agent schema)                                |
+| `capture_action_node`     | Memory     | Save `last_action`, `conversation_turn`; fire-and-forget `compact_and_save_memory` in background thread |
 | `report_subgraph`         | Subgraph   | Rebuilt evidence-first pipeline: report_request_grounder → profiler_sampler → report_dataset_profiler → report_brief_builder → report_planner → [Send fan-out section_pipeline] → sections_sort → report_assembler → report_validator → report_finalize |
+
+> **`compact_and_save_memory`** chạy như background daemon thread (fire-and-forget) được spawn từ `capture_action_node` — không còn là node riêng trong graph. User nhận được answer ngay khi `capture_action_node` kết thúc.
 
 
 **Clarify interrupt**: khi `task_profile.confidence == "low"` hoặc `task_mode == "ambiguous"`, graph dừng tại `clarify_question_node` và chờ user input. Câu hỏi được generate tự động bằng heuristic tiếng Việt.

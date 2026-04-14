@@ -19,10 +19,18 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// ─── Health ────────────────────────────────────────────────────────────────
+
+export function getHealth(): Promise<{ status: string }> {
+  return fetchJSON<{ status: string }>("/health");
+}
+
 // ─── Threads ───────────────────────────────────────────────────────────────
 
-export function listThreads(limit = 50): Promise<ThreadInfo[]> {
-  return fetchJSON<ThreadInfo[]>(`/threads?limit=${limit}`);
+export function listThreads(limit = 50, userId?: string): Promise<ThreadInfo[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (userId) params.set("user_id", userId);
+  return fetchJSON<ThreadInfo[]>(`/threads?${params.toString()}`);
 }
 
 export function getThreadHistory(
@@ -48,7 +56,7 @@ export async function postQueryWithFiles(
   query: string,
   threadId: string,
   files: { name: string; data: ArrayBuffer; context: string }[],
-  opts?: { userSemanticContext?: string }
+  opts?: { userSemanticContext?: string; userId?: string }
 ): Promise<QueryResponse> {
   const form = new FormData();
   form.append("query", query);
@@ -83,7 +91,8 @@ export function getTrace(runId: string): Promise<TraceData> {
 // ─── Data Upload ────────────────────────────────────────────────────────────
 
 export async function uploadFiles(
-  files: { name: string; data: ArrayBuffer; context?: string }[]
+  files: { name: string; data: ArrayBuffer; context?: string }[],
+  userId?: string
 ): Promise<UploadResponse> {
   const form = new FormData();
   const contextsMap: Record<string, string> = {};
@@ -95,6 +104,9 @@ export async function uploadFiles(
   if (Object.keys(contextsMap).length > 0) {
     form.append("contexts_json", JSON.stringify(contextsMap));
   }
+  if (userId) {
+    form.append("user_id", userId);
+  }
 
   return fetchJSON<UploadResponse>("/data/upload", {
     method: "POST",
@@ -102,24 +114,79 @@ export async function uploadFiles(
   });
 }
 
-export function getTables(): Promise<TablesResponse> {
-  return fetchJSON<TablesResponse>("/data/tables");
+export function getTables(userId?: string): Promise<TablesResponse> {
+  const params = userId ? `?user_id=${encodeURIComponent(userId)}` : "";
+  return fetchJSON<TablesResponse>(`/data/tables${params}`);
 }
 
 export async function updateTableContext(
   tableName: string,
-  context: string
+  context: string,
+  userId?: string
 ): Promise<{ table_name: string; business_context: string }> {
   return fetchJSON(`/data/tables/${encodeURIComponent(tableName)}/context`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ context }),
+    body: JSON.stringify({ context, user_id: userId ?? "" }),
   });
+}
+
+export async function dropTable(
+  tableName: string,
+  userId?: string
+): Promise<{ deleted: string }> {
+  const params = userId ? `?user_id=${encodeURIComponent(userId)}` : "";
+  return fetchJSON(`/data/tables/${encodeURIComponent(tableName)}${params}`, {
+    method: "DELETE",
+  });
+}
+
+// ─── User scoped operations ────────────────────────────────────────────────
+
+export interface UserTablesResponse {
+  user_id: string;
+  tables: string[];
+  count: number;
+  limit: number;
+  slots_remaining: number;
+}
+
+export interface UserCleanupResponse {
+  user_id: string;
+  dropped: string[];
+  count: number;
+  errors: string[];
+}
+
+export function getUserTables(userId: string): Promise<UserTablesResponse> {
+  return fetchJSON<UserTablesResponse>(`/users/${encodeURIComponent(userId)}/tables`);
+}
+
+export async function cleanupUserTables(userId: string): Promise<UserCleanupResponse> {
+  return fetchJSON<UserCleanupResponse>(
+    `/users/${encodeURIComponent(userId)}/cleanup`,
+    { method: "POST" }
+  );
+}
+
+/** Fire-and-forget beacon for session end (logout / page unload). */
+export function beaconCleanup(userId: string): void {
+  if (typeof navigator === "undefined") return;
+  const url = `${API_URL}/users/${encodeURIComponent(userId)}/cleanup`;
+  // sendBeacon is text/plain; backend POST endpoint accepts it
+  if (navigator.sendBeacon) {
+    navigator.sendBeacon(url);
+  } else {
+    // Fallback: best-effort fetch (may not complete)
+    void fetch(url, { method: "POST", keepalive: true }).catch(() => undefined);
+  }
 }
 
 // ─── Cancel running query ──────────────────────────────────────────────────
 
-export async function cancelQuery(threadId: string): Promise<{ cancelled: boolean; thread_id: string }> {
+export async function cancelQuery(
+  threadId: string
+): Promise<{ cancelled: boolean; thread_id: string }> {
   return fetchJSON("/query/cancel", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

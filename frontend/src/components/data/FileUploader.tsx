@@ -22,6 +22,7 @@ export function FileUploader() {
   const storeUploadFiles = useChatStore((s) => s.uploadFiles);
   const updateTableContext = useChatStore((s) => s.updateTableContext);
   const fetchTables = useChatStore((s) => s.fetchTables);
+  const userId = useChatStore((s) => s.userId);
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -48,7 +49,7 @@ export function FileUploader() {
         storeUploadFiles(fileArray);
 
         try {
-          const response = await uploadFilesAPI(fileArray);
+          const response = await uploadFilesAPI(fileArray, userId ?? undefined);
           if (response.tables && response.tables.length > 0) {
             setPendingTables(
               response.tables.map((t: TableInfo) => ({

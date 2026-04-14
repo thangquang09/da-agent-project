@@ -365,6 +365,74 @@ class ConversationMemoryStore:
             logger.warning("Failed to clear artifacts for thread {thread}: {error}", thread=thread_id, error=str(exc))
         logger.info("Cleared conversation memory: thread={thread}", thread=thread_id)
 
+    # ------------------------------------------------------------------
+    # TTL cleanup
+    # ------------------------------------------------------------------
+
+    def cleanup_expired_threads(self, ttl_days: int = 5) -> int:
+        """Delete all conversation threads whose last activity exceeds *ttl_days*.
+
+        Removes turns from ``conversation_memory``, matching summaries from
+        ``conversation_summary``, and matching artifacts from ``turn_artifacts``.
+        Called lazily from ``GET /threads`` — not a cron job.
+
+        Returns the number of expired threads removed.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM agent.conversation_memory
+                WHERE thread_id IN (
+                    SELECT thread_id FROM agent.conversation_memory
+                    GROUP BY thread_id
+                    HAVING MAX(timestamp) < NOW() - INTERVAL '%s days'
+                )
+                """,
+                (ttl_days,),
+            )
+            deleted_turns = cursor.rowcount or 0
+            conn.commit()
+
+        # Clean up orphaned summaries
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM agent.conversation_summary
+                WHERE thread_id NOT IN (
+                    SELECT DISTINCT thread_id FROM agent.conversation_memory
+                )
+                """
+            )
+            deleted_summaries = cursor.rowcount or 0
+            conn.commit()
+
+        # Clean up orphaned artifacts (best-effort)
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    """
+                    DELETE FROM agent.turn_artifacts
+                    WHERE thread_id NOT IN (
+                        SELECT DISTINCT thread_id FROM agent.conversation_memory
+                    )
+                    """
+                )
+                deleted_artifacts = cursor.rowcount or 0
+                conn.commit()
+        except Exception as exc:  # noqa: BLE001
+            deleted_artifacts = 0
+            logger.warning("TTL cleanup: artifact cleanup failed: {e}", e=str(exc))
+
+        if deleted_turns or deleted_summaries:
+            logger.info(
+                "TTL cleanup: {t} turns, {s} summaries, {a} artifacts pruned (ttl={d}d)",
+                t=deleted_turns,
+                s=deleted_summaries,
+                a=deleted_artifacts,
+                d=ttl_days,
+            )
+        return deleted_turns
+
 
 # ---------------------------------------------------------------------------
 # Thread-safe singleton

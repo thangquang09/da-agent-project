@@ -11,7 +11,17 @@ import type {
   UploadStatus,
   AgentStatus,
 } from "@/lib/types";
-import { listThreads, getThreadHistory, getThreadArtifacts, deleteThread as deleteThreadAPI, uploadFiles as uploadFilesAPI, getTables as getTablesAPI, updateTableContext as updateTableContextAPI, cancelQuery as cancelQueryAPI } from "@/lib/api";
+import {
+  listThreads,
+  getThreadHistory,
+  getThreadArtifacts,
+  deleteThread as deleteThreadAPI,
+  uploadFiles as uploadFilesAPI,
+  getTables as getTablesAPI,
+  updateTableContext as updateTableContextAPI,
+  dropTable as dropTableAPI,
+  cancelQuery as cancelQueryAPI,
+} from "@/lib/api";
 import { streamQuery } from "@/lib/sse";
 import { postQueryWithFiles } from "@/lib/api";
 
@@ -59,7 +69,13 @@ interface ChatStore {
   uploadStatus: UploadStatus;
   uploadError: string | null;
 
+  // ── Current user (set from userStore) ────────────────────────────────
+  /** Call setUser after login to wire user_id into all scoped operations. */
+  userId: string | null;
+
   // ── Actions ──────────────────────────────────────────────────────────
+  setUser: (userId: string | null) => void;
+
   fetchThreads: () => Promise<void>;
   createThread: () => string;
   selectThread: (id: string) => Promise<void>;
@@ -83,6 +99,7 @@ interface ChatStore {
   fetchTables: () => Promise<void>;
   uploadFiles: (files: { name: string; data: ArrayBuffer; context?: string }[]) => Promise<void>;
   updateTableContext: (tableName: string, context: string) => Promise<void>;
+  dropTable: (tableName: string) => Promise<void>;
 }
 
 export const useChatStore = create<ChatStore>((set, get) => ({
@@ -101,11 +118,22 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   availableTables: [],
   uploadStatus: "idle",
   uploadError: null,
+  userId: null,
+
+  // ── User ─────────────────────────────────────────────────────────────
+  setUser: (userId) => {
+    set({ userId });
+    // Refresh tables scoped to this user
+    if (userId) {
+      void get().fetchTables();
+    }
+  },
 
   // ── Thread actions ───────────────────────────────────────────────────
   fetchThreads: async () => {
+    const { userId } = get();
     try {
-      const threads = await listThreads();
+      const threads = await listThreads(50, userId ?? undefined);
       set({ threads });
     } catch {
       // silently fail — sidebar shows empty
@@ -113,7 +141,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   createThread: () => {
-    const id = generateThreadId();
+    const { userId } = get();
+    const rawId = generateThreadId();
+    const id = userId ? `${userId}__${rawId}` : rawId;
     set({ activeThreadId: id, messages: [], artifactOpen: false, artifactContent: null });
     return id;
   },
@@ -193,11 +223,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 intent: "unknown", intent_reason: "",
                 response_mode: "answer", confidence: "medium",
                 used_tools: [], generated_sql: "", evidence: [],
-                 error_categories: [], tool_history: [], errors: [],
-                 total_token_usage: null, total_cost_usd: null,
-                 context_type: "default", visualization: null, visualizations: [],
-                 rows: null, step_count: 0,
-               };
+                error_categories: [], tool_history: [], errors: [],
+                total_token_usage: null, total_cost_usd: null,
+                context_type: "default", visualization: null, visualizations: [],
+                rows: null, step_count: 0,
+              };
             }
 
             for (const a of turnArtifacts) {
@@ -402,12 +432,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   stopStreaming: async () => {
     const { activeThreadId, _sseCloseFn } = get();
 
-    // Close SSE connection
     if (_sseCloseFn) {
       _sseCloseFn();
     }
 
-    // Tell backend to cancel
     if (activeThreadId) {
       try {
         await cancelQueryAPI(activeThreadId);
@@ -416,7 +444,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       }
     }
 
-    // Mark last assistant message as cancelled
     set((s) => {
       const msgs = s.messages.map((m) => {
         if (m.role === "assistant" && m.status !== "done" && m.status !== "failed") {
@@ -459,8 +486,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   toggleDataPanel: () => set((s) => ({ dataPanelOpen: !s.dataPanelOpen })),
 
   fetchTables: async () => {
+    const { userId } = get();
     try {
-      const response = await getTablesAPI();
+      const response = await getTablesAPI(userId ?? undefined);
       set({ availableTables: response.tables });
     } catch {
       // silently fail
@@ -468,10 +496,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   uploadFiles: async (files: { name: string; data: ArrayBuffer; context?: string }[]) => {
+    const { userId } = get();
     set({ uploadStatus: "uploading", uploadError: null });
 
     try {
-      const response = await uploadFilesAPI(files);
+      const response = await uploadFilesAPI(files, userId ?? undefined);
 
       if (response.errors.length > 0) {
         set({
@@ -496,9 +525,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   updateTableContext: async (tableName: string, context: string) => {
+    const { userId } = get();
     try {
-      await updateTableContextAPI(tableName, context);
-      // Refresh tables to show updated context
+      await updateTableContextAPI(tableName, context, userId ?? undefined);
+      get().fetchTables();
+    } catch {
+      // silently fail
+    }
+  },
+
+  dropTable: async (tableName: string) => {
+    const { userId } = get();
+    try {
+      await dropTableAPI(tableName, userId ?? undefined);
       get().fetchTables();
     } catch {
       // silently fail
