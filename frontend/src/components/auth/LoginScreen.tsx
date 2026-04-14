@@ -15,12 +15,11 @@ function isValidEmail(email: string): boolean {
 export function LoginScreen({ onLogin }: LoginScreenProps) {
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
-  const [warming, setWarming] = useState<"idle" | "warming" | "ready">("idle");
+  const [warming, setWarming] = useState<"idle" | "warming" | "ready">("warming");
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Wake up backend on mount (cold-start warm-up)
   useEffect(() => {
-    setWarming("warming");
     getHealth()
       .then(() => setWarming("ready"))
       .catch(() => setWarming("idle")); // non-fatal — user can still proceed

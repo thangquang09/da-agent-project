@@ -130,7 +130,7 @@ export function ImageViewer({ src, alt, onClose }: ImageViewerProps) {
         Scroll to zoom &middot; Drag to pan &middot; Esc to close
       </div>
 
-      {/* Image */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={src}
         alt={alt ?? "Chart preview"}
@@ -144,7 +144,7 @@ export function ImageViewer({ src, alt, onClose }: ImageViewerProps) {
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
         draggable={false}
-        onClick={(e) => {
+        onClick={() => {
           // Single click at scale=1 zooms to 2x
           if (scale === 1) {
             setScale(2);

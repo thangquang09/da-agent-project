@@ -49,6 +49,7 @@ export function ChartView({ visualizations }: ChartViewProps) {
         className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm p-4 cursor-zoom-in"
         onClick={() => setViewerSrc(resolvedImageUrl)}
       >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={resolvedImageUrl}
           alt={`Visualization ${activeIndex + 1}`}
