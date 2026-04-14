@@ -99,6 +99,7 @@ function ReportSectionChart({ section }: { section: ReportSectionResponse }) {
           <ImageIcon size={14} />
           Visualization
         </div>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={resolvedImageUrl}
           alt={section.title || "Report visualization"}

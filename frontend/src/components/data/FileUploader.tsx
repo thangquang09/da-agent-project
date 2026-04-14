@@ -66,7 +66,7 @@ export function FileUploader() {
         }
       }
     },
-    [storeUploadFiles]
+    [storeUploadFiles, userId]
   );
 
   const handleDrop = useCallback(
