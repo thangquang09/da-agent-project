@@ -9,8 +9,6 @@
 ## Live Demo
 
 - Frontend demo: https://da-agent-project.vercel.app/
-- Backend health: https://thangquangly0909--da-agent-api.modal.run/health
-- Backend readiness: https://thangquangly0909--da-agent-api.modal.run/ready
 
 ## What it does
 
@@ -36,7 +34,7 @@ PYTHONPATH=. python data/seeds/create_seed_db.py
 uv run uvicorn backend.main:app --port 8001 --reload
 
 # 4. Frontend (terminal khác)
-BACKEND_URL=http://localhost:8001 uv run streamlit run streamlit_app.py
+cd frontend && npm install && npm run dev
 
 # 5. CLI trực tiếp
 uv run python -m app.main "Top 5 sản phẩm bán chạy nhất?"
@@ -44,9 +42,8 @@ uv run python -m app.main "Top 5 sản phẩm bán chạy nhất?"
 
 | Service | URL |
 |---------|-----|
-| Streamlit UI | http://localhost:8501 |
+| Frontend UI | http://localhost:3000 |
 | FastAPI docs | http://localhost:8001/docs |
-| MCP server | http://localhost:8000/mcp |
 
 ---
 
@@ -77,22 +74,18 @@ Agent exposed **4 high-level tools** qua Leader Agent tool-calling surface:
 
 - Portfolio demo blueprint: [`docs/deployment/portfolio-demo.md`](docs/deployment/portfolio-demo.md)
 - Demo env template: [`.env.example.demo`](.env.example.demo)
-- Modal entrypoint: [`deploy/modal_app.py`](deploy/modal_app.py)
 - Frontend production demo: https://da-agent-project.vercel.app/
-- Backend production health: https://thangquangly0909--da-agent-api.modal.run/health
-- Backend production readiness: https://thangquangly0909--da-agent-api.modal.run/ready
 
 ### CI/CD
 
 - **CI:** GitHub Actions chạy backend tests + health/readiness smoke test + frontend lint/typecheck/build
 - **Frontend CD:** Vercel tự deploy từ GitHub
-- **Backend CD:** GitHub Actions tự chạy `modal deploy deploy/modal_app.py` sau khi CI pass trên `main`/`master`
 
 ### Local vs Production data
 
-- **Local development:** Docker Postgres (`postgresql://postgres:postgres@localhost:5432/postgres`)
-- **Production:** Neon Postgres qua Modal secret `da-agent-demo-env`
-- **Artifact policy:** production artifacts trên Modal là ephemeral by design cho portfolio demo
+- **Local development:** Docker Postgres
+- **Production:** Managed Postgres (Neon)
+- **Artifact policy:** production artifacts trên container là ephemeral by design cho portfolio demo
 
 ## Development Commands
 
@@ -109,33 +102,22 @@ uv run python evals/runner.py                        # Full eval suite
 # Database
 PYTHONPATH=. python data/seeds/create_seed_db.py      # Re-seed
 docker exec da-agent-postgres psql -U postgres -c "\dt"  # List tables
-
-# API smoke tests
-curl http://localhost:8001/health
-curl -X POST http://localhost:8001/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "DAU 7 ngày gần đây?", "thread_id": "test-001"}'
-curl -N "http://localhost:8001/query/stream?q=DAU&thread_id=test"
 ```
 
 ---
 
 ## Environment Variables
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `DATABASE_URL` | ✅ | `postgresql://postgres:postgres@localhost:5432/postgres` | Local development uses Docker Postgres; production uses Neon via Modal secret |
-| `APP_MODE` | ❌ | `full` | `demo` để tắt bớt feature nặng cho bản portfolio |
-| `LLM_API_URL` | ✅ | — | LLM API endpoint |
-| `LLM_API_KEY` | ✅ | — | API key |
-| `E2B_API_KEY` | ❌ | — | E2B sandbox (visualization) |
-| `BACKEND_URL` | ❌ | `http://localhost:8001` | Streamlit → Backend |
-| `TRACE_JSONL_PATH` | ❌ | `evals/reports/traces.jsonl` | JSONL trace output |
-| `ENABLE_LANGFUSE` | ❌ | `false` | Langfuse tracing |
-| `ENABLE_QDRANT` | ❌ | `true` (`full`) / `false` (`demo`) | Enable Qdrant + embeddings paths |
-| `ENABLE_VISUALIZATION` | ❌ | `true` (`full`) / `false` (`demo`) | Enable visualization sandbox paths |
-| `ENABLE_STARTUP_EMBEDDING_PREWARM` | ❌ | `true` (`full`) / `false` (`demo`) | Preload embedding model on startup |
-| `ARTIFACT_MODE` | ❌ | `local` | Artifact persistence strategy marker for deploy/runbooks |
+See [`.env.example`](.env.example) for the full list. Key variables:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DATABASE_URL` | ✅ | PostgreSQL connection string |
+| `APP_MODE` | ❌ | `demo` để tắt bớt feature nặng cho bản portfolio |
+| `E2B_API_KEY` | ❌ | E2B sandbox (visualization) |
+| `ENABLE_LANGFUSE` | ❌ | Langfuse tracing |
+
+> Full env reference: [`docs/ENV.md`](docs/ENV.md)
 
 ---
 

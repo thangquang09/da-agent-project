@@ -99,8 +99,7 @@ User (Next.js / Streamlit / CLI / API)
         +-- leader_agent            →  Tool routing with deterministic report dispatch
         +-- artifact_evaluator     →  Deterministic: finalize / continue / retry / wait_for_user / cancel
         +-- clarify_question_node  →  Interrupt: halt if confidence=low or mode=ambiguous
-        +-- capture_action_node    →  Save last_action, conversation_turn
-        +-- compact_and_save_memory →  Persist to PostgreSQL (agent schema)
+        +-- capture_action_node    →  Save last_action, conversation_turn; spawn background thread → compact_and_save_memory
         +-- report_subgraph        →  8-node Send() pipeline: profiler_sampler → profiler_analyzer → report_planner → [Send fan-out section_pipeline] → sections_sort → report_writer → report_critic → report_finalize
         v
   Synthesized answer + trace (JSONL + Langfuse)
