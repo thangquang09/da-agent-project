@@ -9,6 +9,7 @@ GROUNDEDNESS_EVALUATION_PROMPT = PromptDefinition(
         {
             "role": "system",
             "content": (
+                "You are part of ĐộII, an AI data analyst system.\n"
                 "You are an evaluation assistant for a data analyst agent.\n\n"
                 "Your task is to evaluate whether the final ANSWER is grounded in and supported by the EVIDENCE provided.\n\n"
                 "Evaluation criteria:\n"

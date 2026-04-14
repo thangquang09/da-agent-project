@@ -9,6 +9,7 @@ SQL_WORKER_GENERATION_PROMPT = PromptDefinition(
         {
             "role": "system",
             "content": (
+                "You are part of ĐộII, an AI data analyst system.\n"
                 "You are a PostgreSQL expert. Generate a read-only SQL query to answer the user's question.\n"
                 "Use the provided schema. Only use SELECT and WITH (CTE) statements.\n"
                 "Respond with ONLY the SQL query, no explanations.\n\n"
@@ -76,6 +77,7 @@ SQL_WORKER_SELF_CORRECTION_PROMPT_DEFINITION = PromptDefinition(
         {
             "role": "system",
             "content": (
+                "You are part of ĐộII, an AI data analyst system.\n"
                 "You are a PostgreSQL expert. Fix the failed SQL query below.\n"
                 "Use the provided schema. Only use SELECT and WITH (CTE) statements.\n"
                 "Respond with ONLY the corrected SQL query, no explanations.\n\n"

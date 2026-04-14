@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, TypedDict
 from urllib import error, request
@@ -78,17 +79,47 @@ class LLMClient:
             },
         )
 
-        try:
-            with request.urlopen(req, timeout=60) as resp:
-                body = resp.read().decode("utf-8")
-                logger.info("LLM API response received (status={status})", status=resp.status)
-        except error.HTTPError as exc:
-            err_body = exc.read().decode("utf-8", errors="replace")
-            logger.exception("LLM API HTTP error {status}: {body}", status=exc.code, body=err_body[:500])
-            raise RuntimeError(f"LLM API HTTP error {exc.code}: {err_body}") from exc
-        except error.URLError as exc:
-            logger.exception("LLM API connection error: {reason}", reason=exc.reason)
-            raise RuntimeError(f"LLM API connection error: {exc.reason}") from exc
+        max_retries = 2
+        last_exc: Exception | None = None
+        for attempt in range(max_retries + 1):
+            try:
+                with request.urlopen(req, timeout=60) as resp:
+                    body = resp.read().decode("utf-8")
+                    logger.info("LLM API response received (status={status})", status=resp.status)
+                last_exc = None
+                break
+            except error.HTTPError as exc:
+                err_body = exc.read().decode("utf-8", errors="replace")
+                is_retryable = exc.code == 429 or exc.code >= 500
+                if is_retryable and attempt < max_retries:
+                    wait = 2**attempt
+                    logger.warning(
+                        "LLM API retryable error {status}, retrying in {wait}s (attempt={attempt}/{max_retries})",
+                        status=exc.code,
+                        wait=wait,
+                        attempt=attempt + 1,
+                        max_retries=max_retries,
+                    )
+                    time.sleep(wait)
+                    last_exc = exc
+                    continue
+                logger.exception("LLM API HTTP error {status}: {body}", status=exc.code, body=err_body[:500])
+                raise RuntimeError(f"LLM API HTTP error {exc.code}: {err_body}") from exc
+            except error.URLError as exc:
+                if attempt < max_retries:
+                    wait = 2**attempt
+                    logger.warning(
+                        "LLM API connection error, retrying in {wait}s (attempt={attempt}/{max_retries}): {reason}",
+                        wait=wait,
+                        attempt=attempt + 1,
+                        max_retries=max_retries,
+                        reason=exc.reason,
+                    )
+                    time.sleep(wait)
+                    last_exc = exc
+                    continue
+                logger.exception("LLM API connection error: {reason}", reason=exc.reason)
+                raise RuntimeError(f"LLM API connection error: {exc.reason}") from exc
 
         try:
             parsed = json.loads(body)
@@ -148,45 +179,77 @@ class LLMClient:
             },
         )
 
+        max_retries = 2
         accumulated = ""
         stream_usage: dict[str, Any] | None = None
-        try:
-            with request.urlopen(req, timeout=120) as resp:
-                for raw_line in resp:
-                    line = raw_line.decode("utf-8").strip()
-                    if not line:
-                        continue
-                    # Handle SSE lines: "data: {...}" or "data: [DONE]"
-                    if line.startswith("data: "):
-                        payload_str = line[6:]
-                        if payload_str.strip() == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(payload_str)
-                            if isinstance(chunk.get("usage"), dict):
-                                stream_usage = chunk["usage"]
-
-                            choices = chunk.get("choices")
-                            if not isinstance(choices, list) or not choices:
-                                continue
-
-                            delta_payload = choices[0].get("delta", {})
-                            if not isinstance(delta_payload, dict):
-                                continue
-
-                            delta = delta_payload.get("content", "")
-                            if isinstance(delta, str) and delta:
-                                accumulated += delta
-                                on_token(delta)
-                        except json.JSONDecodeError:
+        last_exc: Exception | None = None
+        for attempt in range(max_retries + 1):
+            accumulated = ""
+            stream_usage = None
+            try:
+                with request.urlopen(req, timeout=120) as resp:
+                    for raw_line in resp:
+                        line = raw_line.decode("utf-8").strip()
+                        if not line:
                             continue
-        except error.HTTPError as exc:
-            err_body = exc.read().decode("utf-8", errors="replace")
-            logger.exception("LLM API HTTP error {status}: {body}", status=exc.code, body=err_body[:500])
-            raise RuntimeError(f"LLM API HTTP error {exc.code}: {err_body}") from exc
-        except error.URLError as exc:
-            logger.exception("LLM API connection error: {reason}", reason=exc.reason)
-            raise RuntimeError(f"LLM API connection error: {exc.reason}") from exc
+                        # Handle SSE lines: "data: {...}" or "data: [DONE]"
+                        if line.startswith("data: "):
+                            payload_str = line[6:]
+                            if payload_str.strip() == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(payload_str)
+                                if isinstance(chunk.get("usage"), dict):
+                                    stream_usage = chunk["usage"]
+
+                                choices = chunk.get("choices")
+                                if not isinstance(choices, list) or not choices:
+                                    continue
+
+                                delta_payload = choices[0].get("delta", {})
+                                if not isinstance(delta_payload, dict):
+                                    continue
+
+                                delta = delta_payload.get("content", "")
+                                if isinstance(delta, str) and delta:
+                                    accumulated += delta
+                                    on_token(delta)
+                            except json.JSONDecodeError:
+                                continue
+                last_exc = None
+                break
+            except error.HTTPError as exc:
+                err_body = exc.read().decode("utf-8", errors="replace")
+                is_retryable = exc.code == 429 or exc.code >= 500
+                if is_retryable and attempt < max_retries:
+                    wait = 2**attempt
+                    logger.warning(
+                        "LLM API STREAM retryable error {status}, retrying in {wait}s (attempt={attempt}/{max_retries})",
+                        status=exc.code,
+                        wait=wait,
+                        attempt=attempt + 1,
+                        max_retries=max_retries,
+                    )
+                    time.sleep(wait)
+                    last_exc = exc
+                    continue
+                logger.exception("LLM API HTTP error {status}: {body}", status=exc.code, body=err_body[:500])
+                raise RuntimeError(f"LLM API HTTP error {exc.code}: {err_body}") from exc
+            except error.URLError as exc:
+                if attempt < max_retries:
+                    wait = 2**attempt
+                    logger.warning(
+                        "LLM API STREAM connection error, retrying in {wait}s (attempt={attempt}/{max_retries}): {reason}",
+                        wait=wait,
+                        attempt=attempt + 1,
+                        max_retries=max_retries,
+                        reason=exc.reason,
+                    )
+                    time.sleep(wait)
+                    last_exc = exc
+                    continue
+                logger.exception("LLM API connection error: {reason}", reason=exc.reason)
+                raise RuntimeError(f"LLM API connection error: {exc.reason}") from exc
 
         logger.info("LLM API streaming complete ({length} chars)", length=len(accumulated))
 

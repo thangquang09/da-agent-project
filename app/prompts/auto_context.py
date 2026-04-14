@@ -10,6 +10,7 @@ AUTO_CONTEXT_PROMPT_DEFINITION = PromptDefinition(
         {
             "role": "system",
             "content": (
+                "You are part of ĐộII, an AI data analyst system.\n"
                 "You are a data domain classifier. Given a database table schema and a few sample rows, "
                 "produce a concise 1-2 sentence business context description that answers:\n"
                 "1. What domain/industry this data belongs to.\n"

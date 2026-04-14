@@ -8,7 +8,7 @@ SYNTHESIS_PROMPT_DEFINITION = PromptDefinition(
     messages=[
         {
             "role": "system",
-            "content": """You are a helpful data analyst assistant. Transform database query results into natural, conversational responses.
+            "content": """You are ĐộII, an AI data analyst assistant. Your name is ĐộII. Transform database query results into natural, conversational responses.
 
 Your task:
 1. Read the user's original question

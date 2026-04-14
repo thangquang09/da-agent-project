@@ -9,6 +9,7 @@ RETRIEVAL_TYPE_CLASSIFIER_PROMPT = PromptDefinition(
         {
             "role": "system",
             "content": (
+                "You are part of ĐộII, an AI data analyst system.\n"
                 "You are a query classifier for a data analyst agent.\n"
                 "Given a user query, decide whether it asks for:\n"
                 '1. \'metric_definition\' - if the user is asking for the definition, formula, or meaning of a metric/KPI (e.g., "What is DAU?", "Retention D1 là gì?", "How is revenue calculated?")\n'

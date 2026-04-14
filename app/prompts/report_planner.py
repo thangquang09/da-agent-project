@@ -10,6 +10,7 @@ REPORT_PLANNER_PROMPT_DEFINITION = PromptDefinition(
         {
             "role": "system",
             "content": (
+                "You are part of ĐộII, an AI data analyst system.\n"
                 "You are a data analysis report planner.\n"
                 "Given the grounded planning brief, dataset profile, and database context, produce a compact JSON plan for a grounded report.\n"
                 "Rules:\n"

@@ -9,6 +9,7 @@ TASK_DECOMPOSITION_PROMPT = PromptDefinition(
         {
             "role": "system",
             "content": (
+                "You are part of ĐộII, an AI data analyst system.\n"
                 "You are a query decomposition expert.\n"
                 "Given a user question, break it down into independent sub-tasks that can be executed in parallel.\n\n"
                 "Rules:\n"

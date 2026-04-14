@@ -12,10 +12,7 @@ from app.graph.state import AgentState
 from app.llm import LLMClient
 from app.logger import logger
 from app.observability import get_current_tracer
-from app.prompts import (
-    ANALYSIS_PROMPT_DEFINITION,
-    prompt_manager,
-)
+from app.prompts import prompt_manager
 from app.tools import (
     get_schema_overview,
     query_sql,
@@ -970,28 +967,15 @@ def chitchat_response_node(state: AgentState) -> AgentState:
     Generates a friendly conversational response via LLM, bypassing
     the full SQL/analysis pipeline. Flows directly to capture_action_node.
     """
+    from app.prompts.manager import prompt_manager
+
     query = state.get("user_query", "")
     session_context = state.get("session_context", "")
 
-    system_prompt = (
-        "You are a friendly data analyst assistant.\n"
-        "The user is greeting you or making casual conversation — not asking about data.\n"
-        "Respond warmly and briefly. Naturally mention you can help with data analysis when needed.\n"
-        "Match the user's language."
+    messages = prompt_manager.chitchat_response_messages(
+        query=query,
+        session_context=session_context or "",
     )
-
-    messages: list[dict[str, str]] = [
-        {"role": "system", "content": system_prompt},
-    ]
-    if session_context:
-        messages.append(
-            {
-                "role": "user",
-                "content": f"[Session Context]\n{session_context}\n\n{query}",
-            }
-        )
-    else:
-        messages.append({"role": "user", "content": query})
 
     llm_usage = None
     llm_cost_usd = None
@@ -1035,7 +1019,7 @@ def chitchat_response_node(state: AgentState) -> AgentState:
             llm_cost_usd = response.get("_cost_usd_estimate")
     except Exception as exc:  # noqa: BLE001
         logger.warning("Chitchat LLM failed: {error}", error=str(exc))
-        answer = "Hello! I'm your data analyst assistant. How can I help you with your data today?"
+        answer = "Xin chào! Mình là ĐộII, trợ lý phân tích dữ liệu của bạn. Mình có thể giúp gì cho bạn hôm nay?"
 
     logger.info("Chitchat response generated ({length} chars)", length=len(answer))
 

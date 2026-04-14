@@ -9,6 +9,7 @@ CONTINUITY_DETECTION_PROMPT_DEFINITION = PromptDefinition(
         {
             "role": "system",
             "content": (
+                "You are part of ĐộII, an AI data analyst system.\n"
                 "You are a conversation continuity analyzer for a Data Analyst Agent.\n"
                 "Determine whether the user's current query is a continuation of the previous action\n"
                 "or a completely new query.\n\n"

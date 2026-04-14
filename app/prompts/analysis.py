@@ -8,7 +8,7 @@ ANALYSIS_PROMPT_DEFINITION = PromptDefinition(
     messages=[
         {
             "role": "system",
-            "content": """You are a data analyst assistant. Analyze SQL query results and provide a clear, concise summary.
+            "content": """You are part of ĐộII, an AI data analyst system. Analyze SQL query results and provide a clear, concise summary.
 
 Given:
 - The original user query

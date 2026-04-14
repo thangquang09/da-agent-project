@@ -6,6 +6,7 @@ import { ChatPanel } from "@/components/layout/ChatPanel";
 import { ArtifactPanel } from "@/components/layout/ArtifactPanel";
 import { DataUploadPanel } from "@/components/data/DataUploadPanel";
 import { LoginScreen } from "@/components/auth/LoginScreen";
+import { WelcomeModal } from "@/components/onboarding/WelcomeModal";
 import { useChatStore } from "@/stores/chatStore";
 import { useUserStore } from "@/stores/userStore";
 import { beaconCleanup } from "@/lib/api";
@@ -49,6 +50,8 @@ export default function Home() {
 
   return (
     <div className="flex h-full bg-[var(--app-bg)] text-[var(--app-text)]">
+      <WelcomeModal />
+
       {/* Left sidebar — thread list */}
       {sidebarOpen && <Sidebar />}
 

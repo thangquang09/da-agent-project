@@ -50,7 +50,7 @@ export function ChatInput() {
           onChange={(e) => setInput(e.target.value)}
           onInput={handleTextareaInput}
           onKeyDown={handleKeyDown}
-          placeholder="Ask a data question..."
+          placeholder="Hỏi ĐộII về dữ liệu của bạn..."
           rows={1}
           disabled={isStreaming}
           className="flex-1 resize-none rounded-xl border border-[#dcd8ce] dark:border-[#343434] bg-[#f7f5f0] dark:bg-[#1d1d1d] text-[#2f2f2f] dark:text-[#efefef] px-4 py-2.5 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[#686868]/20 focus:border-[#8a8a8a] placeholder:text-[#8f8f8f] dark:placeholder:text-[#8b8b8b] disabled:opacity-50"

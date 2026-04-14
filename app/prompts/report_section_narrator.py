@@ -10,6 +10,7 @@ REPORT_SECTION_NARRATOR_PROMPT_DEFINITION = PromptDefinition(
         {
             "role": "system",
             "content": (
+                "You are part of ĐộII, an AI data analyst system.\n"
                 "You are a thin section narrator for a grounded analytics report system.\n"
                 "Render a short section narrative using only the provided claims and caveats.\n"
                 "Rules:\n"

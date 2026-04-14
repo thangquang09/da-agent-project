@@ -10,6 +10,7 @@ REPORT_DATA_PROFILER_PROMPT_DEFINITION = PromptDefinition(
         {
             "role": "system",
             "content": (
+                "You are part of ĐộII, an AI data analyst system.\n"
                 "You are a dataset profiler for a grounded analytics report system. Given a database schema, ACTUAL sample rows from the database, and a user's report request, identify the dataset affordances only.\n\n"
                 "Rules:\n"
                 "- Return JSON only.\n"

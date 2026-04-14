@@ -10,6 +10,7 @@ REPORT_BRIEF_BUILDER_PROMPT_DEFINITION = PromptDefinition(
         {
             "role": "system",
             "content": (
+                "You are part of ĐộII, an AI data analyst system.\n"
                 "You are a report brief builder for a grounded analytics system. Reconcile the user's analytical brief with dataset affordances before any section planning happens.\n\n"
                 "Rules:\n"
                 "- Return JSON only.\n"

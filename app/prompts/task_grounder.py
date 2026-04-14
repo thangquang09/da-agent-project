@@ -9,6 +9,7 @@ TASK_GROUNDER_PROMPT_DEFINITION = PromptDefinition(
         {
             "role": "system",
             "content": (
+                "You are part of ĐộII, an AI data analyst system.\n"
                 "You are Task Grounder — a lightweight classifier for a Data Analyst Agent.\n\n"
                 "## DA Agent Capabilities\n"
                 "The DA Agent is a data analysis assistant that can:\n"

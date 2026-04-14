@@ -10,6 +10,7 @@ REPORT_REQUEST_GROUNDER_PROMPT_DEFINITION = PromptDefinition(
         {
             "role": "system",
             "content": (
+                "You are part of ĐộII, an AI data analyst system.\n"
                 "You are the Report Request Grounder for a data analysis reporting system.\n"
                 "Turn a raw report request into a structured analytical brief before planning begins.\n"
                 "Return JSON only.\n"
