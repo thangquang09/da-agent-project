@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import load_settings
 from app.logger import logger
-from backend.routers import artifacts, data, evals, health, query, threads, traces
+from backend.routers import artifacts, data, evals, health, query, threads, traces, users
 
 
 def create_app() -> FastAPI:
@@ -44,6 +44,7 @@ def create_app() -> FastAPI:
     app.include_router(evals.router)
     app.include_router(data.router)
     app.include_router(artifacts.router)
+    app.include_router(users.router)
 
     @app.on_event("startup")
     async def _startup() -> None:
