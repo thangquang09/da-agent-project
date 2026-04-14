@@ -79,8 +79,6 @@ async def upload_files(
         cleanup_expired_tables()
     except Exception:  # noqa: BLE001
         pass
-        uid=user_id or "(anonymous)",
-    )
 
     # Parse contexts_json: {filename: business_context}
     try:
